@@ -75,6 +75,7 @@ export type WmgNode = {
   media?: MediaCandidate[]
   onEnd?: Transition[]
   buttons?: string[]
+  playerControl?: string
   editor?: {
     x?: number
     y?: number
@@ -88,9 +89,30 @@ export type WmgMetadata = {
   displayName?: string
   description?: string
   author?: string
+  thumbnail?: string
   createdAt?: string
   updatedAt?: string
   tags?: string[]
+  socialLinks?: Array<{
+    label: string
+    url: string
+  }>
+}
+
+export type PlayerControlSettings = {
+  allowStop: boolean
+  showSeekBar: boolean
+  showPlaybackTime: boolean
+  allowSeek: boolean
+  showSceneName: boolean
+  showFileName: boolean
+  allowNext: boolean
+  allowPrevious: boolean
+  editor?: {
+    x?: number
+    y?: number
+    color?: string
+  }
 }
 
 export type WmgGraph = {
@@ -98,6 +120,8 @@ export type WmgGraph = {
   metadata?: WmgMetadata
   nodes: Record<string, WmgNode>
   buttons: Record<string, WmgButton>
+  playerControls: Record<string, PlayerControlSettings>
+  globalPlayerControl?: string
 }
 
 export type AssetEntry = {
@@ -191,6 +215,7 @@ export type ValidationIssue = {
   message: string
   nodeId?: string
   buttonId?: string
+  playerControlId?: string
   scriptPath?: string
 }
 

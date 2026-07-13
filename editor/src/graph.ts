@@ -1,4 +1,4 @@
-import type { AssetEntry, MediaCandidate, ScriptDocument, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode } from './types'
+import type { AssetEntry, MediaCandidate, PlayerControlSettings, ScriptDocument, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode } from './types'
 
 const hslToHex = (hue: number, saturation = 55, lightness = 52) => {
   const s = saturation / 100
@@ -38,9 +38,22 @@ const nextEditorColor = (items: Record<string, { editor?: { color?: string } }>)
 
 export const nextNodeColor = (nodes: Record<string, WmgNode>) => nextEditorColor(nodes)
 export const nextButtonColor = (buttons: Record<string, WmgButton>) => nextEditorColor(buttons)
+export const nextPlayerControlColor = (controls: Record<string, PlayerControlSettings>) => nextEditorColor(controls)
+
+export const DEFAULT_PLAYER_CONTROLS: Omit<PlayerControlSettings, 'editor'> = {
+  allowStop: true,
+  showSeekBar: true,
+  showPlaybackTime: true,
+  allowSeek: true,
+  showSceneName: true,
+  showFileName: false,
+  allowNext: false,
+  allowPrevious: false,
+}
 
 export const createGraph = (): WmgGraph => ({
   version: 1,
+  globalPlayerControl: 'default',
   nodes: {
     start: {
       type: 'media',
@@ -52,6 +65,9 @@ export const createGraph = (): WmgGraph => ({
     },
   },
   buttons: {},
+  playerControls: {
+    default: { ...DEFAULT_PLAYER_CONTROLS, editor: { x: 120, y: 38, color: '#4f8c78' } },
+  },
 })
 
 const normalizeMetadata = (value: unknown): WmgMetadata | undefined => {
@@ -59,7 +75,7 @@ const normalizeMetadata = (value: unknown): WmgMetadata | undefined => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('metadataはオブジェクトで指定してください')
   const raw = value as Record<string, unknown>
   const metadata: WmgMetadata = {}
-  for (const key of ['displayName', 'description', 'author', 'createdAt', 'updatedAt'] as const) {
+  for (const key of ['displayName', 'description', 'author', 'thumbnail', 'createdAt', 'updatedAt'] as const) {
     if (raw[key] === undefined) continue
     if (typeof raw[key] !== 'string') throw new Error(`metadata.${key}は文字列で指定してください`)
     if (raw[key].trim()) metadata[key] = raw[key]
@@ -69,12 +85,22 @@ const normalizeMetadata = (value: unknown): WmgMetadata | undefined => {
     const tags = raw.tags.map((tag) => tag.trim()).filter(Boolean)
     if (tags.length) metadata.tags = tags
   }
+  if (raw.socialLinks !== undefined) {
+    if (!Array.isArray(raw.socialLinks)) throw new Error('metadata.socialLinksは配列で指定してください')
+    const links = raw.socialLinks.map((value, index) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`metadata.socialLinks[${index}]はオブジェクトで指定してください`)
+      const link = value as Record<string, unknown>
+      if (typeof link.label !== 'string' || typeof link.url !== 'string') throw new Error(`metadata.socialLinks[${index}]にはlabelとurlが必要です`)
+      return { label: link.label.trim(), url: link.url.trim() }
+    }).filter((link) => link.label && link.url)
+    if (links.length) metadata.socialLinks = links
+  }
   return Object.keys(metadata).length ? metadata : undefined
 }
 
 export const normalizeGraph = (value: unknown): WmgGraph => {
   if (!value || typeof value !== 'object') throw new Error('JSONのルートがオブジェクトではありません')
-  const raw = value as { version?: unknown; metadata?: unknown; nodes?: unknown; buttons?: unknown }
+  const raw = value as { version?: unknown; metadata?: unknown; nodes?: unknown; buttons?: unknown; playerControls?: unknown; globalPlayerControl?: unknown }
   if (raw.version !== 1) throw new Error('対応しているWMGFバージョンは1です')
   if (!raw.nodes || typeof raw.nodes !== 'object' || Array.isArray(raw.nodes)) {
     throw new Error('nodesが見つかりません')
@@ -84,6 +110,12 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
   }
   const nodes = raw.nodes as Record<string, WmgNode>
   const buttons = raw.buttons as Record<string, WmgButton>
+  if (raw.playerControls !== undefined && (!raw.playerControls || typeof raw.playerControls !== 'object' || Array.isArray(raw.playerControls))) {
+    throw new Error('playerControlsはオブジェクトで指定してください')
+  }
+  if (raw.globalPlayerControl !== undefined && typeof raw.globalPlayerControl !== 'string') throw new Error('globalPlayerControlは文字列で指定してください')
+  const rawPlayerControls = (raw.playerControls ?? {}) as Record<string, unknown>
+  const playerControls: Record<string, PlayerControlSettings> = {}
   const baseHue = Math.random() * 360
   Object.values(nodes).forEach((node, index) => {
     node.type ??= node.script ? 'script' : 'media'
@@ -100,8 +132,29 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
     button.editor ??= { x: 180 + (index % 4) * 190, y: 360 + Math.floor(index / 4) * 90 }
     button.editor.color ??= hslToHex((baseHue + 70 + index * 137.508) % 360, 42, 56)
   })
+  Object.entries(rawPlayerControls).forEach(([id, value], index) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`playerControls.${id}はオブジェクトで指定してください`)
+    const rawControl = value as Record<string, unknown>
+    const control = { ...DEFAULT_PLAYER_CONTROLS } as PlayerControlSettings
+    for (const [key, fallback] of Object.entries(DEFAULT_PLAYER_CONTROLS) as Array<[keyof typeof DEFAULT_PLAYER_CONTROLS, boolean]>) {
+      const candidate = rawControl[key]
+      if (candidate !== undefined && typeof candidate !== 'boolean') throw new Error(`playerControls.${id}.${key}は真偽値で指定してください`)
+      control[key] = candidate === undefined ? fallback : candidate
+    }
+    if (rawControl.editor !== undefined && (!rawControl.editor || typeof rawControl.editor !== 'object' || Array.isArray(rawControl.editor))) {
+      throw new Error(`playerControls.${id}.editorはオブジェクトで指定してください`)
+    }
+    const rawEditor = (rawControl.editor ?? {}) as Record<string, unknown>
+    const editor: NonNullable<PlayerControlSettings['editor']> = {
+      x: typeof rawEditor.x === 'number' && Number.isFinite(rawEditor.x) ? rawEditor.x : 100 + (index % 4) * 210,
+      y: typeof rawEditor.y === 'number' && Number.isFinite(rawEditor.y) ? rawEditor.y : 20 + Math.floor(index / 4) * 80,
+      color: typeof rawEditor.color === 'string' ? rawEditor.color : hslToHex((baseHue + 155 + index * 137.508) % 360, 40, 48),
+    }
+    control.editor = editor
+    playerControls[id] = control
+  })
   const metadata = normalizeMetadata(raw.metadata)
-  return { version: 1, ...(metadata ? { metadata } : {}), nodes, buttons }
+  return { version: 1, ...(metadata ? { metadata } : {}), nodes, buttons, playerControls, ...(raw.globalPlayerControl ? { globalPlayerControl: raw.globalPlayerControl } : {}) }
 }
 
 export const fileKind = (path: string): AssetEntry['kind'] => {
@@ -143,14 +196,27 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: Sc
     if (value && (!rfc3339.test(value) || Number.isNaN(Date.parse(value)))) issues.push({ severity: 'warning', message: `metadata.${key}はRFC 3339形式で指定してください` })
   }
   if (graph.metadata?.tags && new Set(graph.metadata.tags).size !== graph.metadata.tags.length) issues.push({ severity: 'warning', message: 'metadata.tagsに重複があります' })
+  graph.metadata?.socialLinks?.forEach((link, index) => {
+    if (!link.label.trim()) issues.push({ severity: 'error', message: `metadata.socialLinks[${index}].labelは必須です` })
+    if (!/^https?:\/\//i.test(link.url)) issues.push({ severity: 'error', message: `metadata.socialLinks[${index}].urlはhttp(s) URLで指定してください` })
+  })
   const entries = Object.entries(graph.nodes)
   const starts = entries.filter(([, node]) => node.start)
   if (starts.length !== 1) issues.push({ severity: 'error', message: `開始ノードは1件必要です（現在${starts.length}件）` })
   const nodeIds = new Set(entries.map(([id]) => id))
   const buttonEntries = Object.entries(graph.buttons)
   const buttonIds = new Set(buttonEntries.map(([id]) => id))
+  const playerControlEntries = Object.entries(graph.playerControls ?? {})
+  const playerControlIds = new Set(playerControlEntries.map(([id]) => id))
   const assetPaths = new Set(assets.map((asset) => asset.path))
   const scriptPaths = new Set(scripts.map((script) => script.path))
+  const thumbnail = graph.metadata?.thumbnail
+  if (thumbnail && (/^(?:[a-z]+:|\/)/i.test(thumbnail) || thumbnail.split('/').includes('..'))) {
+    issues.push({ severity: 'error', message: `コンテンツ外を参照するパスです: ${thumbnail}` })
+  } else if (thumbnail && assets.length && !assetPaths.has(thumbnail)) {
+    issues.push({ severity: 'warning', message: `ファイルが見つかりません: ${thumbnail}` })
+  }
+  if (graph.globalPlayerControl && !playerControlIds.has(graph.globalPlayerControl)) issues.push({ severity: 'error', message: `グローバル再生設定「${graph.globalPlayerControl}」がありません` })
 
   for (const [nodeId, node] of entries) {
     if (!nodeId.trim()) issues.push({ severity: 'error', nodeId, message: '空のノードIDは使用できません' })
@@ -167,6 +233,8 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: Sc
     }
     node.buttons?.forEach((buttonId) => { if (!buttonIds.has(buttonId)) issues.push({ severity: 'error', nodeId, message: `ボタン「${buttonId}」がありません` }) })
     if (new Set(node.buttons ?? []).size !== (node.buttons?.length ?? 0)) issues.push({ severity: 'error', nodeId, message: '同じボタンが重複して接続されています' })
+    if (node.playerControl && !playerControlIds.has(node.playerControl)) issues.push({ severity: 'error', nodeId, message: `再生設定「${node.playerControl}」がありません` })
+    if (node.type === 'script' && node.playerControl) issues.push({ severity: 'error', nodeId, message: 'Script Nodeには再生設定を接続できません' })
     if (node.terminal && ((node.onEnd?.length ?? 0) || (node.buttons?.length ?? 0))) {
       issues.push({ severity: 'error', nodeId, message: '終端ノードには遷移やボタンを設定できません' })
     }
@@ -204,6 +272,13 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: Sc
     const path = button.appearance?.backgroundImage
     if (path && (/^(?:[a-z]+:|\/)/i.test(path) || path.split('/').includes('..'))) issues.push({ severity: 'error', buttonId, message: `コンテンツ外を参照するパスです: ${path}` })
     else if (path && assets.length && !assetPaths.has(path)) issues.push({ severity: 'warning', buttonId, message: `ファイルが見つかりません: ${path}` })
+  }
+
+  for (const [playerControlId] of playerControlEntries) {
+    if (!playerControlId.trim()) issues.push({ severity: 'error', playerControlId, message: '空の再生設定IDは使用できません' })
+    const usedGlobally = graph.globalPlayerControl === playerControlId
+    const usedByNode = entries.some(([, node]) => node.playerControl === playerControlId)
+    if (!usedGlobally && !usedByNode) issues.push({ severity: 'warning', playerControlId, message: 'どこにも接続されていない再生設定です' })
   }
 
   return issues

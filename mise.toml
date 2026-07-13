@@ -4,3 +4,22 @@ run = "npm run dev"
 
 [tools]
 node = "latest"
+gradle = "8.11.1"
+rust = "stable"
+
+[tasks.playerBuild]
+dir = "player"
+run = "gradle assembleDebug"
+
+[tasks.playerReleaseBuild]
+description = "Build the optimized Android release APK"
+dir = "player"
+run = "gradle assembleRelease"
+
+[tasks.playerTest]
+dir = "player"
+run = "gradle testDebugUnitTest"
+
+[tasks.validatorTest]
+dir = "player"
+run = "cargo test --manifest-path validator/Cargo.toml --locked"

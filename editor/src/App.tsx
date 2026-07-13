@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { createGraph, defaultMedia, fileKind, nextButtonColor, nextNodeColor, normalizeGraph, probability, validateGraph } from './graph'
+import { createGraph, DEFAULT_PLAYER_CONTROLS, defaultMedia, fileKind, nextButtonColor, nextNodeColor, nextPlayerControlColor, normalizeGraph, probability, validateGraph } from './graph'
 import { Preview } from './Preview'
 import { createStarlarkContext } from './scriptContext'
 import ScriptInspector from './ScriptInspector'
 import type { ScriptTestState } from './ScriptEditor'
 import { parseStarlarkErrorLocation, runStarlark } from './starlark'
-import type { AssetEntry, EditorTab, GraphDocument, MediaCandidate, PlaybackHistoryEntry, ScriptDocument, Transition, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode, WorkspaceFolder } from './types'
+import type { AssetEntry, EditorTab, GraphDocument, MediaCandidate, PlaybackHistoryEntry, PlayerControlSettings, ScriptDocument, Transition, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode, WorkspaceFolder } from './types'
 
 const ScriptEditor = lazy(() => import('./ScriptEditor').then((module) => ({ default: module.ScriptEditor })))
 
@@ -35,6 +35,8 @@ const Icon = ({ name, size = 16 }: { name: string; size?: number }) => {
     fit: <><path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5"/></>,
     expandAll: <><path d="m7 5 5 5 5-5M7 14l5 5 5-5"/><path d="M4 1h16M4 23h16"/></>,
     collapseAll: <><path d="m7 10 5-5 5 5M7 14l5 5 5-5"/><path d="M4 12h16"/></>,
+    controls: <><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></>,
+    globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></>,
   }
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
 }
@@ -353,7 +355,18 @@ function MetadataTagsInput({ tags, onCommit }: { tags?: string[]; onCommit: (tag
   return <input aria-label="グラフのタグ" value={draft} placeholder="ASMR, 睡眠" onChange={(event) => setDraft(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}/>
 }
 
-function GraphMetadataInspector({ graph, graphName, onChange }: { graph: WmgGraph; graphName: string; onChange: (graph: WmgGraph) => void }) {
+function SocialLinksEditor({ links, onChange }: { links: NonNullable<WmgMetadata['socialLinks']>; onChange: (links: NonNullable<WmgMetadata['socialLinks']>) => void }) {
+  return <div className="social-links-editor">
+    {links.map((link, index) => <div className="social-link-row" key={index}>
+      <input aria-label={`ソーシャルリンク${index + 1}の名前`} value={link.label} placeholder="X / Web" onChange={(event) => onChange(links.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))}/>
+      <input aria-label={`ソーシャルリンク${index + 1}のURL`} value={link.url} placeholder="https://" onChange={(event) => onChange(links.map((item, itemIndex) => itemIndex === index ? { ...item, url: event.target.value } : item))}/>
+      <button className="icon-button danger" title="リンクを削除" onClick={() => onChange(links.filter((_, itemIndex) => itemIndex !== index))}><Icon name="close" size={12}/></button>
+    </div>)}
+    <button className="mini-button" onClick={() => onChange([...links, { label: '', url: '' }])}>+ ソーシャルリンク</button>
+  </div>
+}
+
+function GraphMetadataInspector({ graph, graphName, assets, onChange }: { graph: WmgGraph; graphName: string; assets: AssetEntry[]; onChange: (graph: WmgGraph) => void }) {
   const metadata = graph.metadata ?? {}
   const commit = (next: WmgMetadata) => {
     const compact = Object.fromEntries(Object.entries(next).filter(([, value]) => Array.isArray(value) ? value.length > 0 : typeof value === 'string' ? value.trim().length > 0 : value !== undefined)) as WmgMetadata
@@ -372,12 +385,44 @@ function GraphMetadataInspector({ graph, graphName, onChange }: { graph: WmgGrap
         <Field label="表示名"><input aria-label="グラフの表示名" value={metadata.displayName ?? ''} placeholder={graphName.replace(/\.wmg\.json$/i, '')} onChange={(event) => text('displayName', event.target.value)}/></Field>
         <Field label="説明"><textarea aria-label="グラフの説明" rows={5} value={metadata.description ?? ''} placeholder="このグラフの用途や内容" onChange={(event) => text('description', event.target.value)}/></Field>
         <Field label="作者"><input aria-label="グラフの作者" value={metadata.author ?? ''} placeholder="作者名" onChange={(event) => text('author', event.target.value)}/></Field>
+        <Field label="サムネイル"><PathPicker value={metadata.thumbnail ?? ''} assets={assets} kinds={['image']} placeholder="任意" onChange={(thumbnail) => commit({ ...metadata, thumbnail: thumbnail || undefined })}/></Field>
         <Field label="タグ" hint="カンマ区切り"><MetadataTagsInput tags={metadata.tags} onCommit={(tags) => commit({ ...metadata, tags })}/></Field>
+        <Field label="ソーシャルリンク"><SocialLinksEditor links={metadata.socialLinks ?? []} onChange={(socialLinks) => commit({ ...metadata, socialLinks })}/></Field>
       </Section>
       <Section title="日時">
         {dateField('createdAt', '作成日時')}
         {dateField('updatedAt', '更新日時')}
       </Section>
+    </div>
+  </aside>
+}
+
+const playerControlLabels: Array<[keyof typeof DEFAULT_PLAYER_CONTROLS, string, 'visibility' | 'action']> = [
+  ['showSeekBar', 'シークバーを表示', 'visibility'],
+  ['showPlaybackTime', '再生時間を表示', 'visibility'],
+  ['showSceneName', 'シーン名を表示', 'visibility'],
+  ['showFileName', '再生ファイル名を表示', 'visibility'],
+  ['allowStop', '再生停止を許可', 'action'],
+  ['allowSeek', 'シークを許可', 'action'],
+  ['allowNext', '次へを許可（End扱い）', 'action'],
+  ['allowPrevious', '前へ戻ることを許可', 'action'],
+]
+
+function PlayerControlInspector({ controlId, control, issues, global, usedBy, onChange, onRename, onGlobal, onDelete }: { controlId: string; control: PlayerControlSettings; issues: ValidationIssue[]; global: boolean; usedBy: string[]; onChange: (control: PlayerControlSettings) => void; onRename: (next: string) => void; onGlobal: (enabled: boolean) => void; onDelete: () => void }) {
+  const section = (kind: 'visibility' | 'action') => playerControlLabels.filter(([, , group]) => group === kind).map(([key, label]) => <label className="check-row control-check" key={key}><input type="checkbox" checked={control[key]} onChange={(event) => onChange({ ...control, [key]: event.target.checked })}/><span>{label}</span></label>)
+  return <aside className="inspector player-control-inspector" data-testid="player-control-inspector">
+    <div className="panel-title"><span>再生コントロール</span><button className="icon-button danger" title="設定を削除" onClick={onDelete}><Icon name="trash" size={14}/></button></div>
+    <div className="inspector-scroll">
+      <div className="node-identity control-identity"><span className="control-glyph"><Icon name="controls" size={15}/></span><div><strong>{controlId}</strong><small>{global ? 'グローバル · ' : ''}{usedBy.length ? `${usedBy.length} ノード` : '未接続'}</small></div></div>
+      {issues.length > 0 && <div className="node-issues">{issues.map((issue, index) => <div className={issue.severity} key={index}><Icon name="warning" size={13}/>{issue.message}</div>)}</div>}
+      <Section title="設定">
+        <Field label="設定ID"><input aria-label="再生設定ID" key={controlId} defaultValue={controlId} onBlur={(event) => onRename(event.target.value.trim())} onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}/></Field>
+        <Field label="グラフカラー"><div className="color-field"><DebouncedColorInput value={control.editor?.color ?? '#4f8c78'} onCommit={(color) => onChange({ ...control, editor: { ...control.editor, color } })}/><input value={control.editor?.color ?? '#4f8c78'} onChange={(event) => onChange({ ...control, editor: { ...control.editor, color: event.target.value } })}/></div></Field>
+        <label className="check-row global-control-check"><input type="checkbox" checked={global} onChange={(event) => onGlobal(event.target.checked)}/><span><strong>グローバル設定</strong><small>個別設定がない全Media Nodeへ適用</small></span></label>
+      </Section>
+      <Section title="表示">{section('visibility')}</Section>
+      <Section title="操作">{section('action')}</Section>
+      <button className="text-button danger" onClick={onDelete}><Icon name="trash" size={14}/>この設定を削除</button>
     </div>
   </aside>
 }
@@ -399,7 +444,7 @@ function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probab
       </div>
     </aside>
   }
-  if (!node || !nodeId) return <GraphMetadataInspector graph={graph} graphName={graphName} onChange={onChangeGraph}/>
+  if (!node || !nodeId) return <GraphMetadataInspector graph={graph} graphName={graphName} assets={assets} onChange={onChangeGraph}/>
   const updateMedia = (index: number, media: MediaCandidate) => onChange({ ...node, media: (node.media ?? []).map((item, itemIndex) => itemIndex === index ? media : item) })
   const nodeIssues = issues.filter((issue) => issue.nodeId === nodeId)
   if (node.type === 'script') return <aside className="inspector script-node-inspector">
@@ -435,6 +480,10 @@ function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probab
         <label className="check-row"><input type="checkbox" checked={node.start ?? false} onChange={(event) => onSetStart(event.target.checked)}/>開始ノード</label>
         <label className="check-row"><input type="checkbox" checked={node.terminal ?? false} onChange={(event) => onSetTerminal(event.target.checked)}/>終端ノード</label>
       </Section>
+      <Section title="再生コントロール">
+        <Field label="個別設定" hint="未指定時はグローバル設定を使用"><select aria-label="ノードの再生設定" value={node.playerControl ?? ''} onChange={(event) => onChange({ ...node, playerControl: event.target.value || undefined })}><option value="">グローバル（{graph.globalPlayerControl ?? '既定'}）</option>{Object.keys(graph.playerControls ?? {}).map((id) => <option value={id} key={id}>{id}</option>)}</select></Field>
+        <div className="empty-inline">上部ポートから設定ノードへ接続できます</div>
+      </Section>
       <div className="asset-drop-zone" onDragOver={(event) => { if (event.dataTransfer.types.includes(ASSET_DRAG_TYPE) || event.dataTransfer.types.includes(FOLDER_DRAG_TYPE)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' } }} onDrop={(event) => { const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); if (path) { event.preventDefault(); onAssetDrop(path) } else if (folder) { event.preventDefault(); onFolderDrop(folder) } }}><Section title="メディア" count={node.media?.length ?? 0} action={<button className="mini-button" onClick={() => onChange({ ...node, media: [...(node.media ?? []), defaultMedia(node.media?.length ?? 0)] })}>+ 追加</button>}>
         {(node.media ?? []).map((media, index) => <MediaEditor key={`${media.id}-${index}`} media={media} index={index} probabilityMode={probabilityMode} assets={assets} onChange={(next) => updateMedia(index, next)} onRemove={() => onChange({ ...node, media: (node.media ?? []).filter((_, itemIndex) => itemIndex !== index) })}/>) }
         {!node.media?.length && <div className="empty-block">このノードはメディアを再生しません</div>}
@@ -451,41 +500,44 @@ function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probab
 }
 
 type View = { zoom: number; x: number; y: number }
-type GraphEdgeRef = { from: string; to: string; index: number; type: 'end' | 'button' | 'attachment' }
-type ConnectionDraft = { from: string; type: 'end' | 'button' | 'attachment'; x: number; y: number }
+type GraphEdgeRef = { from: string; to: string; index: number; type: 'end' | 'button' | 'attachment' | 'control' }
+type ConnectionDraft = { from: string; type: 'end' | 'button' | 'attachment' | 'control'; x: number; y: number }
 
 type GraphCanvasProps = {
-  graph: WmgGraph; selectedNode: string | null; selectedButton: string | null; probabilityMode: boolean; showWeights: boolean; view: View
-  onView: (view: View) => void; onSelectNode: (id: string | null) => void; onSelectButton: (id: string) => void
-  onMoveNode: (id: string, x: number, y: number) => void; onMoveButton: (id: string, x: number, y: number) => void
-  onAddNode: (x: number, y: number) => void; onAddScriptNode: (x: number, y: number) => void; onAddButton: (x: number, y: number) => void
-  onConnectNode: (from: string, to: string) => void; onConnectButton: (buttonId: string, to: string) => void; onAttachButton: (nodeId: string, buttonId: string) => void
+  graph: WmgGraph; selectedNode: string | null; selectedButton: string | null; selectedPlayerControl: string | null; probabilityMode: boolean; showWeights: boolean; view: View
+  onView: (view: View) => void; onSelectNode: (id: string | null) => void; onSelectButton: (id: string) => void; onSelectPlayerControl: (id: string) => void
+  onMoveNode: (id: string, x: number, y: number) => void; onMoveButton: (id: string, x: number, y: number) => void; onMovePlayerControl: (id: string, x: number, y: number) => void
+  onAddNode: (x: number, y: number) => void; onAddScriptNode: (x: number, y: number) => void; onAddButton: (x: number, y: number) => void; onAddPlayerControl: (x: number, y: number) => void
+  onConnectNode: (from: string, to: string) => void; onConnectButton: (buttonId: string, to: string) => void; onAttachButton: (nodeId: string, buttonId: string) => void; onAttachPlayerControl: (nodeId: string, controlId: string) => void
   onAssetDrop: (path: string, nodeId: string | null, x: number, y: number) => void; onFolderDrop: (path: string, nodeId: string | null, x: number, y: number) => void
   onExternalDrop: (promises: Array<Promise<FileSystemHandle | null>>, x: number, y: number) => void
   onWeightChange: (edge: GraphEdgeRef, value: number, asProbability: boolean) => void; onDisconnect: (edge: GraphEdgeRef) => void; onInsertNode: (edge: GraphEdgeRef) => void
-  onDeleteNode: (nodeId: string, bridge: boolean) => void; onDeleteButton: (buttonId: string) => void; onSave: () => void
+  onDeleteNode: (nodeId: string, bridge: boolean) => void; onDeleteButton: (buttonId: string) => void; onDeletePlayerControl: (controlId: string) => void; onSave: () => void
 }
 
-function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, showWeights, view, onView, onSelectNode, onSelectButton, onMoveNode, onMoveButton, onAddNode, onAddScriptNode, onAddButton, onConnectNode, onConnectButton, onAttachButton, onAssetDrop, onFolderDrop, onExternalDrop, onWeightChange, onDisconnect, onInsertNode, onDeleteNode, onDeleteButton, onSave }: GraphCanvasProps) {
+function GraphCanvas({ graph, selectedNode, selectedButton, selectedPlayerControl, probabilityMode, showWeights, view, onView, onSelectNode, onSelectButton, onSelectPlayerControl, onMoveNode, onMoveButton, onMovePlayerControl, onAddNode, onAddScriptNode, onAddButton, onAddPlayerControl, onConnectNode, onConnectButton, onAttachButton, onAttachPlayerControl, onAssetDrop, onFolderDrop, onExternalDrop, onWeightChange, onDisconnect, onInsertNode, onDeleteNode, onDeleteButton, onDeletePlayerControl, onSave }: GraphCanvasProps) {
   const surface = useRef<HTMLDivElement>(null)
-  const drag = useRef<{ type: 'node' | 'button' | 'pan'; id?: string; startX: number; startY: number; originX: number; originY: number } | null>(null)
+  const drag = useRef<{ type: 'node' | 'button' | 'control' | 'pan'; id?: string; startX: number; startY: number; originX: number; originY: number } | null>(null)
   const draftRef = useRef<ConnectionDraft | null>(null)
   const connectionDragged = useRef(false)
   const [draft, setDraft] = useState<ConnectionDraft | null>(null)
   const [edgeMenu, setEdgeMenu] = useState<{ edge: GraphEdgeRef; x: number; y: number } | null>(null)
   const [nodeMenu, setNodeMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null)
   const [buttonMenu, setButtonMenu] = useState<{ buttonId: string; x: number; y: number } | null>(null)
+  const [controlMenu, setControlMenu] = useState<{ controlId: string; x: number; y: number } | null>(null)
   const [canvasMenu, setCanvasMenu] = useState<{ x: number; y: number; nodeX: number; nodeY: number } | null>(null)
   const [disconnectMenu, setDisconnectMenu] = useState<{ title: string; edges: GraphEdgeRef[]; x: number; y: number } | null>(null)
   const [dropPreview, setDropPreview] = useState<{ x: number; y: number; label: string; kind: 'folder' | 'media' } | null>(null)
   const nodeEntries = Object.entries(graph.nodes)
   const buttonEntries = Object.entries(graph.buttons)
+  const playerControlEntries = Object.entries(graph.playerControls ?? {})
   const transitionEdges = [
     ...nodeEntries.flatMap(([from, node]) => (node.onEnd ?? []).map((transition, index) => ({ from, to: transition.to, transition, index, type: 'end' as const, set: node.onEnd ?? [] }))),
     ...buttonEntries.flatMap(([from, button]) => (button.onPress ?? []).map((transition, index) => ({ from, to: transition.to, transition, index, type: 'button' as const, set: button.onPress ?? [] }))),
   ].filter((edge) => graph.nodes[edge.to])
   const attachmentEdges = nodeEntries.flatMap(([from, node]) => (node.buttons ?? []).map((to, index) => ({ from, to, index, type: 'attachment' as const }))).filter((edge) => graph.buttons[edge.to])
-  const edges = [...transitionEdges, ...attachmentEdges]
+  const controlEdges = nodeEntries.flatMap(([from, node]) => node.playerControl ? [{ from, to: node.playerControl, index: 0, type: 'control' as const }] : []).filter((edge) => graph.playerControls?.[edge.to])
+  const edges = [...transitionEdges, ...attachmentEdges, ...controlEdges]
   const edgeRef = (edge: typeof edges[number]): GraphEdgeRef => ({ from: edge.from, to: edge.to, index: edge.index, type: edge.type })
   const isCompactNode = (node: WmgNode) => node.type === 'script' || !(node.media?.length)
   const point = (id: string, side: 'in' | 'out') => {
@@ -494,13 +546,16 @@ function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, sho
     return { x: (node.editor?.x ?? 0) + (side === 'in' ? 0 : compact ? 156 : 184), y: (node.editor?.y ?? 0) + (compact ? 24 : 35) }
   }
   const nodeButtonPoint = (id: string) => { const node = graph.nodes[id]; return { x: (node.editor?.x ?? 0) + (isCompactNode(node) ? 78 : 92), y: (node.editor?.y ?? 0) + (isCompactNode(node) ? 48 : 84) } }
+  const nodeControlPoint = (id: string) => { const node = graph.nodes[id]; return { x: (node.editor?.x ?? 0) + (isCompactNode(node) ? 78 : 92), y: node.editor?.y ?? 0 } }
   const buttonPoint = (id: string, side: 'in' | 'out') => { const button = graph.buttons[id]; return { x: (button.editor?.x ?? 0) + (side === 'in' ? 75 : 150), y: (button.editor?.y ?? 0) + (side === 'in' ? 0 : 23) } }
+  const playerControlPoint = (id: string) => { const control = graph.playerControls[id]; return { x: (control.editor?.x ?? 0) + 82, y: (control.editor?.y ?? 0) + 54 } }
   const displayName = (id: string) => graph.nodes[id]?.editor?.label || id
   const buttonName = (id: string) => graph.buttons[id]?.appearance?.text || id
-  const isDimmed = (edge: typeof edges[number]) => selectedNode ? edge.type === 'attachment' ? edge.from !== selectedNode : edge.type === 'end' ? edge.from !== selectedNode && edge.to !== selectedNode : edge.to !== selectedNode : selectedButton ? edge.type === 'attachment' ? edge.to !== selectedButton : edge.type === 'button' ? edge.from !== selectedButton : true : false
-  const edgeStart = (edge: typeof edges[number]) => edge.type === 'attachment' ? nodeButtonPoint(edge.from) : edge.type === 'button' ? buttonPoint(edge.from, 'out') : point(edge.from, 'out')
-  const edgeEnd = (edge: typeof edges[number]) => edge.type === 'attachment' ? buttonPoint(edge.to, 'in') : point(edge.to, 'in')
-  const draftStart = (current: ConnectionDraft) => current.type === 'attachment' ? nodeButtonPoint(current.from) : current.type === 'button' ? buttonPoint(current.from, 'out') : point(current.from, 'out')
+  const controlName = (id: string) => id
+  const isDimmed = (edge: typeof edges[number]) => selectedNode ? ['attachment', 'control'].includes(edge.type) ? edge.from !== selectedNode : edge.type === 'end' ? edge.from !== selectedNode && edge.to !== selectedNode : edge.to !== selectedNode : selectedButton ? edge.type === 'attachment' ? edge.to !== selectedButton : edge.type === 'button' ? edge.from !== selectedButton : true : selectedPlayerControl ? edge.type !== 'control' || edge.to !== selectedPlayerControl : false
+  const edgeStart = (edge: typeof edges[number]) => edge.type === 'attachment' ? nodeButtonPoint(edge.from) : edge.type === 'control' ? nodeControlPoint(edge.from) : edge.type === 'button' ? buttonPoint(edge.from, 'out') : point(edge.from, 'out')
+  const edgeEnd = (edge: typeof edges[number]) => edge.type === 'attachment' ? buttonPoint(edge.to, 'in') : edge.type === 'control' ? playerControlPoint(edge.to) : point(edge.to, 'in')
+  const draftStart = (current: ConnectionDraft) => current.type === 'attachment' ? nodeButtonPoint(current.from) : current.type === 'control' ? nodeControlPoint(current.from) : current.type === 'button' ? buttonPoint(current.from, 'out') : point(current.from, 'out')
   const pointerMove = useCallback((event: PointerEvent) => {
     if (draftRef.current) {
       connectionDragged.current = true
@@ -517,7 +572,8 @@ function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, sho
     if (current.type === 'pan') onView({ ...view, x: current.originX + dx, y: current.originY + dy })
     else if (current.type === 'node' && current.id) onMoveNode(current.id, current.originX + dx / view.zoom, current.originY + dy / view.zoom)
     else if (current.type === 'button' && current.id) onMoveButton(current.id, current.originX + dx / view.zoom, current.originY + dy / view.zoom)
-  }, [onMoveButton, onMoveNode, onView, view])
+    else if (current.type === 'control' && current.id) onMovePlayerControl(current.id, current.originX + dx / view.zoom, current.originY + dy / view.zoom)
+  }, [onMoveButton, onMoveNode, onMovePlayerControl, onView, view])
   useEffect(() => {
     const up = (event: PointerEvent) => {
       const currentDraft = draftRef.current
@@ -526,6 +582,9 @@ function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, sho
         if (currentDraft.type === 'attachment') {
           const target = targetElement?.closest<HTMLElement>('.button-input-port')?.dataset.buttonId
           if (target) onAttachButton(currentDraft.from, target)
+        } else if (currentDraft.type === 'control') {
+          const target = targetElement?.closest<HTMLElement>('.control-input-port')?.dataset.controlId
+          if (target) onAttachPlayerControl(currentDraft.from, target)
         } else {
           const target = targetElement?.closest<HTMLElement>('.node-input-port')?.dataset.nodeId
           if (target && (currentDraft.type === 'button' || target !== currentDraft.from)) {
@@ -541,7 +600,7 @@ function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, sho
     window.addEventListener('pointermove', pointerMove)
     window.addEventListener('pointerup', up)
     return () => { window.removeEventListener('pointermove', pointerMove); window.removeEventListener('pointerup', up) }
-  }, [onAttachButton, onConnectButton, onConnectNode, pointerMove])
+  }, [onAttachButton, onAttachPlayerControl, onConnectButton, onConnectNode, pointerMove])
   useEffect(() => {
     const cancel = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { draftRef.current = null; setDraft(null) }
@@ -575,18 +634,21 @@ function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, sho
     const rect = surface.current?.getBoundingClientRect()
     return { x: ((clientX - (rect?.left ?? 0)) - view.x) / view.zoom, y: ((clientY - (rect?.top ?? 0)) - view.y) / view.zoom }
   }
-  return <div className={`graph-surface ${draft ? 'connecting' : ''}`} ref={surface} onPointerDown={(event) => { setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setCanvasMenu(null); setDisconnectMenu(null); if (event.button !== 0 || (event.target as Element).closest?.('.graph-node, .graph-button-node, .graph-menu, .wire-weight-editor')) return; drag.current = { type: 'pan', startX: event.clientX, startY: event.clientY, originX: view.x, originY: view.y }; onSelectNode(null) }} onContextMenu={(event) => { if ((event.target as Element).closest?.('.graph-node, .graph-button-node, .graph-menu, .edge, .wire-weight-editor')) return; event.preventDefault(); const rect = surface.current?.getBoundingClientRect(); const local = localPoint(event.clientX, event.clientY); setCanvasMenu({ x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0), nodeX: local.x - 78, nodeY: local.y - 24 }); setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setDisconnectMenu(null) }} onDoubleClick={(event) => { if (!(event.target as Element).closest?.('.graph-node, .graph-button-node, .graph-menu, .wire-weight-editor')) { const local = localPoint(event.clientX, event.clientY); onAddNode(local.x - 78, local.y - 24) } }} onDragEnterCapture={(event) => { if ((event.target as Element).closest?.('.graph-node')) setDropPreview(null) }} onDragOverCapture={(event) => { if ((event.target as Element).closest?.('.graph-node')) setDropPreview(null) }} onDragOver={(event) => { if ((event.target as Element).closest?.('.graph-node')) { setDropPreview(null); return } if (event.dataTransfer.types.includes(ASSET_DRAG_TYPE) || event.dataTransfer.types.includes(FOLDER_DRAG_TYPE) || event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; const local = localPoint(event.clientX, event.clientY); const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); const rawLabel = path || folder; const fallbackLabel = rawLabel ? (rawLabel === '.' ? 'コンテンツフォルダ' : rawLabel.split('/').filter(Boolean).at(-1)?.replace(/\.[^.]+$/, '') ?? '新規ノード') : 'ドロップして追加'; setDropPreview({ x: local.x, y: local.y, label: activeTreeDrag?.label ?? fallbackLabel, kind: activeTreeDrag?.kind ?? (folder || event.dataTransfer.types.includes('Files') ? 'folder' : 'media') }) } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropPreview(null) }} onDrop={(event) => { setDropPreview(null); const local = localPoint(event.clientX, event.clientY); const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); if (path) { event.preventDefault(); onAssetDrop(path, null, local.x, local.y); return } if (folder) { event.preventDefault(); onFolderDrop(folder, null, local.x, local.y); return } if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.stopPropagation(); const promises = Array.from(event.dataTransfer.items).map((item) => (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> }).getAsFileSystemHandle?.() ?? Promise.resolve(null)); onExternalDrop(promises, local.x, local.y) } }}>
+  return <div className={`graph-surface ${draft ? 'connecting' : ''}`} ref={surface} onPointerDown={(event) => { setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setControlMenu(null); setCanvasMenu(null); setDisconnectMenu(null); if (event.button !== 0 || (event.target as Element).closest?.('.graph-node, .graph-button-node, .graph-control-node, .graph-menu, .wire-weight-editor')) return; drag.current = { type: 'pan', startX: event.clientX, startY: event.clientY, originX: view.x, originY: view.y }; onSelectNode(null) }} onContextMenu={(event) => { if ((event.target as Element).closest?.('.graph-node, .graph-button-node, .graph-control-node, .graph-menu, .edge, .wire-weight-editor')) return; event.preventDefault(); const rect = surface.current?.getBoundingClientRect(); const local = localPoint(event.clientX, event.clientY); setCanvasMenu({ x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0), nodeX: local.x - 78, nodeY: local.y - 24 }); setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setControlMenu(null); setDisconnectMenu(null) }} onDoubleClick={(event) => { if (!(event.target as Element).closest?.('.graph-node, .graph-button-node, .graph-control-node, .graph-menu, .wire-weight-editor')) { const local = localPoint(event.clientX, event.clientY); onAddNode(local.x - 78, local.y - 24) } }} onDragEnterCapture={(event) => { if ((event.target as Element).closest?.('.graph-node')) setDropPreview(null) }} onDragOverCapture={(event) => { if ((event.target as Element).closest?.('.graph-node')) setDropPreview(null) }} onDragOver={(event) => { if ((event.target as Element).closest?.('.graph-node')) { setDropPreview(null); return } if (event.dataTransfer.types.includes(ASSET_DRAG_TYPE) || event.dataTransfer.types.includes(FOLDER_DRAG_TYPE) || event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; const local = localPoint(event.clientX, event.clientY); const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); const rawLabel = path || folder; const fallbackLabel = rawLabel ? (rawLabel === '.' ? 'コンテンツフォルダ' : rawLabel.split('/').filter(Boolean).at(-1)?.replace(/\.[^.]+$/, '') ?? '新規ノード') : 'ドロップして追加'; setDropPreview({ x: local.x, y: local.y, label: activeTreeDrag?.label ?? fallbackLabel, kind: activeTreeDrag?.kind ?? (folder || event.dataTransfer.types.includes('Files') ? 'folder' : 'media') }) } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropPreview(null) }} onDrop={(event) => { setDropPreview(null); const local = localPoint(event.clientX, event.clientY); const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); if (path) { event.preventDefault(); onAssetDrop(path, null, local.x, local.y); return } if (folder) { event.preventDefault(); onFolderDrop(folder, null, local.x, local.y); return } if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.stopPropagation(); const promises = Array.from(event.dataTransfer.items).map((item) => (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> }).getAsFileSystemHandle?.() ?? Promise.resolve(null)); onExternalDrop(promises, local.x, local.y) } }}>
     <div className="graph-grid" style={{ backgroundPosition: `${view.x}px ${view.y}px`, backgroundSize: `${24 * view.zoom}px ${24 * view.zoom}px` }}/>
     <div className="graph-world" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}>
       <svg className="edges" width="4000" height="3000" viewBox="0 0 4000 3000">
-        <defs><marker id="arrow-end" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-end-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-button" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-button-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-attachment" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto"><path className="arrow-attachment-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-draft" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-draft-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker></defs>
-        {edges.map((edge) => { const a = edgeStart(edge); const b = edgeEnd(edge); const vertical = edge.type === 'attachment'; const bend = Math.max(45, Math.abs((vertical ? b.y - a.y : b.x - a.x)) * .45); const path = vertical ? `M ${a.x} ${a.y} C ${a.x} ${a.y + bend}, ${b.x} ${b.y - bend}, ${b.x} ${b.y}` : `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`; const color = edge.type === 'button' ? graph.buttons[edge.from]?.editor?.color : graph.nodes[edge.from]?.editor?.color; return <g className={`edge ${edge.type} ${isDimmed(edge) ? 'dimmed' : ''}`} style={{ '--edge-color': color ?? '#71808e' } as React.CSSProperties} data-from={edge.from} data-to={edge.to} key={`${edge.from}-${edge.type}-${edge.index}`}><path d={path} markerEnd={`url(#arrow-${edge.type})`}/><path className="edge-hit" d={path} onContextMenu={(event) => { event.preventDefault(); const rect = surface.current?.getBoundingClientRect(); setEdgeMenu({ edge: edgeRef(edge), x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setNodeMenu(null); setButtonMenu(null); setDisconnectMenu(null) }}/></g> })}
-        {draft && (() => { const a = draftStart(draft); const vertical = draft.type === 'attachment'; const bend = Math.max(45, Math.abs((vertical ? draft.y - a.y : draft.x - a.x)) * .45); const path = vertical ? `M ${a.x} ${a.y} C ${a.x} ${a.y + bend}, ${draft.x} ${draft.y - bend}, ${draft.x} ${draft.y}` : `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${draft.x - bend} ${draft.y}, ${draft.x} ${draft.y}`; const color = draft.type === 'button' ? graph.buttons[draft.from]?.editor?.color : graph.nodes[draft.from]?.editor?.color; return <path className="draft-edge" style={{ '--edge-color': color ?? '#55addd' } as React.CSSProperties} d={path} markerEnd="url(#arrow-draft)"/> })()}
+        <defs><marker id="arrow-end" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-end-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-button" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-button-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-attachment" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto"><path className="arrow-attachment-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-control" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto"><path className="arrow-control-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-draft" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-draft-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker></defs>
+        {edges.map((edge) => { const a = edgeStart(edge); const b = edgeEnd(edge); const vertical = edge.type === 'attachment' || edge.type === 'control'; const direction = b.y >= a.y ? 1 : -1; const bend = Math.max(45, Math.abs((vertical ? b.y - a.y : b.x - a.x)) * .45); const path = vertical ? `M ${a.x} ${a.y} C ${a.x} ${a.y + bend * direction}, ${b.x} ${b.y - bend * direction}, ${b.x} ${b.y}` : `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`; const color = edge.type === 'button' ? graph.buttons[edge.from]?.editor?.color : edge.type === 'control' ? graph.playerControls[edge.to]?.editor?.color : graph.nodes[edge.from]?.editor?.color; return <g className={`edge ${edge.type} ${isDimmed(edge) ? 'dimmed' : ''}`} style={{ '--edge-color': color ?? '#71808e' } as React.CSSProperties} data-from={edge.from} data-to={edge.to} key={`${edge.from}-${edge.type}-${edge.index}`}><path d={path} markerEnd={`url(#arrow-${edge.type})`}/><path className="edge-hit" d={path} onContextMenu={(event) => { event.preventDefault(); const rect = surface.current?.getBoundingClientRect(); setEdgeMenu({ edge: edgeRef(edge), x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setNodeMenu(null); setButtonMenu(null); setControlMenu(null); setDisconnectMenu(null) }}/></g> })}
+        {draft && (() => { const a = draftStart(draft); const vertical = draft.type === 'attachment' || draft.type === 'control'; const direction = draft.y >= a.y ? 1 : -1; const bend = Math.max(45, Math.abs((vertical ? draft.y - a.y : draft.x - a.x)) * .45); const path = vertical ? `M ${a.x} ${a.y} C ${a.x} ${a.y + bend * direction}, ${draft.x} ${draft.y - bend * direction}, ${draft.x} ${draft.y}` : `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${draft.x - bend} ${draft.y}, ${draft.x} ${draft.y}`; const color = graph.nodes[draft.from]?.editor?.color ?? (draft.type === 'button' ? graph.buttons[draft.from]?.editor?.color : undefined); return <path className="draft-edge" style={{ '--edge-color': color ?? '#55addd' } as React.CSSProperties} d={path} markerEnd="url(#arrow-draft)"/> })()}
       </svg>
       {showWeights && transitionEdges.filter((edge) => edge.set.length > 1).map((edge) => { const a = edgeStart(edge); const b = edgeEnd(edge); return <label className={`wire-weight-editor ${edge.type} ${isDimmed(edge) ? 'dimmed' : ''}`} data-from={edge.from} data-to={edge.to} style={{ left: (a.x + b.x) / 2, top: (a.y + b.y) / 2 - 8 }} key={`editor-${edge.from}-${edge.type}-${edge.index}`} title={probabilityMode ? '遷移確率' : '遷移の重み'} onPointerDown={(event) => event.stopPropagation()}><input type="number" min="0" max={probabilityMode ? 100 : undefined} step={probabilityMode ? .1 : 1} value={probabilityMode ? Number(probability(edge.transition.weight, edge.set).toFixed(1)) : edge.transition.weight} onChange={(event) => onWeightChange(edgeRef(edge), Number(event.target.value), probabilityMode)}/><span>{probabilityMode ? '%' : ''}</span></label> })}
       {nodeEntries.map(([id, node]) => <div key={id} data-node-id={id} className={`graph-node ${isCompactNode(node) ? 'compact' : ''} ${node.type === 'script' ? 'script-node' : ''} ${selectedNode === id ? 'selected' : ''} ${node.terminal ? 'terminal' : ''} ${draft?.from === id && draft.type !== 'button' ? 'source' : ''}`} style={{ left: node.editor?.x ?? 0, top: node.editor?.y ?? 0, '--node-color': node.editor?.color ?? '#4676a9' } as React.CSSProperties} onPointerDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); onSelectNode(id); drag.current = { type: 'node', id, startX: event.clientX, startY: event.clientY, originX: node.editor?.x ?? 0, originY: node.editor?.y ?? 0 } }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const rect = surface.current?.getBoundingClientRect(); setNodeMenu({ nodeId: id, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setButtonMenu(null); setDisconnectMenu(null) }} onDragOver={(event) => { if (node.type === 'media' && (event.dataTransfer.types.includes(ASSET_DRAG_TYPE) || event.dataTransfer.types.includes(FOLDER_DRAG_TYPE))) { event.preventDefault(); event.stopPropagation(); setDropPreview(null); event.currentTarget.classList.add('drag-over') } }} onDragLeave={(event) => event.currentTarget.classList.remove('drag-over')} onDrop={(event) => { if (node.type === 'script') return; setDropPreview(null); const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); event.currentTarget.classList.remove('drag-over'); if (path) { event.preventDefault(); event.stopPropagation(); onAssetDrop(path, id, node.editor?.x ?? 0, node.editor?.y ?? 0) } else if (folder) { event.preventDefault(); event.stopPropagation(); onFolderDrop(folder, id, node.editor?.x ?? 0, node.editor?.y ?? 0) } }}>
         <div className="node-header"><span className="node-type-icon">{node.start ? <Icon name="play" size={12}/> : node.type === 'script' ? <Icon name="script" size={12}/> : node.terminal ? <Icon name="fit" size={12}/> : <Icon name={isCompactNode(node) ? 'link' : 'dots'} size={13}/>}</span><strong>{node.editor?.label || id}</strong>{isCompactNode(node) && <span className="compact-links"><Icon name={node.type === 'script' ? 'script' : 'link'} size={10}/>{node.type === 'script' ? '0s' : (node.onEnd?.length ?? 0) + (node.buttons?.length ?? 0)}</span>}<span className="node-badges">{node.start && 'START'}{node.terminal && 'END'}</span></div>
         {!isCompactNode(node) && <div className="node-body"><span><Icon name="media" size={12}/>{node.media?.length ?? 0}</span><span><Icon name="link" size={12}/>{(node.onEnd?.length ?? 0) + (node.buttons?.length ?? 0)}</span><small>{id}</small></div>}
+        {node.type === 'media' && (
+          <button className="port node-control-port" title="ドラッグで再生設定を接続" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); connectionDragged.current = false; onSelectNode(id); const start = nodeControlPoint(id); const next: ConnectionDraft = { from: id, type: 'control', x: start.x, y: start.y }; draftRef.current = next; setDraft(next) }} onClick={(event) => { event.stopPropagation(); if (connectionDragged.current) { connectionDragged.current = false; return } const attached = controlEdges.filter((edge) => edge.from === id).map(edgeRef); if (attached.length === 1) onDisconnect(attached[0]) }}/>
+        )}
         {node.start
           ? <span className="port input disabled" title="開始ノードには入力できません"/>
           : <span className="port input node-input-port" data-node-id={id} title="クリックして接続を解除" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); const incoming = transitionEdges.filter((edge) => edge.to === id).map(edgeRef); if (incoming.length === 1) onDisconnect(incoming[0]); else if (incoming.length > 1) { const rect = surface.current?.getBoundingClientRect(); setDisconnectMenu({ title: `${displayName(id)} への接続`, edges: incoming, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setNodeMenu(null) } }}/>
@@ -603,14 +665,19 @@ function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, sho
         <span className="button-glyph">B</span><div><strong>{button.appearance?.text || id}</strong><small>{id} · {incoming.length} ノード · {outgoing.length} 遷移</small></div>
         <button className="port output button-port" title="ドラッグで押下時遷移を作成" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); connectionDragged.current = false; onSelectButton(id); const start = buttonPoint(id, 'out'); const next: ConnectionDraft = { from: id, type: 'button', x: start.x, y: start.y }; draftRef.current = next; setDraft(next) }} onClick={(event) => { event.stopPropagation(); if (connectionDragged.current) { connectionDragged.current = false; return } if (outgoing.length === 1) onDisconnect(outgoing[0]); else if (outgoing.length > 1) { const rect = surface.current?.getBoundingClientRect(); setDisconnectMenu({ title: `${buttonName(id)} からの接続`, edges: outgoing, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }) } }}/>
       </div> })}
+      {playerControlEntries.map(([id, control]) => { const incoming = controlEdges.filter((edge) => edge.to === id).map(edgeRef); return <div className={`graph-control-node ${selectedPlayerControl === id ? 'selected' : ''}`} data-control-id={id} style={{ left: control.editor?.x ?? 0, top: control.editor?.y ?? 0, '--node-color': control.editor?.color ?? '#4f8c78' } as React.CSSProperties} key={id} onPointerDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); onSelectPlayerControl(id); drag.current = { type: 'control', id, startX: event.clientX, startY: event.clientY, originX: control.editor?.x ?? 0, originY: control.editor?.y ?? 0 } }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const rect = surface.current?.getBoundingClientRect(); setControlMenu({ controlId: id, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setDisconnectMenu(null) }}>
+        <span className="control-glyph"><Icon name="controls" size={14}/></span><div><strong>{id}</strong><small>{graph.globalPlayerControl === id ? 'GLOBAL · ' : ''}{incoming.length} ノード</small></div>
+        <button className="port control-input-port" data-control-id={id} title="ノードとの設定接続" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); if (incoming.length === 1) onDisconnect(incoming[0]); else if (incoming.length > 1) { const rect = surface.current?.getBoundingClientRect(); setDisconnectMenu({ title: `${controlName(id)} を使用するノード`, edges: incoming, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }) } }}/>
+      </div> })}
       {dropPreview && <div className="drop-node-preview" style={{ left: dropPreview.x - 92, top: dropPreview.y - 42 }}><span className="preview-node-icon"><Icon name={dropPreview.kind === 'folder' ? 'folder' : 'media'} size={14}/></span><div><strong>{dropPreview.label}</strong><small>{dropPreview.kind === 'folder' ? '音声・動画を一括追加' : 'メディアノードを追加'}</small></div></div>}
     </div>
-    {draft && <div className="connect-hint"><Icon name="link" size={14}/>{draft.type === 'attachment' ? 'ボタン上部の入力ポートへドロップ' : 'ノード左側の入力ポートへドロップ'}</div>}
-    {edgeMenu && <div className="graph-menu" style={{ left: edgeMenu.x, top: edgeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{edgeMenu.edge.type !== 'attachment' && <button onClick={() => { onInsertNode(edgeMenu.edge); setEdgeMenu(null) }}><Icon name="plus" size={13}/>ノードを間に追加</button>}<button onClick={() => { onDisconnect(edgeMenu.edge); setEdgeMenu(null) }}><Icon name="close" size={13}/>接続を解除</button></div>}
+    {draft && <div className="connect-hint"><Icon name="link" size={14}/>{draft.type === 'attachment' ? 'ボタン上部の入力ポートへドロップ' : draft.type === 'control' ? '上側にある再生設定ノードへドロップ' : 'ノード左側の入力ポートへドロップ'}</div>}
+    {edgeMenu && <div className="graph-menu" style={{ left: edgeMenu.x, top: edgeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{!['attachment', 'control'].includes(edgeMenu.edge.type) && <button onClick={() => { onInsertNode(edgeMenu.edge); setEdgeMenu(null) }}><Icon name="plus" size={13}/>ノードを間に追加</button>}<button onClick={() => { onDisconnect(edgeMenu.edge); setEdgeMenu(null) }}><Icon name="close" size={13}/>接続を解除</button></div>}
     {nodeMenu && <div className="graph-menu" style={{ left: nodeMenu.x, top: nodeMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => { onDeleteNode(nodeMenu.nodeId, false); setNodeMenu(null) }}><Icon name="trash" size={13}/>削除</button><button onClick={() => { onDeleteNode(nodeMenu.nodeId, true); setNodeMenu(null) }}><Icon name="link" size={13}/>前後を接続して削除</button></div>}
     {buttonMenu && <div className="graph-menu" style={{ left: buttonMenu.x, top: buttonMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => { onDeleteButton(buttonMenu.buttonId); setButtonMenu(null) }}><Icon name="trash" size={13}/>ボタンを削除</button></div>}
-    {canvasMenu && <div className="graph-menu canvas-menu" style={{ left: canvasMenu.x, top: canvasMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onAddNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="plus" size={13}/>メディアノードを作成</button><button onClick={() => { onAddScriptNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="script" size={13}/>Script Nodeを作成</button><button onClick={() => { onAddButton(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><span className="button-glyph">B</span>ボタンを作成</button><button onClick={() => { onSave(); setCanvasMenu(null) }}><Icon name="save" size={13}/>保存</button></div>}
-    {disconnectMenu && <div className="graph-menu disconnect-menu" style={{ left: disconnectMenu.x, top: disconnectMenu.y }} onPointerDown={(event) => event.stopPropagation()}><strong>{disconnectMenu.title}</strong>{disconnectMenu.edges.map((edge) => <button key={`${edge.from}-${edge.type}-${edge.index}`} onClick={() => { onDisconnect(edge); setDisconnectMenu(null) }}><Icon name="close" size={12}/><span>{edge.type === 'attachment' ? `${displayName(edge.from)} → ${buttonName(edge.to)}` : edge.type === 'button' ? `${buttonName(edge.from)} → ${displayName(edge.to)}` : `${displayName(edge.from)} → ${displayName(edge.to)}`}</span><small>{edge.type === 'attachment' ? 'ボタン接続' : edge.type === 'button' ? '押下時' : '再生終了時'}</small></button>)}</div>}
+    {controlMenu && <div className="graph-menu" style={{ left: controlMenu.x, top: controlMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => { onDeletePlayerControl(controlMenu.controlId); setControlMenu(null) }}><Icon name="trash" size={13}/>再生設定を削除</button></div>}
+    {canvasMenu && <div className="graph-menu canvas-menu" style={{ left: canvasMenu.x, top: canvasMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onAddNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="plus" size={13}/>メディアノードを作成</button><button onClick={() => { onAddButton(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><span className="button-glyph">B</span>ボタンを作成</button><button onClick={() => { onAddScriptNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="script" size={13}/>Script Nodeを作成</button><button onClick={() => { onAddPlayerControl(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="controls" size={13}/>再生設定を作成</button><button onClick={() => { onSave(); setCanvasMenu(null) }}><Icon name="save" size={13}/>保存</button></div>}
+    {disconnectMenu && <div className="graph-menu disconnect-menu" style={{ left: disconnectMenu.x, top: disconnectMenu.y }} onPointerDown={(event) => event.stopPropagation()}><strong>{disconnectMenu.title}</strong>{disconnectMenu.edges.map((edge) => <button key={`${edge.from}-${edge.type}-${edge.index}`} onClick={() => { onDisconnect(edge); setDisconnectMenu(null) }}><Icon name="close" size={12}/><span>{edge.type === 'attachment' ? `${displayName(edge.from)} → ${buttonName(edge.to)}` : edge.type === 'control' ? `${displayName(edge.from)} → ${controlName(edge.to)}` : edge.type === 'button' ? `${buttonName(edge.from)} → ${displayName(edge.to)}` : `${displayName(edge.from)} → ${displayName(edge.to)}`}</span><small>{edge.type === 'attachment' ? 'ボタン接続' : edge.type === 'control' ? '再生設定' : edge.type === 'button' ? '押下時' : '再生終了時'}</small></button>)}</div>}
   </div>
 }
 
@@ -781,6 +848,7 @@ function App() {
   const [treeExpansionCommand, setTreeExpansionCommand] = useState<TreeExpansionCommand>({ id: 0, expanded: true })
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [selectedButton, setSelectedButton] = useState<string | null>(null)
+  const [selectedPlayerControl, setSelectedPlayerControl] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [weightDisplayMode, setWeightDisplayMode] = useState<'weight' | 'probability' | 'hidden'>('weight')
@@ -802,20 +870,21 @@ function App() {
   const docAssets = active ? relativeAssets(active, assets) : assets
   const docScripts = active ? relativeScripts(active, scripts) : scripts
   const issues = useMemo(() => active ? validateGraph(active.graph, docAssets, docScripts) : [], [active, docAssets, docScripts])
+  useEffect(() => { if (selectedNode || selectedButton) setSelectedPlayerControl(null) }, [selectedButton, selectedNode])
 
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(null), 3200) }
   const openGraphTab = (document: GraphDocument) => {
     setOpenTabs((tabs) => tabs.some((tab) => tab.kind === 'graph' && tab.uid === document.uid) ? tabs : [...tabs, { kind: 'graph', uid: document.uid }])
-    setActiveTab(`graph:${document.uid}`); setActiveUid(document.uid); setSelectedNode(null); setSelectedButton(null)
+    setActiveTab(`graph:${document.uid}`); setActiveUid(document.uid); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null)
   }
   const openScriptTab = (script: ScriptDocument) => {
     setOpenTabs((tabs) => tabs.some((tab) => tab.kind === 'script' && tab.uid === script.uid) ? tabs : [...tabs, { kind: 'script', uid: script.uid }])
-    setActiveTab(`script:${script.uid}`); setSelectedNode(null); setSelectedButton(null)
+    setActiveTab(`script:${script.uid}`); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null)
   }
   const activateTab = (tab: EditorTab) => {
     setActiveTab(`${tab.kind}:${tab.uid}`)
     if (tab.kind === 'graph') setActiveUid(tab.uid)
-    setSelectedNode(null); setSelectedButton(null)
+    setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null)
   }
   const closeTab = (tab: EditorTab) => {
     const key = `${tab.kind}:${tab.uid}`
@@ -863,7 +932,7 @@ function App() {
       treeInlineCommit.current = null; setTreeInlineEdit(null); setTreeMenu(null); setTabMenu(null)
       setRoot(handle); setRootName(handle.name); setDocuments(restored); setScripts(restoredScripts); setFolders(result.folders); setAssets(result.assets)
       setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))
-      setActiveUid(first?.uid ?? null); setOpenTabs(first ? [{ kind: 'graph', uid: first.uid }] : []); setActiveTab(first ? `graph:${first.uid}` : null); setSelectedNode(null); setSelectedButton(null)
+      setActiveUid(first?.uid ?? null); setOpenTabs(first ? [{ kind: 'graph', uid: first.uid }] : []); setActiveTab(first ? `graph:${first.uid}` : null); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null)
       if (result.errors.length) notify(`${result.errors.length}件のファイルを読み込めませんでした`)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return
@@ -896,7 +965,7 @@ function App() {
     const restoredScripts = restoreScriptDrafts(commonRoot, nextScripts)
     const first = restored[0]
     treeInlineCommit.current = null; setTreeInlineEdit(null); setTreeMenu(null); setTabMenu(null)
-    setRootName(commonRoot); setDocuments(restored); setScripts(restoredScripts); setFolders([...folderPaths].map((path) => ({ path }))); setAssets(nextAssets); setActiveUid(first?.uid ?? null); setOpenTabs(first ? [{ kind: 'graph', uid: first.uid }] : []); setActiveTab(first ? `graph:${first.uid}` : null); setSelectedNode(null); setSelectedButton(null); setBusy(false)
+    setRootName(commonRoot); setDocuments(restored); setScripts(restoredScripts); setFolders([...folderPaths].map((path) => ({ path }))); setAssets(nextAssets); setActiveUid(first?.uid ?? null); setOpenTabs(first ? [{ kind: 'graph', uid: first.uid }] : []); setActiveTab(first ? `graph:${first.uid}` : null); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setBusy(false)
     setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))
   }
   const updateActive = useCallback((updater: (document: GraphDocument) => GraphDocument) => {
@@ -993,9 +1062,41 @@ function App() {
     if (node) updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [nodeId]: { ...node, buttons: node.buttons?.filter((id) => id !== buttonId) } } })
   }
 
+  const updateSelectedPlayerControl = (control: PlayerControlSettings) => {
+    if (!active || !selectedPlayerControl || !active.graph.playerControls[selectedPlayerControl]) return
+    updateGraph({ ...active.graph, playerControls: { ...active.graph.playerControls, [selectedPlayerControl]: control } })
+  }
+  const renamePlayerControl = (next: string) => {
+    if (!active || !selectedPlayerControl || next === selectedPlayerControl) return
+    if (!next || active.graph.playerControls[next]) { notify(!next ? '再生設定IDは空にできません' : '同じ再生設定IDが既にあります'); return }
+    const playerControls = Object.fromEntries(Object.entries(active.graph.playerControls).map(([id, control]) => [id === selectedPlayerControl ? next : id, control]))
+    const nodes = Object.fromEntries(Object.entries(active.graph.nodes).map(([id, node]) => [id, node.playerControl === selectedPlayerControl ? { ...node, playerControl: next } : node]))
+    updateGraph({ ...active.graph, playerControls, nodes, globalPlayerControl: active.graph.globalPlayerControl === selectedPlayerControl ? next : active.graph.globalPlayerControl })
+    setSelectedPlayerControl(next)
+  }
+  const deletePlayerControlById = (controlId: string) => {
+    if (!active || !active.graph.playerControls[controlId]) return
+    const playerControls = Object.fromEntries(Object.entries(active.graph.playerControls).filter(([id]) => id !== controlId))
+    const nodes = Object.fromEntries(Object.entries(active.graph.nodes).map(([id, node]) => [id, node.playerControl === controlId ? { ...node, playerControl: undefined } : node]))
+    updateGraph({ ...active.graph, playerControls, nodes, globalPlayerControl: active.graph.globalPlayerControl === controlId ? undefined : active.graph.globalPlayerControl })
+    if (selectedPlayerControl === controlId) setSelectedPlayerControl(null)
+  }
+  const attachPlayerControl = (nodeId: string, controlId: string) => {
+    if (!active || !active.graph.playerControls[controlId]) return
+    const node = active.graph.nodes[nodeId]
+    if (!node || node.type !== 'media') return
+    if (node.playerControl === controlId) { notify('このノードには既に接続されています'); return }
+    updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [nodeId]: { ...node, playerControl: controlId } } })
+  }
+  const detachPlayerControl = (nodeId: string) => {
+    if (!active) return
+    const node = active.graph.nodes[nodeId]
+    if (node?.playerControl) updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [nodeId]: { ...node, playerControl: undefined } } })
+  }
+
   const updateEdgeSet = (edge: GraphEdgeRef, updater: (transitions: Transition[]) => Transition[]) => {
     if (!active) return
-    if (edge.type === 'attachment') return
+    if (edge.type === 'attachment' || edge.type === 'control') return
     if (edge.type === 'end') {
       const source = active.graph.nodes[edge.from]
       if (!source) return
@@ -1007,6 +1108,7 @@ function App() {
   }
   const disconnectEdge = (edge: GraphEdgeRef) => {
     if (edge.type === 'attachment') { detachButton(edge.from, edge.to); return }
+    if (edge.type === 'control') { detachPlayerControl(edge.from); return }
     updateEdgeSet(edge, (transitions) => transitions.filter((_, index) => index !== edge.index))
   }
   const changeEdgeWeight = (edge: GraphEdgeRef, value: number, asProbability: boolean) => updateEdgeSet(edge, (transitions) => {
@@ -1022,7 +1124,7 @@ function App() {
     })
   })
   const insertNodeOnEdge = (edge: GraphEdgeRef) => {
-    if (!active || edge.type === 'attachment') return
+    if (!active || edge.type === 'attachment' || edge.type === 'control') return
     const destination = active.graph.nodes[edge.to]
     const sourcePosition = edge.type === 'end' ? active.graph.nodes[edge.from]?.editor : active.graph.buttons[edge.from]?.editor
     if (!sourcePosition || !destination) return
@@ -1072,6 +1174,15 @@ function App() {
     setSelectedNode(null)
     setSelectedButton(id)
   }
+  const addPlayerControl = (x = 160, y = 40) => {
+    if (!active) return
+    let number = Object.keys(active.graph.playerControls ?? {}).length + 1
+    while (active.graph.playerControls[`controls-${number}`]) number++
+    const id = `controls-${number}`
+    const control: PlayerControlSettings = { ...DEFAULT_PLAYER_CONTROLS, editor: { x: Math.max(20, Math.round(x)), y: Math.max(20, Math.round(y)), color: nextPlayerControlColor(active.graph.playerControls) } }
+    updateGraph({ ...active.graph, playerControls: { ...active.graph.playerControls, [id]: control } })
+    setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(id)
+  }
   const addNodeAtGraphCenter = () => {
     const rect = document.querySelector('.graph-surface')?.getBoundingClientRect()
     if (!rect) { addNode(); return }
@@ -1086,6 +1197,11 @@ function App() {
     const rect = document.querySelector('.graph-surface')?.getBoundingClientRect()
     if (!rect) { addScriptNode(); return }
     addScriptNode((rect.width / 2 - view.x) / view.zoom - 78, (rect.height / 2 - view.y) / view.zoom - 24)
+  }
+  const addPlayerControlAtGraphCenter = () => {
+    const rect = document.querySelector('.graph-surface')?.getBoundingClientRect()
+    if (!rect) { addPlayerControl(); return }
+    addPlayerControl((rect.width / 2 - view.x) / view.zoom - 82, (rect.height / 2 - view.y) / view.zoom - 27)
   }
   const bindAssetToNode = (nodeId: string, path: string) => {
     if (!active) return
@@ -1241,7 +1357,7 @@ function App() {
       setDocuments(remaining)
       closeTab({ kind: 'graph', uid: target.uid })
       localStorage.removeItem(draftKey(rootName, target.path))
-      if (activeUid === target.uid && activeTab === `graph:${target.uid}`) { setActiveUid(remaining[0]?.uid ?? null); setSelectedNode(null); setSelectedButton(null) }
+      if (activeUid === target.uid && activeTab === `graph:${target.uid}`) { setActiveUid(remaining[0]?.uid ?? null); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null) }
       notify(`${target.name} を削除しました`)
     } catch (error) {
       notify(error instanceof Error ? error.message : 'グラフを削除できませんでした')
@@ -1568,6 +1684,7 @@ function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); newDocument() }
       if ((event.key === 'Delete' || event.key === 'Backspace') && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) {
         if (selectedButton) deleteButtonById(selectedButton)
+        else if (selectedPlayerControl) deletePlayerControlById(selectedPlayerControl)
         else if (selectedNode) deleteNode()
       }
     }
@@ -1623,15 +1740,58 @@ function App() {
           const dropSide = tabDropTarget?.key === key ? tabDropTarget.side : null
           return [<div className={`tab ${key === activeTab ? 'active' : ''} ${tab.kind} ${renaming ? 'renaming' : ''} ${draggedTab === key ? 'dragging' : ''} ${dropSide ? `drop-${dropSide}` : ''}`} key={key} data-tab-key={key} draggable={!renaming} onDragStart={(event) => { event.dataTransfer.setData(TAB_DRAG_TYPE, key); event.dataTransfer.setData('text/plain', item.name); event.dataTransfer.effectAllowed = 'move'; setDraggedTab(key) }} onDragEnd={() => { setDraggedTab(null); setTabDropTarget(null) }} onDragOver={(event) => { if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE) || draggedTab === key) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; const rect = event.currentTarget.getBoundingClientRect(); setTabDropTarget({ key, side: event.clientX < rect.left + rect.width / 2 ? 'before' : 'after' }) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && tabDropTarget?.key === key) setTabDropTarget(null) }} onDrop={(event) => { if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return; event.preventDefault(); event.stopPropagation(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '', key, tabDropTarget?.key === key ? tabDropTarget.side : 'before') }} onClick={() => { if (!renaming) activateTab(tab) }} onContextMenu={(event) => { event.preventDefault(); if (!renaming) setTabMenu({ kind: tab.kind, uid: tab.uid, x: Math.min(event.clientX, window.innerWidth - 260), y: Math.min(event.clientY, window.innerHeight - 180) }) }}><Icon name={tab.kind === 'script' ? 'script' : 'code'} size={13}/>{renaming && treeInlineEdit ? <InlineNameInput edit={treeInlineEdit} testId="tab-rename-input" onChange={(name) => setTreeInlineEdit((edit) => edit ? { ...edit, name } : edit)} onCommit={commitTreeInlineEdit} onCancel={() => { treeInlineCommit.current = null; setTreeInlineEdit(null) }}/> : <><span>{item.name}</span>{item.dirty && <i/>}<button draggable={false} aria-label={`${item.name}を閉じる`} title="閉じる（ファイルは削除しません）" onDragStart={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); closeTab(tab) }}><Icon name="close" size={11}/></button></>}</div>]
         })}<button className={`new-tab ${draggedTab && !tabDropTarget ? 'drop-end' : ''}`} title="新規グラフ" onDragOver={(event) => { if (event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); setTabDropTarget(null) } }} onDrop={(event) => { if (event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '') } }} onClick={newDocument}><Icon name="plus" size={14}/></button></div>
-        {activeScript ? <ScriptEditor key={activeScript.uid} script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }} onChange={(content) => updateScriptContent(activeScript, content)} onSave={() => void saveScript(activeScript)} onTest={(functionName) => void testScript(activeScript, functionName)}/> : active && activeTab?.startsWith('graph:') ? <><div className="graph-toolbar"><div><button className="tool-button" onClick={addNodeAtGraphCenter}><Icon name="plus" size={14}/>メディアNode</button><button className="tool-button script-tool" onClick={addScriptNodeAtGraphCenter}><Icon name="script" size={14}/>Script Node</button><button className="tool-button" onClick={addButtonAtGraphCenter}><span className="button-glyph">B</span>ボタン</button><span className="toolbar-separator"/><button className={`segmented ${weightDisplayMode === 'weight' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('weight')}>重み</button><button className={`segmented ${weightDisplayMode === 'probability' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('probability')}>確率</button><button className={`segmented ${weightDisplayMode === 'hidden' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('hidden')}>非表示</button></div><div><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.max(.5, view.zoom - .1) })}>−</button><button className="zoom-value" onClick={() => setView({ zoom: 1, x: 80, y: 65 })}>{Math.round(view.zoom * 100)}%</button><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.min(1.6, view.zoom + .1) })}>＋</button><span className="toolbar-separator"/><button className="tool-button icon-only" title="JSONをエクスポート" onClick={exportJson}><Icon name="code" size={14}/></button></div></div>
-          <GraphCanvas graph={active.graph} selectedNode={selectedNode} selectedButton={selectedButton} probabilityMode={probabilityMode} showWeights={weightDisplayMode !== 'hidden'} view={view} onView={setView} onSelectNode={(id) => { setSelectedNode(id); setSelectedButton(null) }} onSelectButton={(id) => { setSelectedButton(id); setSelectedNode(null) }} onMoveNode={(id, x, y) => { const node = active.graph.nodes[id]; updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { ...node, editor: { ...node.editor, x: Math.round(x), y: Math.round(y) } } } }) }} onMoveButton={(id, x, y) => { const button = active.graph.buttons[id]; updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [id]: { ...button, editor: { ...button.editor, x: Math.round(x), y: Math.round(y) } } } }) }} onAddNode={addNode} onAddScriptNode={addScriptNode} onAddButton={(x, y) => addButton(x, y)} onConnectNode={(from, to) => { const source = active.graph.nodes[from]; if (!source || source.terminal) return; if ((source.onEnd ?? []).some((transition) => transition.to === to)) { notify('このノード間は既に接続されています'); return } updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [from]: { ...source, onEnd: [...(source.onEnd ?? []), { to, weight: 1 }] } } }) }} onConnectButton={(buttonId, to) => { const button = active.graph.buttons[buttonId]; if (!button) return; if ((button.onPress ?? []).some((transition) => transition.to === to)) { notify('このボタンから既に接続されています'); return } updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [buttonId]: { ...button, onPress: [...(button.onPress ?? []), { to, weight: 1 }] } } }) }} onAttachButton={attachButton} onAssetDrop={dropAssetOnGraph} onFolderDrop={dropFolderOnGraph} onExternalDrop={(promises, x, y) => void importDroppedHandles(promises, { forceNew: true, x, y })} onWeightChange={changeEdgeWeight} onDisconnect={disconnectEdge} onInsertNode={insertNodeOnEdge} onDeleteNode={deleteNodeById} onDeleteButton={deleteButtonById} onSave={() => void save()}/>
+        {activeScript ? <ScriptEditor key={activeScript.uid} script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }} onChange={(content) => updateScriptContent(activeScript, content)} onSave={() => void saveScript(activeScript)} onTest={(functionName) => void testScript(activeScript, functionName)}/> : active && activeTab?.startsWith('graph:') ? <><div className="graph-toolbar"><div><button className="tool-button" onClick={addNodeAtGraphCenter}><Icon name="plus" size={14}/>メディアNode</button><button className="tool-button" onClick={addButtonAtGraphCenter}><span className="button-glyph">B</span>ボタン</button><button className="tool-button script-tool" onClick={addScriptNodeAtGraphCenter}><Icon name="script" size={14}/>Script Node</button><button className="tool-button control-tool" onClick={addPlayerControlAtGraphCenter}><Icon name="controls" size={14}/>再生設定</button><span className="toolbar-separator"/><button className={`segmented ${weightDisplayMode === 'weight' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('weight')}>重み</button><button className={`segmented ${weightDisplayMode === 'probability' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('probability')}>確率</button><button className={`segmented ${weightDisplayMode === 'hidden' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('hidden')}>非表示</button></div><div><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.max(.5, view.zoom - .1) })}>−</button><button className="zoom-value" onClick={() => setView({ zoom: 1, x: 80, y: 65 })}>{Math.round(view.zoom * 100)}%</button><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.min(1.6, view.zoom + .1) })}>＋</button><span className="toolbar-separator"/><button className="tool-button icon-only" title="JSONをエクスポート" onClick={exportJson}><Icon name="code" size={14}/></button></div></div>
+          <GraphCanvas
+            graph={active.graph}
+            selectedNode={selectedNode}
+            selectedButton={selectedButton}
+            selectedPlayerControl={selectedPlayerControl}
+            probabilityMode={probabilityMode}
+            showWeights={weightDisplayMode !== 'hidden'}
+            view={view}
+            onView={setView}
+            onSelectNode={(id) => { setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null) }}
+            onSelectButton={(id) => { setSelectedButton(id); setSelectedNode(null); setSelectedPlayerControl(null) }}
+            onSelectPlayerControl={(id) => { setSelectedPlayerControl(id); setSelectedNode(null); setSelectedButton(null) }}
+            onMoveNode={(id, x, y) => { const node = active.graph.nodes[id]; updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { ...node, editor: { ...node.editor, x: Math.round(x), y: Math.round(y) } } } }) }}
+            onMoveButton={(id, x, y) => { const button = active.graph.buttons[id]; updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [id]: { ...button, editor: { ...button.editor, x: Math.round(x), y: Math.round(y) } } } }) }}
+            onMovePlayerControl={(id, x, y) => { const control = active.graph.playerControls[id]; updateGraph({ ...active.graph, playerControls: { ...active.graph.playerControls, [id]: { ...control, editor: { ...control.editor, x: Math.round(x), y: Math.round(y) } } } }) }}
+            onAddNode={addNode}
+            onAddScriptNode={addScriptNode}
+            onAddButton={(x, y) => addButton(x, y)}
+            onAddPlayerControl={addPlayerControl}
+            onConnectNode={(from, to) => { const source = active.graph.nodes[from]; if (!source || source.terminal) return; if ((source.onEnd ?? []).some((transition) => transition.to === to)) { notify('このノード間は既に接続されています'); return } updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [from]: { ...source, onEnd: [...(source.onEnd ?? []), { to, weight: 1 }] } } }) }}
+            onConnectButton={(buttonId, to) => { const button = active.graph.buttons[buttonId]; if (!button) return; if ((button.onPress ?? []).some((transition) => transition.to === to)) { notify('このボタンから既に接続されています'); return } updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [buttonId]: { ...button, onPress: [...(button.onPress ?? []), { to, weight: 1 }] } } }) }}
+            onAttachButton={attachButton}
+            onAttachPlayerControl={attachPlayerControl}
+            onAssetDrop={dropAssetOnGraph}
+            onFolderDrop={dropFolderOnGraph}
+            onExternalDrop={(promises, x, y) => void importDroppedHandles(promises, { forceNew: true, x, y })}
+            onWeightChange={changeEdgeWeight}
+            onDisconnect={disconnectEdge}
+            onInsertNode={insertNodeOnEdge}
+            onDeleteNode={deleteNodeById}
+            onDeleteButton={deleteButtonById}
+            onDeletePlayerControl={deletePlayerControlById}
+            onSave={() => void save()}
+          />
         </> : <div className="no-document"><Icon name="code" size={42}/><strong>開いているタブがありません</strong><span>ファイルツリーからグラフまたはスクリプトを開いてください</span><button className="primary-button" onClick={newDocument}><Icon name="plus" size={14}/>新規グラフ</button></div>}
       </main>
       <div className="resize-handle right" title="インスペクターの幅を変更" onPointerDown={(event) => beginResize('right', event)}/>
-      {activeScript ? <ScriptInspector script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }}/> : active && activeTab?.startsWith('graph:') ? <Inspector nodeId={selectedNode} buttonId={selectedButton} graph={active.graph} graphName={active.name} assets={docAssets} scripts={docScripts} probabilityMode={probabilityMode} issues={issues} onChangeGraph={updateGraph} onChange={updateNode} onChangeButton={updateSelectedButton} onSetStart={setSelectedNodeStart} onSetTerminal={setSelectedNodeTerminal} onRename={renameNode} onRenameButton={renameButton} onDelete={deleteNode} onDeleteButton={() => selectedButton && deleteButtonById(selectedButton)} onPick={(id) => { setSelectedNode(id); setSelectedButton(null) }} onPickButton={(id) => { setSelectedButton(id); setSelectedNode(null) }} onAddButton={(nodeId) => { const node = active.graph.nodes[nodeId]; addButton((node.editor?.x ?? 0) + 17, (node.editor?.y ?? 0) + 110, nodeId) }} onDetachButton={detachButton} onAssetDrop={(path) => selectedNode && bindAssetToNode(selectedNode, path)} onFolderDrop={(path) => selectedNode && appendFolderToNode(selectedNode, path)} onOpenScript={openScriptTab}/> : <aside className="inspector"><div className="panel-title"><span>インスペクター</span></div><div className="blank-panel"><Icon name="target" size={30}/></div></aside>}
+      {activeScript ? <ScriptInspector script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }}/> : active && activeTab?.startsWith('graph:') ? selectedPlayerControl && active.graph.playerControls[selectedPlayerControl] ? <PlayerControlInspector
+        controlId={selectedPlayerControl}
+        control={active.graph.playerControls[selectedPlayerControl]}
+        issues={issues.filter((issue) => issue.playerControlId === selectedPlayerControl)}
+        global={active.graph.globalPlayerControl === selectedPlayerControl}
+        usedBy={Object.entries(active.graph.nodes).filter(([, node]) => node.playerControl === selectedPlayerControl).map(([id, node]) => node.editor?.label || id)}
+        onChange={updateSelectedPlayerControl}
+        onRename={renamePlayerControl}
+        onGlobal={(enabled) => updateGraph({ ...active.graph, globalPlayerControl: enabled ? selectedPlayerControl : active.graph.globalPlayerControl === selectedPlayerControl ? undefined : active.graph.globalPlayerControl })}
+        onDelete={() => deletePlayerControlById(selectedPlayerControl)}
+      /> : <Inspector nodeId={selectedNode} buttonId={selectedButton} graph={active.graph} graphName={active.name} assets={docAssets} scripts={docScripts} probabilityMode={probabilityMode} issues={issues} onChangeGraph={updateGraph} onChange={updateNode} onChangeButton={updateSelectedButton} onSetStart={setSelectedNodeStart} onSetTerminal={setSelectedNodeTerminal} onRename={renameNode} onRenameButton={renameButton} onDelete={deleteNode} onDeleteButton={() => selectedButton && deleteButtonById(selectedButton)} onPick={(id) => { setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null) }} onPickButton={(id) => { setSelectedButton(id); setSelectedNode(null); setSelectedPlayerControl(null) }} onAddButton={(nodeId) => { const node = active.graph.nodes[nodeId]; addButton((node.editor?.x ?? 0) + 17, (node.editor?.y ?? 0) + 110, nodeId) }} onDetachButton={detachButton} onAssetDrop={(path) => selectedNode && bindAssetToNode(selectedNode, path)} onFolderDrop={(path) => selectedNode && appendFolderToNode(selectedNode, path)} onOpenScript={openScriptTab}/> : <aside className="inspector"><div className="panel-title"><span>インスペクター</span></div><div className="blank-panel"><Icon name="target" size={30}/></div></aside>}
     </Suspense></div>
-    <footer className="statusbar"><button className={issues.some((issue) => issue.severity === 'error') ? 'has-error' : ''} onClick={() => setShowProblems(!showProblems)}>{issues.length ? <Icon name="warning" size={12}/> : <Icon name="check" size={12}/>} {issues.filter((issue) => issue.severity === 'error').length} エラー　{issues.filter((issue) => issue.severity === 'warning').length} 警告</button><div><span>WMGF v1</span><span>{active ? `${Object.keys(active.graph.nodes).length} Node · ${Object.keys(active.graph.buttons).length} Button` : 'グラフなし'}</span><span>{scripts.length} Script · {assets.length} Assets</span></div></footer>
-    {showProblems && <div className="problems-panel" style={{ left: leftWidth + 4, right: rightWidth + 4 }}><header><strong>問題</strong><button className="icon-button" onClick={() => setShowProblems(false)}><Icon name="close" size={13}/></button></header>{issues.length ? issues.map((issue, index) => <button key={index} onClick={() => { const script = issue.scriptPath ? docScripts.find((item) => item.path === issue.scriptPath) : undefined; if (script) openScriptTab(script); else { if (active) openGraphTab(active); if (issue.nodeId) { setSelectedNode(issue.nodeId); setSelectedButton(null) } else if (issue.buttonId) { setSelectedButton(issue.buttonId); setSelectedNode(null) } } setShowProblems(false) }}><Icon name="warning" size={13}/><span>{issue.message}</span><small>{issue.scriptPath ?? issue.nodeId ?? issue.buttonId ?? 'グラフ'}</small></button>) : <div className="problems-empty"><Icon name="check" size={15}/>問題は見つかりませんでした</div>}</div>}
+    <footer className="statusbar"><button className={issues.some((issue) => issue.severity === 'error') ? 'has-error' : ''} onClick={() => setShowProblems(!showProblems)}>{issues.length ? <Icon name="warning" size={12}/> : <Icon name="check" size={12}/>} {issues.filter((issue) => issue.severity === 'error').length} エラー　{issues.filter((issue) => issue.severity === 'warning').length} 警告</button><div><span>WMGF v1</span><span>{active ? `${Object.keys(active.graph.nodes).length} Node · ${Object.keys(active.graph.buttons).length} Button · ${Object.keys(active.graph.playerControls).length} Controls` : 'グラフなし'}</span><span>{scripts.length} Script · {assets.length} Assets</span></div></footer>
+    {showProblems && <div className="problems-panel" style={{ left: leftWidth + 4, right: rightWidth + 4 }}><header><strong>問題</strong><button className="icon-button" onClick={() => setShowProblems(false)}><Icon name="close" size={13}/></button></header>{issues.length ? issues.map((issue, index) => <button key={index} onClick={() => { const script = issue.scriptPath ? docScripts.find((item) => item.path === issue.scriptPath) : undefined; if (script) openScriptTab(script); else { if (active) openGraphTab(active); if (issue.nodeId) { setSelectedNode(issue.nodeId); setSelectedButton(null); setSelectedPlayerControl(null) } else if (issue.buttonId) { setSelectedButton(issue.buttonId); setSelectedNode(null); setSelectedPlayerControl(null) } else if (issue.playerControlId) { setSelectedPlayerControl(issue.playerControlId); setSelectedNode(null); setSelectedButton(null) } } setShowProblems(false) }}><Icon name="warning" size={13}/><span>{issue.message}</span><small>{issue.scriptPath ?? issue.nodeId ?? issue.buttonId ?? issue.playerControlId ?? 'グラフ'}</small></button>) : <div className="problems-empty"><Icon name="check" size={15}/>問題は見つかりませんでした</div>}</div>}
     {showPreview && active && <Preview graph={active.graph} graphId={active.path} assets={docAssets} scripts={docScripts} onClose={() => setShowPreview(false)}/>}
     {previewAsset && <AssetPreview asset={previewAsset} onClose={() => setPreviewAsset(null)}/>}
     {tabMenu && <div className="tab-context-menu" style={{ left: tabMenu.x, top: tabMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { closeTab({ kind: tabMenu.kind, uid: tabMenu.uid }); setTabMenu(null) }}><Icon name="close" size={13}/>タブを閉じる</button>{tabMenu.kind === 'graph' && <button onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) duplicateDocument(target); setTabMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => { const target = tabMenu.kind === 'graph' ? documents.find((item) => item.uid === tabMenu.uid) : scripts.find((item) => item.uid === tabMenu.uid); if (target) beginTreeRename({ kind: tabMenu.kind, uid: target.uid, path: target.path }, 'tab') }}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (tabMenu.kind === 'graph') { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) void deleteDocument(target) } else { const target = scripts.find((script) => script.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'script', uid: target.uid, path: target.path }) } setTabMenu(null) }}><Icon name="trash" size={13}/>ファイルを削除</button></div>}
