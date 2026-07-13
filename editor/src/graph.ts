@@ -1,4 +1,4 @@
-import type { AssetEntry, MediaCandidate, ValidationIssue, WmgButton, WmgGraph, WmgNode } from './types'
+import type { AssetEntry, MediaCandidate, ScriptDocument, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode } from './types'
 
 const hslToHex = (hue: number, saturation = 55, lightness = 52) => {
   const s = saturation / 100
@@ -43,6 +43,7 @@ export const createGraph = (): WmgGraph => ({
   version: 1,
   nodes: {
     start: {
+      type: 'media',
       start: true,
       media: [],
       onEnd: [],
@@ -53,9 +54,27 @@ export const createGraph = (): WmgGraph => ({
   buttons: {},
 })
 
+const normalizeMetadata = (value: unknown): WmgMetadata | undefined => {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('metadataはオブジェクトで指定してください')
+  const raw = value as Record<string, unknown>
+  const metadata: WmgMetadata = {}
+  for (const key of ['displayName', 'description', 'author', 'createdAt', 'updatedAt'] as const) {
+    if (raw[key] === undefined) continue
+    if (typeof raw[key] !== 'string') throw new Error(`metadata.${key}は文字列で指定してください`)
+    if (raw[key].trim()) metadata[key] = raw[key]
+  }
+  if (raw.tags !== undefined) {
+    if (!Array.isArray(raw.tags) || raw.tags.some((tag) => typeof tag !== 'string')) throw new Error('metadata.tagsは文字列の配列で指定してください')
+    const tags = raw.tags.map((tag) => tag.trim()).filter(Boolean)
+    if (tags.length) metadata.tags = tags
+  }
+  return Object.keys(metadata).length ? metadata : undefined
+}
+
 export const normalizeGraph = (value: unknown): WmgGraph => {
   if (!value || typeof value !== 'object') throw new Error('JSONのルートがオブジェクトではありません')
-  const raw = value as { version?: unknown; nodes?: unknown; buttons?: unknown }
+  const raw = value as { version?: unknown; metadata?: unknown; nodes?: unknown; buttons?: unknown }
   if (raw.version !== 1) throw new Error('対応しているWMGFバージョンは1です')
   if (!raw.nodes || typeof raw.nodes !== 'object' || Array.isArray(raw.nodes)) {
     throw new Error('nodesが見つかりません')
@@ -67,9 +86,12 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
   const buttons = raw.buttons as Record<string, WmgButton>
   const baseHue = Math.random() * 360
   Object.values(nodes).forEach((node, index) => {
-    node.media ??= []
+    node.type ??= node.script ? 'script' : 'media'
+    if (node.type === 'media') node.media ??= []
+    else node.media = undefined
     node.onEnd ??= []
-    node.buttons ??= []
+    if (node.type === 'media') node.buttons ??= []
+    else node.buttons = undefined
     node.editor ??= { x: 100 + (index % 4) * 240, y: 100 + Math.floor(index / 4) * 170 }
     node.editor.color ??= hslToHex((baseHue + index * 137.508) % 360, 54, 51)
   })
@@ -78,7 +100,8 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
     button.editor ??= { x: 180 + (index % 4) * 190, y: 360 + Math.floor(index / 4) * 90 }
     button.editor.color ??= hslToHex((baseHue + 70 + index * 137.508) % 360, 42, 56)
   })
-  return { version: 1, nodes, buttons }
+  const metadata = normalizeMetadata(raw.metadata)
+  return { version: 1, ...(metadata ? { metadata } : {}), nodes, buttons }
 }
 
 export const fileKind = (path: string): AssetEntry['kind'] => {
@@ -112,8 +135,14 @@ const allNodePaths = (node: WmgNode) => [
   ]),
 ].filter(Boolean) as string[]
 
-export const validateGraph = (graph: WmgGraph, assets: AssetEntry[]): ValidationIssue[] => {
+export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: ScriptDocument[] = []): ValidationIssue[] => {
   const issues: ValidationIssue[] = []
+  const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+  for (const key of ['createdAt', 'updatedAt'] as const) {
+    const value = graph.metadata?.[key]
+    if (value && (!rfc3339.test(value) || Number.isNaN(Date.parse(value)))) issues.push({ severity: 'warning', message: `metadata.${key}はRFC 3339形式で指定してください` })
+  }
+  if (graph.metadata?.tags && new Set(graph.metadata.tags).size !== graph.metadata.tags.length) issues.push({ severity: 'warning', message: 'metadata.tagsに重複があります' })
   const entries = Object.entries(graph.nodes)
   const starts = entries.filter(([, node]) => node.start)
   if (starts.length !== 1) issues.push({ severity: 'error', message: `開始ノードは1件必要です（現在${starts.length}件）` })
@@ -121,6 +150,7 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[]): Validation
   const buttonEntries = Object.entries(graph.buttons)
   const buttonIds = new Set(buttonEntries.map(([id]) => id))
   const assetPaths = new Set(assets.map((asset) => asset.path))
+  const scriptPaths = new Set(scripts.map((script) => script.path))
 
   for (const [nodeId, node] of entries) {
     if (!nodeId.trim()) issues.push({ severity: 'error', nodeId, message: '空のノードIDは使用できません' })
@@ -129,6 +159,12 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[]): Validation
       if (transition.weight < 0) issues.push({ severity: 'error', nodeId, message: '遷移の重みは0以上にしてください' })
     })
     if (node.onEnd?.length && !node.onEnd.some((transition) => transition.weight > 0)) issues.push({ severity: 'error', nodeId, message: '遷移候補の重みがすべて0です' })
+    if (node.type === 'script') {
+      if (node.terminal) issues.push({ severity: 'error', nodeId, message: 'スクリプトノードを終端にはできません' })
+      if (!node.script?.path) issues.push({ severity: 'error', nodeId, message: '実行するStarlarkファイルが設定されていません' })
+      else if (!scriptPaths.has(node.script.path)) issues.push({ severity: 'error', nodeId, scriptPath: node.script.path, message: `スクリプトが見つかりません: ${node.script.path}` })
+      if (!(node.onEnd?.length)) issues.push({ severity: 'error', nodeId, message: 'スクリプトノードには遷移候補が必要です' })
+    }
     node.buttons?.forEach((buttonId) => { if (!buttonIds.has(buttonId)) issues.push({ severity: 'error', nodeId, message: `ボタン「${buttonId}」がありません` }) })
     if (new Set(node.buttons ?? []).size !== (node.buttons?.length ?? 0)) issues.push({ severity: 'error', nodeId, message: '同じボタンが重複して接続されています' })
     if (node.terminal && ((node.onEnd?.length ?? 0) || (node.buttons?.length ?? 0))) {
@@ -137,7 +173,7 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[]): Validation
     if (node.terminal && node.media?.some((media) => media.source.loop)) {
       issues.push({ severity: 'error', nodeId, message: '終端ノードのメディアはループできません' })
     }
-    if (!node.terminal && !(node.onEnd?.length) && !(node.buttons?.length)) {
+    if (node.type === 'media' && !node.terminal && !(node.onEnd?.length) && !(node.buttons?.length)) {
       issues.push({ severity: 'warning', nodeId, message: '終端ではないノードに遷移がありません' })
     }
     const mediaIds = new Set<string>()
@@ -164,6 +200,7 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[]): Validation
     })
     if (button.onPress?.length && !button.onPress.some((transition) => transition.weight > 0)) issues.push({ severity: 'error', buttonId, message: '遷移候補の重みがすべて0です' })
     if (!entries.some(([, node]) => node.buttons?.includes(buttonId))) issues.push({ severity: 'warning', buttonId, message: 'どのノードにも接続されていないボタンです' })
+    if (button.render?.path && !scriptPaths.has(button.render.path)) issues.push({ severity: 'error', buttonId, scriptPath: button.render.path, message: `表示スクリプトが見つかりません: ${button.render.path}` })
     const path = button.appearance?.backgroundImage
     if (path && (/^(?:[a-z]+:|\/)/i.test(path) || path.split('/').includes('..'))) issues.push({ severity: 'error', buttonId, message: `コンテンツ外を参照するパスです: ${path}` })
     else if (path && assets.length && !assetPaths.has(path)) issues.push({ severity: 'warning', buttonId, message: `ファイルが見つかりません: ${path}` })

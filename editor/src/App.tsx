@@ -1,7 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { chooseWeighted, createGraph, defaultMedia, fileKind, nextButtonColor, nextNodeColor, normalizeGraph, probability, validateGraph } from './graph'
-import type { AssetEntry, GraphDocument, MediaCandidate, Transition, ValidationIssue, WmgButton, WmgGraph, WmgNode } from './types'
+import { createGraph, defaultMedia, fileKind, nextButtonColor, nextNodeColor, normalizeGraph, probability, validateGraph } from './graph'
+import { Preview } from './Preview'
+import { createStarlarkContext } from './scriptContext'
+import ScriptInspector from './ScriptInspector'
+import type { ScriptTestState } from './ScriptEditor'
+import { parseStarlarkErrorLocation, runStarlark } from './starlark'
+import type { AssetEntry, EditorTab, GraphDocument, MediaCandidate, PlaybackHistoryEntry, ScriptDocument, Transition, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode, WorkspaceFolder } from './types'
+
+const ScriptEditor = lazy(() => import('./ScriptEditor').then((module) => ({ default: module.ScriptEditor })))
 
 const Icon = ({ name, size = 16 }: { name: string; size?: number }) => {
   const paths: Record<string, React.ReactNode> = {
@@ -20,10 +27,14 @@ const Icon = ({ name, size = 16 }: { name: string; size?: number }) => {
     media: <><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></>,
     image: <><rect x="3" y="4" width="18" height="16" rx="1"/><circle cx="9" cy="9" r="2"/><path d="m4 17 5-5 3 3 2-2 6 5"/></>,
     code: <path d="m8 7-5 5 5 5m8-10 5 5-5 5m-2-13-4 16"/>,
+    script: <><path d="M5 3h11l3 3v18H5z"/><path d="M16 3v5h5M8 12h8M8 16h6"/></>,
+    bug: <><path d="M8 9h8M9 4h6l1 3H8zM7 7l-2 3v8l3 3h8l3-3v-8l-2-3M3 13h4m10 0h4"/></>,
     target: <><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></>,
     link: <><path d="M10 14 8 16a4 4 0 0 1-6-6l3-3a4 4 0 0 1 6 0"/><path d="m14 10 2-2a4 4 0 1 1 6 6l-3 3a4 4 0 0 1-6 0M8 12h8"/></>,
     dots: <><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></>,
     fit: <><path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5"/></>,
+    expandAll: <><path d="m7 5 5 5 5-5M7 14l5 5 5-5"/><path d="M4 1h16M4 23h16"/></>,
+    collapseAll: <><path d="m7 10 5-5 5 5M7 14l5 5 5-5"/><path d="M4 12h16"/></>,
   }
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
 }
@@ -31,8 +42,17 @@ const Icon = ({ name, size = 16 }: { name: string; size?: number }) => {
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 const ASSET_DRAG_TYPE = 'application/x-wmgf-asset-path'
 const FOLDER_DRAG_TYPE = 'application/x-wmgf-folder-path'
+const SCRIPT_DRAG_TYPE = 'application/x-wmgf-script-uid'
+const TAB_DRAG_TYPE = 'application/x-wmgf-editor-tab'
 let activeTreeDrag: { label: string; kind: 'folder' | 'media' } | null = null
 const draftKey = (workspace: string, path: string) => `wmgf-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
+const scriptDraftKey = (workspace: string, path: string) => `wmgf-script-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
+const defaultScriptSource = (name = 'script') => `# ${name}\n# ctx["history"]: 確定済み再生履歴（最大1000件）\n# ctx["current"]: 現在の再生状態 / ctx["totalActivePlayMs"]: 実再生時間の合計\n\ndef jump(ctx):\n    """Script Nodeから遷移するNode IDを返します。"""\n    return None\n\ndef render(ctx):\n    """Buttonの表示内容を上書きします。"""\n    return {\n        "visible": True,\n        "text": "Continue",\n        "style": {},\n    }\n`
+const scriptStem = (value: string) => value.trim().replace(/(?:\.star)+$/i, '')
+const scriptFileName = (value: string) => {
+  const stem = scriptStem(value)
+  return stem ? `${stem}.star` : ''
+}
 const normalizeSearchText = (value: string) => value
   .normalize('NFKC')
   .toLocaleLowerCase('ja-JP')
@@ -56,9 +76,30 @@ const restoreDrafts = (workspace: string, documents: GraphDocument[]) => documen
   }
 })
 
+const restoreScriptDrafts = (workspace: string, scripts: ScriptDocument[]) => scripts.map((script) => {
+  const stored = localStorage.getItem(scriptDraftKey(workspace, script.path))
+  if (!stored) return script
+  try {
+    const draft = JSON.parse(stored) as { content?: string }
+    if (typeof draft.content !== 'string' || !window.confirm(`「${script.path}」にブラウザへ自動保存された未保存データがあります。\n復元しますか？`)) {
+      localStorage.removeItem(scriptDraftKey(workspace, script.path))
+      return script
+    }
+    return { ...script, content: draft.content, dirty: true }
+  } catch {
+    localStorage.removeItem(scriptDraftKey(workspace, script.path))
+    return script
+  }
+})
+
 const relativeAssets = (document: GraphDocument, assets: AssetEntry[]) => {
   const parent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
   return assets.map((asset) => ({ ...asset, path: parent && asset.path.startsWith(parent) ? asset.path.slice(parent.length) : asset.path }))
+}
+
+const relativeScripts = (document: GraphDocument, scripts: ScriptDocument[]) => {
+  const parent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
+  return scripts.map((script) => ({ ...script, path: parent && script.path.startsWith(parent) ? script.path.slice(parent.length) : script.path }))
 }
 
 const serialize = (graph: WmgGraph) => `${JSON.stringify(graph, null, 2)}\n`
@@ -74,11 +115,14 @@ const mediaForAsset = (asset: AssetEntry, path: string, index: number): MediaCan
 async function readDirectory(root: FileSystemDirectoryHandle) {
   const documents: GraphDocument[] = []
   const assets: AssetEntry[] = []
+  const scripts: ScriptDocument[] = []
+  const folders: WorkspaceFolder[] = []
   const errors: string[] = []
   const walk = async (directory: FileSystemDirectoryHandle, prefix = '') => {
     for await (const [name, entry] of directory.entries()) {
       const path = `${prefix}${name}`
       if (entry.kind === 'directory') {
+        folders.push({ path, handle: entry })
         await walk(entry, `${path}/`)
       } else {
         const file = await entry.getFile()
@@ -88,6 +132,8 @@ async function readDirectory(root: FileSystemDirectoryHandle) {
           } catch (error) {
             errors.push(`${path}: ${error instanceof Error ? error.message : '読み込めませんでした'}`)
           }
+        } else if (name.toLowerCase().endsWith('.star')) {
+          scripts.push({ uid: uid(), name, path, content: await file.text(), dirty: false, handle: entry })
         } else {
           assets.push({ name, path, kind: fileKind(path), file })
         }
@@ -95,7 +141,7 @@ async function readDirectory(root: FileSystemDirectoryHandle) {
     }
   }
   await walk(root)
-  return { documents, assets, errors }
+  return { documents, assets, scripts, folders, errors }
 }
 
 async function collectDroppedFiles(handle: FileSystemHandle, prefix = ''): Promise<Array<{ file: File; path: string }>> {
@@ -269,7 +315,7 @@ function MediaEditor({ media, index, probabilityMode, assets, onChange, onRemove
   </details>
 }
 
-function ButtonEditor({ buttonId, button, nodes, nodeLabels, assets, onChange, onRename, onRemove, onPick }: { buttonId: string; button: WmgButton; nodes: string[]; nodeLabels: Record<string, string>; assets: AssetEntry[]; onChange: (button: WmgButton) => void; onRename: (next: string) => void; onRemove: () => void; onPick: (id: string) => void }) {
+function ButtonEditor({ buttonId, button, nodes, nodeLabels, assets, scripts, onChange, onRename, onRemove, onPick, onOpenScript }: { buttonId: string; button: WmgButton; nodes: string[]; nodeLabels: Record<string, string>; assets: AssetEntry[]; scripts: ScriptDocument[]; onChange: (button: WmgButton) => void; onRename: (next: string) => void; onRemove: () => void; onPick: (id: string) => void; onOpenScript: (script: ScriptDocument) => void }) {
   const details = useRef<HTMLDetailsElement>(null)
   const layout = button.layout ?? { x: .7, y: .8, width: .2, height: .1, z: 10 }
   const appearance = button.appearance ?? {}
@@ -284,6 +330,9 @@ function ButtonEditor({ buttonId, button, nodes, nodeLabels, assets, onChange, o
       <Field label="表示テキスト"><input value={appearance.text ?? ''} onChange={(event) => onChange({ ...button, appearance: { ...appearance, text: event.target.value || undefined } })}/></Field>
       <div className="two-col"><Field label="背景色"><DebouncedColorInput value={appearance.backgroundColor?.slice(0, 7) ?? '#333333'} onCommit={(backgroundColor) => onChange({ ...button, appearance: { ...appearance, backgroundColor } })}/></Field><Field label="文字色"><DebouncedColorInput value={appearance.textColor?.slice(0, 7) ?? '#ffffff'} onCommit={(textColor) => onChange({ ...button, appearance: { ...appearance, textColor } })}/></Field></div>
       <Field label="背景画像"><PathPicker value={appearance.backgroundImage ?? ''} assets={assets} kinds={['image']} placeholder="任意" onChange={(value) => onChange({ ...button, appearance: { ...appearance, backgroundImage: value || undefined } })}/></Field>
+      <div className="subheading">動的表示（Starlark）</div>
+      <Field label="表示スクリプト"><div className="script-reference"><select value={button.render?.path ?? ''} onChange={(event) => onChange({ ...button, render: event.target.value ? { path: event.target.value, function: button.render?.function ?? 'render' } : undefined })}><option value="">使用しない</option>{scripts.map((script) => <option value={script.path} key={script.uid}>{script.path}</option>)}</select>{button.render?.path && <button className="icon-button" title="スクリプトを開く" onClick={() => { const script = scripts.find((item) => item.path === button.render?.path); if (script) onOpenScript(script) }}><Icon name="script" size={13}/></button>}</div></Field>
+      {button.render && <Field label="関数"><input value={button.render.function ?? 'render'} onChange={(event) => onChange({ ...button, render: { ...button.render!, function: event.target.value } })}/></Field>}
       <div className="subheading">配置（表示領域に対する比率）</div>
       <div className="five-col">{(['x', 'y', 'width', 'height', 'z'] as const).map((key) => <Field label={key === 'width' ? '幅' : key === 'height' ? '高さ' : key.toUpperCase()} key={key}><NumberInput min={key === 'z' ? undefined : 0} max={key === 'z' ? undefined : 1} step={key === 'z' ? 1 : .05} value={layout[key]} onChange={(value) => onChange({ ...button, layout: { ...layout, [key]: value } })}/></Field>)}</div>
       <div className="subheading row-between"><span>表示タイミング</span><button className="mini-button" onClick={() => onChange({ ...button, visibility: [...intervals, { fromMs: 0, toMs: null }] })}>+ 区間</button></div>
@@ -296,7 +345,44 @@ function ButtonEditor({ buttonId, button, nodes, nodeLabels, assets, onChange, o
   </details>
 }
 
-function Inspector({ nodeId, buttonId, graph, assets, probabilityMode, issues, onChange, onChangeButton, onSetStart, onSetTerminal, onRename, onRenameButton, onDelete, onDeleteButton, onPick, onPickButton, onAddButton, onDetachButton, onAssetDrop, onFolderDrop }: { nodeId: string | null; buttonId: string | null; graph: WmgGraph; assets: AssetEntry[]; probabilityMode: boolean; issues: ValidationIssue[]; onChange: (node: WmgNode) => void; onChangeButton: (button: WmgButton) => void; onSetStart: (enabled: boolean) => void; onSetTerminal: (enabled: boolean) => void; onRename: (next: string) => void; onRenameButton: (next: string) => void; onDelete: () => void; onDeleteButton: () => void; onPick: (id: string) => void; onPickButton: (id: string) => void; onAddButton: (nodeId: string) => void; onDetachButton: (nodeId: string, buttonId: string) => void; onAssetDrop: (path: string) => void; onFolderDrop: (path: string) => void }) {
+function MetadataTagsInput({ tags, onCommit }: { tags?: string[]; onCommit: (tags: string[]) => void }) {
+  const joined = (tags ?? []).join(', ')
+  const [draft, setDraft] = useState(joined)
+  useEffect(() => setDraft(joined), [joined])
+  const commit = () => onCommit(draft.split(',').map((tag) => tag.trim()).filter(Boolean))
+  return <input aria-label="グラフのタグ" value={draft} placeholder="ASMR, 睡眠" onChange={(event) => setDraft(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}/>
+}
+
+function GraphMetadataInspector({ graph, graphName, onChange }: { graph: WmgGraph; graphName: string; onChange: (graph: WmgGraph) => void }) {
+  const metadata = graph.metadata ?? {}
+  const commit = (next: WmgMetadata) => {
+    const compact = Object.fromEntries(Object.entries(next).filter(([, value]) => Array.isArray(value) ? value.length > 0 : typeof value === 'string' ? value.trim().length > 0 : value !== undefined)) as WmgMetadata
+    const nextGraph = { ...graph }
+    delete nextGraph.metadata
+    if (Object.keys(compact).length) nextGraph.metadata = compact
+    onChange(nextGraph)
+  }
+  const text = (key: keyof Pick<WmgMetadata, 'displayName' | 'description' | 'author' | 'createdAt' | 'updatedAt'>, value: string) => commit({ ...metadata, [key]: value })
+  const dateField = (key: 'createdAt' | 'updatedAt', label: string) => <Field label={label} hint="RFC 3339 / ISO 8601"><div className="metadata-date-field"><input value={metadata[key] ?? ''} placeholder="2026-07-13T12:00:00+09:00" onChange={(event) => text(key, event.target.value)}/><button type="button" className="mini-button" onClick={() => text(key, new Date().toISOString())}>現在</button></div></Field>
+  return <aside className="inspector graph-metadata-inspector" data-testid="graph-metadata-inspector">
+    <div className="panel-title"><span>グラフ情報</span><small>WMGF v1</small></div>
+    <div className="inspector-scroll">
+      <div className="graph-file-card"><span><Icon name="code" size={15}/></span><div><strong>{metadata.displayName || graphName}</strong><small>{graphName}</small></div></div>
+      <Section title="一般情報">
+        <Field label="表示名"><input aria-label="グラフの表示名" value={metadata.displayName ?? ''} placeholder={graphName.replace(/\.wmg\.json$/i, '')} onChange={(event) => text('displayName', event.target.value)}/></Field>
+        <Field label="説明"><textarea aria-label="グラフの説明" rows={5} value={metadata.description ?? ''} placeholder="このグラフの用途や内容" onChange={(event) => text('description', event.target.value)}/></Field>
+        <Field label="作者"><input aria-label="グラフの作者" value={metadata.author ?? ''} placeholder="作者名" onChange={(event) => text('author', event.target.value)}/></Field>
+        <Field label="タグ" hint="カンマ区切り"><MetadataTagsInput tags={metadata.tags} onCommit={(tags) => commit({ ...metadata, tags })}/></Field>
+      </Section>
+      <Section title="日時">
+        {dateField('createdAt', '作成日時')}
+        {dateField('updatedAt', '更新日時')}
+      </Section>
+    </div>
+  </aside>
+}
+
+function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probabilityMode, issues, onChangeGraph, onChange, onChangeButton, onSetStart, onSetTerminal, onRename, onRenameButton, onDelete, onDeleteButton, onPick, onPickButton, onAddButton, onDetachButton, onAssetDrop, onFolderDrop, onOpenScript }: { nodeId: string | null; buttonId: string | null; graph: WmgGraph; graphName: string; assets: AssetEntry[]; scripts: ScriptDocument[]; probabilityMode: boolean; issues: ValidationIssue[]; onChangeGraph: (graph: WmgGraph) => void; onChange: (node: WmgNode) => void; onChangeButton: (button: WmgButton) => void; onSetStart: (enabled: boolean) => void; onSetTerminal: (enabled: boolean) => void; onRename: (next: string) => void; onRenameButton: (next: string) => void; onDelete: () => void; onDeleteButton: () => void; onPick: (id: string) => void; onPickButton: (id: string) => void; onAddButton: (nodeId: string) => void; onDetachButton: (nodeId: string, buttonId: string) => void; onAssetDrop: (path: string) => void; onFolderDrop: (path: string) => void; onOpenScript: (script: ScriptDocument) => void }) {
   const node = nodeId ? graph.nodes[nodeId] : undefined
   const button = buttonId ? graph.buttons[buttonId] : undefined
   const nodeIds = Object.keys(graph.nodes)
@@ -309,13 +395,34 @@ function Inspector({ nodeId, buttonId, graph, assets, probabilityMode, issues, o
       <div className="inspector-scroll">
         <div className="node-identity button-identity"><span className="button-glyph">B</span><div><strong>{button.appearance?.text || buttonId}</strong><small>{parents.length ? parents.join(', ') : '未接続'} · {buttonId}</small></div></div>
         {buttonIssues.length > 0 && <div className="node-issues">{buttonIssues.map((issue, index) => <div className={issue.severity} key={index}><Icon name="warning" size={13}/>{issue.message}</div>)}</div>}
-        <div className="button-only-editor"><ButtonEditor buttonId={buttonId} button={button} nodes={nodeIds} nodeLabels={nodeLabels} assets={assets} onChange={onChangeButton} onRename={onRenameButton} onRemove={onDeleteButton} onPick={onPick}/></div>
+        <div className="button-only-editor"><ButtonEditor buttonId={buttonId} button={button} nodes={nodeIds} nodeLabels={nodeLabels} assets={assets} scripts={scripts} onChange={onChangeButton} onRename={onRenameButton} onRemove={onDeleteButton} onPick={onPick} onOpenScript={onOpenScript}/></div>
       </div>
     </aside>
   }
-  if (!node || !nodeId) return <aside className="inspector"><div className="panel-title"><span>インスペクター</span></div><div className="blank-panel"><Icon name="target" size={30}/><span>ノードを選択</span></div></aside>
+  if (!node || !nodeId) return <GraphMetadataInspector graph={graph} graphName={graphName} onChange={onChangeGraph}/>
   const updateMedia = (index: number, media: MediaCandidate) => onChange({ ...node, media: (node.media ?? []).map((item, itemIndex) => itemIndex === index ? media : item) })
   const nodeIssues = issues.filter((issue) => issue.nodeId === nodeId)
+  if (node.type === 'script') return <aside className="inspector script-node-inspector">
+    <div className="panel-title"><span>Script Node</span><button className="icon-button danger" title="ノードを削除" onClick={onDelete}><Icon name="trash" size={14}/></button></div>
+    <div className="inspector-scroll">
+      <div className="node-identity script-node-identity"><span className="node-color" style={{ background: node.editor?.color ?? '#8d65b5' }}><Icon name="script" size={13}/></span><div><strong>{node.editor?.label || nodeId}</strong><small>0秒制御ノード · {nodeId}</small></div></div>
+      {nodeIssues.length > 0 && <div className="node-issues">{nodeIssues.map((issue, index) => <div className={issue.severity} key={index}><Icon name="warning" size={13}/>{issue.message}</div>)}</div>}
+      <Section title="ノード">
+        <Field label="ノードID"><input key={nodeId} defaultValue={nodeId} onBlur={(event) => onRename(event.target.value.trim())} onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}/></Field>
+        <Field label="表示名"><input value={node.editor?.label ?? ''} placeholder={nodeId} onChange={(event) => onChange({ ...node, editor: { ...node.editor, label: event.target.value } })}/></Field>
+        <Field label="カラー"><div className="color-field"><DebouncedColorInput value={node.editor?.color ?? '#8d65b5'} onCommit={(color) => onChange({ ...node, editor: { ...node.editor, color } })}/><input value={node.editor?.color ?? '#8d65b5'} onChange={(event) => onChange({ ...node, editor: { ...node.editor, color: event.target.value } })}/></div></Field>
+        <label className="check-row"><input type="checkbox" checked={node.start ?? false} onChange={(event) => onSetStart(event.target.checked)}/>開始ノード</label>
+      </Section>
+      <Section title="Starlark">
+        <Field label="スクリプト"><div className="script-reference"><select value={node.script?.path ?? ''} onChange={(event) => onChange({ ...node, script: event.target.value ? { path: event.target.value, function: node.script?.function ?? 'jump' } : undefined })}><option value="">選択してください</option>{scripts.map((script) => <option value={script.path} key={script.uid}>{script.path}</option>)}</select>{node.script?.path && <button className="icon-button" title="スクリプトを開く" onClick={() => { const script = scripts.find((item) => item.path === node.script?.path); if (script) onOpenScript(script) }}><Icon name="script" size={13}/></button>}</div></Field>
+        <Field label="関数"><input value={node.script?.function ?? 'jump'} onChange={(event) => onChange({ ...node, script: { path: node.script?.path ?? '', function: event.target.value } })}/></Field>
+        <div className="script-node-hint"><Icon name="bug" size={14}/><span>戻り値は接続済みNodeのIDにしてください。エラーまたはNoneの場合は重み付き遷移へフォールバックします。</span></div>
+      </Section>
+      <Section title="遷移可能な行き先" count={node.onEnd?.length ?? 0} action={<button className="mini-button" disabled={!nodeIds.some((id) => id !== nodeId && !(node.onEnd ?? []).some((transition) => transition.to === id))} onClick={() => { const to = nodeIds.find((id) => id !== nodeId && !(node.onEnd ?? []).some((transition) => transition.to === id)); if (to) onChange({ ...node, onEnd: [...(node.onEnd ?? []), { to, weight: 1 }] }) }}>+ 追加</button>}>
+        <TransitionEditor transitions={node.onEnd ?? []} nodes={nodeIds} nodeLabels={nodeLabels} probabilityMode={probabilityMode} onChange={(onEnd) => onChange({ ...node, onEnd })} onPick={onPick}/>
+      </Section>
+    </div>
+  </aside>
   return <aside className="inspector">
     <div className="panel-title"><span>インスペクター</span><button className="icon-button danger" title="ノードを削除" onClick={onDelete}><Icon name="trash" size={14}/></button></div>
     <div className="inspector-scroll">
@@ -351,7 +458,7 @@ type GraphCanvasProps = {
   graph: WmgGraph; selectedNode: string | null; selectedButton: string | null; probabilityMode: boolean; showWeights: boolean; view: View
   onView: (view: View) => void; onSelectNode: (id: string | null) => void; onSelectButton: (id: string) => void
   onMoveNode: (id: string, x: number, y: number) => void; onMoveButton: (id: string, x: number, y: number) => void
-  onAddNode: (x: number, y: number) => void; onAddButton: (x: number, y: number) => void
+  onAddNode: (x: number, y: number) => void; onAddScriptNode: (x: number, y: number) => void; onAddButton: (x: number, y: number) => void
   onConnectNode: (from: string, to: string) => void; onConnectButton: (buttonId: string, to: string) => void; onAttachButton: (nodeId: string, buttonId: string) => void
   onAssetDrop: (path: string, nodeId: string | null, x: number, y: number) => void; onFolderDrop: (path: string, nodeId: string | null, x: number, y: number) => void
   onExternalDrop: (promises: Array<Promise<FileSystemHandle | null>>, x: number, y: number) => void
@@ -359,7 +466,7 @@ type GraphCanvasProps = {
   onDeleteNode: (nodeId: string, bridge: boolean) => void; onDeleteButton: (buttonId: string) => void; onSave: () => void
 }
 
-function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, showWeights, view, onView, onSelectNode, onSelectButton, onMoveNode, onMoveButton, onAddNode, onAddButton, onConnectNode, onConnectButton, onAttachButton, onAssetDrop, onFolderDrop, onExternalDrop, onWeightChange, onDisconnect, onInsertNode, onDeleteNode, onDeleteButton, onSave }: GraphCanvasProps) {
+function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, showWeights, view, onView, onSelectNode, onSelectButton, onMoveNode, onMoveButton, onAddNode, onAddScriptNode, onAddButton, onConnectNode, onConnectButton, onAttachButton, onAssetDrop, onFolderDrop, onExternalDrop, onWeightChange, onDisconnect, onInsertNode, onDeleteNode, onDeleteButton, onSave }: GraphCanvasProps) {
   const surface = useRef<HTMLDivElement>(null)
   const drag = useRef<{ type: 'node' | 'button' | 'pan'; id?: string; startX: number; startY: number; originX: number; originY: number } | null>(null)
   const draftRef = useRef<ConnectionDraft | null>(null)
@@ -380,7 +487,7 @@ function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, sho
   const attachmentEdges = nodeEntries.flatMap(([from, node]) => (node.buttons ?? []).map((to, index) => ({ from, to, index, type: 'attachment' as const }))).filter((edge) => graph.buttons[edge.to])
   const edges = [...transitionEdges, ...attachmentEdges]
   const edgeRef = (edge: typeof edges[number]): GraphEdgeRef => ({ from: edge.from, to: edge.to, index: edge.index, type: edge.type })
-  const isCompactNode = (node: WmgNode) => !(node.media?.length)
+  const isCompactNode = (node: WmgNode) => node.type === 'script' || !(node.media?.length)
   const point = (id: string, side: 'in' | 'out') => {
     const node = graph.nodes[id]
     const compact = isCompactNode(node)
@@ -477,8 +584,8 @@ function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, sho
         {draft && (() => { const a = draftStart(draft); const vertical = draft.type === 'attachment'; const bend = Math.max(45, Math.abs((vertical ? draft.y - a.y : draft.x - a.x)) * .45); const path = vertical ? `M ${a.x} ${a.y} C ${a.x} ${a.y + bend}, ${draft.x} ${draft.y - bend}, ${draft.x} ${draft.y}` : `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${draft.x - bend} ${draft.y}, ${draft.x} ${draft.y}`; const color = draft.type === 'button' ? graph.buttons[draft.from]?.editor?.color : graph.nodes[draft.from]?.editor?.color; return <path className="draft-edge" style={{ '--edge-color': color ?? '#55addd' } as React.CSSProperties} d={path} markerEnd="url(#arrow-draft)"/> })()}
       </svg>
       {showWeights && transitionEdges.filter((edge) => edge.set.length > 1).map((edge) => { const a = edgeStart(edge); const b = edgeEnd(edge); return <label className={`wire-weight-editor ${edge.type} ${isDimmed(edge) ? 'dimmed' : ''}`} data-from={edge.from} data-to={edge.to} style={{ left: (a.x + b.x) / 2, top: (a.y + b.y) / 2 - 8 }} key={`editor-${edge.from}-${edge.type}-${edge.index}`} title={probabilityMode ? '遷移確率' : '遷移の重み'} onPointerDown={(event) => event.stopPropagation()}><input type="number" min="0" max={probabilityMode ? 100 : undefined} step={probabilityMode ? .1 : 1} value={probabilityMode ? Number(probability(edge.transition.weight, edge.set).toFixed(1)) : edge.transition.weight} onChange={(event) => onWeightChange(edgeRef(edge), Number(event.target.value), probabilityMode)}/><span>{probabilityMode ? '%' : ''}</span></label> })}
-      {nodeEntries.map(([id, node]) => <div key={id} data-node-id={id} className={`graph-node ${isCompactNode(node) ? 'compact' : ''} ${selectedNode === id ? 'selected' : ''} ${node.terminal ? 'terminal' : ''} ${draft?.from === id && draft.type !== 'button' ? 'source' : ''}`} style={{ left: node.editor?.x ?? 0, top: node.editor?.y ?? 0, '--node-color': node.editor?.color ?? '#4676a9' } as React.CSSProperties} onPointerDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); onSelectNode(id); drag.current = { type: 'node', id, startX: event.clientX, startY: event.clientY, originX: node.editor?.x ?? 0, originY: node.editor?.y ?? 0 } }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const rect = surface.current?.getBoundingClientRect(); setNodeMenu({ nodeId: id, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setButtonMenu(null); setDisconnectMenu(null) }} onDragOver={(event) => { if (event.dataTransfer.types.includes(ASSET_DRAG_TYPE) || event.dataTransfer.types.includes(FOLDER_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); setDropPreview(null); event.currentTarget.classList.add('drag-over') } }} onDragLeave={(event) => event.currentTarget.classList.remove('drag-over')} onDrop={(event) => { setDropPreview(null); const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); event.currentTarget.classList.remove('drag-over'); if (path) { event.preventDefault(); event.stopPropagation(); onAssetDrop(path, id, node.editor?.x ?? 0, node.editor?.y ?? 0) } else if (folder) { event.preventDefault(); event.stopPropagation(); onFolderDrop(folder, id, node.editor?.x ?? 0, node.editor?.y ?? 0) } }}>
-        <div className="node-header"><span className="node-type-icon">{node.start ? <Icon name="play" size={12}/> : node.terminal ? <Icon name="fit" size={12}/> : <Icon name={isCompactNode(node) ? 'link' : 'dots'} size={13}/>}</span><strong>{node.editor?.label || id}</strong>{isCompactNode(node) && <span className="compact-links"><Icon name="link" size={10}/>{(node.onEnd?.length ?? 0) + (node.buttons?.length ?? 0)}</span>}<span className="node-badges">{node.start && 'START'}{node.terminal && 'END'}</span></div>
+      {nodeEntries.map(([id, node]) => <div key={id} data-node-id={id} className={`graph-node ${isCompactNode(node) ? 'compact' : ''} ${node.type === 'script' ? 'script-node' : ''} ${selectedNode === id ? 'selected' : ''} ${node.terminal ? 'terminal' : ''} ${draft?.from === id && draft.type !== 'button' ? 'source' : ''}`} style={{ left: node.editor?.x ?? 0, top: node.editor?.y ?? 0, '--node-color': node.editor?.color ?? '#4676a9' } as React.CSSProperties} onPointerDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); onSelectNode(id); drag.current = { type: 'node', id, startX: event.clientX, startY: event.clientY, originX: node.editor?.x ?? 0, originY: node.editor?.y ?? 0 } }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const rect = surface.current?.getBoundingClientRect(); setNodeMenu({ nodeId: id, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setButtonMenu(null); setDisconnectMenu(null) }} onDragOver={(event) => { if (node.type === 'media' && (event.dataTransfer.types.includes(ASSET_DRAG_TYPE) || event.dataTransfer.types.includes(FOLDER_DRAG_TYPE))) { event.preventDefault(); event.stopPropagation(); setDropPreview(null); event.currentTarget.classList.add('drag-over') } }} onDragLeave={(event) => event.currentTarget.classList.remove('drag-over')} onDrop={(event) => { if (node.type === 'script') return; setDropPreview(null); const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); event.currentTarget.classList.remove('drag-over'); if (path) { event.preventDefault(); event.stopPropagation(); onAssetDrop(path, id, node.editor?.x ?? 0, node.editor?.y ?? 0) } else if (folder) { event.preventDefault(); event.stopPropagation(); onFolderDrop(folder, id, node.editor?.x ?? 0, node.editor?.y ?? 0) } }}>
+        <div className="node-header"><span className="node-type-icon">{node.start ? <Icon name="play" size={12}/> : node.type === 'script' ? <Icon name="script" size={12}/> : node.terminal ? <Icon name="fit" size={12}/> : <Icon name={isCompactNode(node) ? 'link' : 'dots'} size={13}/>}</span><strong>{node.editor?.label || id}</strong>{isCompactNode(node) && <span className="compact-links"><Icon name={node.type === 'script' ? 'script' : 'link'} size={10}/>{node.type === 'script' ? '0s' : (node.onEnd?.length ?? 0) + (node.buttons?.length ?? 0)}</span>}<span className="node-badges">{node.start && 'START'}{node.terminal && 'END'}</span></div>
         {!isCompactNode(node) && <div className="node-body"><span><Icon name="media" size={12}/>{node.media?.length ?? 0}</span><span><Icon name="link" size={12}/>{(node.onEnd?.length ?? 0) + (node.buttons?.length ?? 0)}</span><small>{id}</small></div>}
         {node.start
           ? <span className="port input disabled" title="開始ノードには入力できません"/>
@@ -487,7 +594,7 @@ function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, sho
         {!node.terminal ? (
           <button className="port output" title="ドラッグで終了時遷移を接続" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); connectionDragged.current = false; onSelectNode(id); const start = point(id, 'out'); const next: ConnectionDraft = { from: id, type: 'end', x: start.x, y: start.y }; draftRef.current = next; setDraft(next) }} onClick={(event) => { event.stopPropagation(); if (connectionDragged.current) { connectionDragged.current = false; return } const outgoing = transitionEdges.filter((edge) => edge.type === 'end' && edge.from === id).map(edgeRef); if (outgoing.length === 1) onDisconnect(outgoing[0]); else if (outgoing.length > 1) { const rect = surface.current?.getBoundingClientRect(); setDisconnectMenu({ title: `${displayName(id)} からの接続`, edges: outgoing, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setNodeMenu(null) } }}/>
         ) : <span className="port output disabled" title="終端ノードからは出力できません"/>}
-        {!node.terminal &&
+        {node.type === 'media' && !node.terminal &&
           <button className="port node-button-port" title="ドラッグでボタンを接続" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); connectionDragged.current = false; onSelectNode(id); const start = nodeButtonPoint(id); const next: ConnectionDraft = { from: id, type: 'attachment', x: start.x, y: start.y }; draftRef.current = next; setDraft(next) }} onClick={(event) => { event.stopPropagation(); if (connectionDragged.current) { connectionDragged.current = false; return } const attached = attachmentEdges.filter((edge) => edge.from === id).map(edgeRef); if (attached.length === 1) onDisconnect(attached[0]); else if (attached.length > 1) { const rect = surface.current?.getBoundingClientRect(); setDisconnectMenu({ title: `${displayName(id)} のボタン`, edges: attached, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }) } }}/>
         }
       </div>)}
@@ -502,56 +609,8 @@ function GraphCanvas({ graph, selectedNode, selectedButton, probabilityMode, sho
     {edgeMenu && <div className="graph-menu" style={{ left: edgeMenu.x, top: edgeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{edgeMenu.edge.type !== 'attachment' && <button onClick={() => { onInsertNode(edgeMenu.edge); setEdgeMenu(null) }}><Icon name="plus" size={13}/>ノードを間に追加</button>}<button onClick={() => { onDisconnect(edgeMenu.edge); setEdgeMenu(null) }}><Icon name="close" size={13}/>接続を解除</button></div>}
     {nodeMenu && <div className="graph-menu" style={{ left: nodeMenu.x, top: nodeMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => { onDeleteNode(nodeMenu.nodeId, false); setNodeMenu(null) }}><Icon name="trash" size={13}/>削除</button><button onClick={() => { onDeleteNode(nodeMenu.nodeId, true); setNodeMenu(null) }}><Icon name="link" size={13}/>前後を接続して削除</button></div>}
     {buttonMenu && <div className="graph-menu" style={{ left: buttonMenu.x, top: buttonMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => { onDeleteButton(buttonMenu.buttonId); setButtonMenu(null) }}><Icon name="trash" size={13}/>ボタンを削除</button></div>}
-    {canvasMenu && <div className="graph-menu canvas-menu" style={{ left: canvasMenu.x, top: canvasMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onAddNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="plus" size={13}/>ノードを作成</button><button onClick={() => { onAddButton(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><span className="button-glyph">B</span>ボタンを作成</button><button onClick={() => { onSave(); setCanvasMenu(null) }}><Icon name="save" size={13}/>保存</button></div>}
+    {canvasMenu && <div className="graph-menu canvas-menu" style={{ left: canvasMenu.x, top: canvasMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onAddNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="plus" size={13}/>メディアノードを作成</button><button onClick={() => { onAddScriptNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="script" size={13}/>Script Nodeを作成</button><button onClick={() => { onAddButton(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><span className="button-glyph">B</span>ボタンを作成</button><button onClick={() => { onSave(); setCanvasMenu(null) }}><Icon name="save" size={13}/>保存</button></div>}
     {disconnectMenu && <div className="graph-menu disconnect-menu" style={{ left: disconnectMenu.x, top: disconnectMenu.y }} onPointerDown={(event) => event.stopPropagation()}><strong>{disconnectMenu.title}</strong>{disconnectMenu.edges.map((edge) => <button key={`${edge.from}-${edge.type}-${edge.index}`} onClick={() => { onDisconnect(edge); setDisconnectMenu(null) }}><Icon name="close" size={12}/><span>{edge.type === 'attachment' ? `${displayName(edge.from)} → ${buttonName(edge.to)}` : edge.type === 'button' ? `${buttonName(edge.from)} → ${displayName(edge.to)}` : `${displayName(edge.from)} → ${displayName(edge.to)}`}</span><small>{edge.type === 'attachment' ? 'ボタン接続' : edge.type === 'button' ? '押下時' : '再生終了時'}</small></button>)}</div>}
-  </div>
-}
-
-const resolvePreviewNode = (graph: WmgGraph, firstNodeId: string) => {
-  let nodeId = firstNodeId
-  const visited = new Set<string>()
-  while (graph.nodes[nodeId] && !visited.has(nodeId)) {
-    visited.add(nodeId)
-    const node = graph.nodes[nodeId]
-    const candidate = chooseWeighted(node.media ?? [])
-    if (candidate || node.terminal || (node.buttons ?? []).some((buttonId) => graph.buttons[buttonId]) || !(node.onEnd?.length)) return { nodeId, candidate }
-    const next = chooseWeighted(node.onEnd)
-    if (!next || !graph.nodes[next.to]) return { nodeId, candidate }
-    nodeId = next.to
-  }
-  return { nodeId, candidate: undefined }
-}
-
-function Preview({ graph, assets, onClose }: { graph: WmgGraph; assets: AssetEntry[]; onClose: () => void }) {
-  const start = Object.entries(graph.nodes).find(([, node]) => node.start)?.[0] ?? Object.keys(graph.nodes)[0]
-  const [current, setCurrent] = useState(() => resolvePreviewNode(graph, start))
-  const { nodeId, candidate } = current
-  const node = graph.nodes[nodeId]
-  const asset = (path?: string) => assets.find((item) => item.path === path)?.file
-  const mediaFile = candidate?.source.type === 'video' ? asset(candidate.source.video) : asset(candidate?.source.audio)
-  const imageFile = candidate?.source.type === 'audioImage' ? asset(candidate.source.image) : undefined
-  const mediaUrl = useObjectUrl(mediaFile)
-  const imageUrl = useObjectUrl(imageFile)
-  const [buttonImageUrls, setButtonImageUrls] = useState<Record<string, string>>({})
-  useEffect(() => {
-    const paths = new Set(Object.values(graph.buttons).map((button) => button.appearance?.backgroundImage).filter(Boolean) as string[])
-    const next = Object.fromEntries([...paths].flatMap((path) => { const file = assets.find((item) => item.path === path)?.file; return file ? [[path, URL.createObjectURL(file)]] : [] }))
-    setButtonImageUrls(next)
-    return () => Object.values(next).forEach((url) => URL.revokeObjectURL(url))
-  }, [assets, graph.buttons])
-  const enter = (next: string) => { if (graph.nodes[next]) setCurrent(resolvePreviewNode(graph, next)) }
-  const onEnd = () => { if (node.terminal) return; const next = chooseWeighted(node.onEnd ?? []); if (next) enter(next.to) }
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-    <div className="preview-modal"><header><div><Icon name="play" size={15}/><strong>プレビュー</strong><span>{node.editor?.label || nodeId} - {nodeId}</span></div><button className="icon-button" onClick={onClose}><Icon name="close"/></button></header>
-      <div className="preview-stage">
-        {imageUrl && <img src={imageUrl} style={{ objectFit: candidate?.source.fit === 'stretch' ? 'fill' : candidate?.source.fit ?? 'cover' }} alt=""/>}
-        {candidate?.source.type === 'video' && mediaUrl && <video src={mediaUrl} autoPlay controls style={{ objectFit: candidate.source.fit === 'stretch' ? 'fill' : candidate.source.fit ?? 'contain' }} onEnded={onEnd}/>}
-        {candidate?.source.type !== 'video' && mediaUrl && <audio src={mediaUrl} autoPlay controls onEnded={onEnd}/>}
-        {!candidate && <div className="preview-empty"><Icon name="media" size={38}/><strong>{node.terminal ? 'グラフが終了しました' : 'メディアなし'}</strong>{!node.terminal && node.onEnd?.length ? <button className="primary-button" onClick={onEnd}>即時遷移を実行</button> : null}</div>}
-        {(node.buttons ?? []).flatMap((buttonId) => { const button = graph.buttons[buttonId]; return button ? [<button key={buttonId} className="preview-button" style={{ left: `${(button.layout?.x ?? .7) * 100}%`, top: `${(button.layout?.y ?? .8) * 100}%`, width: `${(button.layout?.width ?? .2) * 100}%`, height: `${(button.layout?.height ?? .1) * 100}%`, zIndex: button.layout?.z ?? 1, background: button.appearance?.backgroundColor ?? 'transparent', color: button.appearance?.textColor ?? '#fff', backgroundImage: button.appearance?.backgroundImage && buttonImageUrls[button.appearance.backgroundImage] ? `url(${buttonImageUrls[button.appearance.backgroundImage]})` : undefined }} onClick={() => { const next = chooseWeighted(button.onPress ?? []); if (next) enter(next.to) }}>{button.appearance?.text ?? buttonId}</button>] : [] })}
-      </div>
-      <footer><span>実ファイルを使った簡易プレビューです</span><div><button className="text-button" onClick={() => enter(start)}>最初から</button><button className="primary-button" onClick={onClose}>終了</button></div></footer>
-    </div>
   </div>
 }
 
@@ -573,44 +632,111 @@ function Welcome({ busy, onOpen, onFallback }: { busy: boolean; onOpen: () => vo
   </main>
 }
 
-type TreeFile = { name: string; path: string; document?: GraphDocument; asset?: AssetEntry }
+type TreeFile = { name: string; path: string; document?: GraphDocument; script?: ScriptDocument; asset?: AssetEntry }
 type TreeBranch = { folders: Map<string, TreeBranch>; files: TreeFile[] }
+type TreeContextTarget = { kind: 'root' | 'folder' | 'graph' | 'script' | 'asset'; path: string; uid?: string }
+type TreeExpansionCommand = { id: number; expanded: boolean }
+type TreeInlineEdit = {
+  mode: 'create' | 'rename'
+  kind: 'file' | 'folder' | 'graph' | 'script' | 'asset'
+  parentPath: string
+  name: string
+  source: 'tree' | 'tab'
+  target?: TreeContextTarget
+}
 
-function FileTree({ documents, assets, activeUid, getAssetPath, getFolderPath, onOpenGraph, onPreview, onDeleteGraph }: { documents: GraphDocument[]; assets: AssetEntry[]; activeUid: string | null; getAssetPath: (asset: AssetEntry) => string; getFolderPath: (path: string) => string; onOpenGraph: (document: GraphDocument) => void; onPreview: (asset: AssetEntry) => void; onDeleteGraph: (document: GraphDocument) => void }) {
+function InlineNameInput({ edit, testId = 'tree-name-input', onChange, onCommit, onCancel }: { edit: TreeInlineEdit; testId?: string; onChange: (name: string) => void; onCommit: () => Promise<boolean>; onCancel: () => void }) {
+  const input = useRef<HTMLInputElement>(null)
+  const committing = useRef(false)
+  const cancelled = useRef(false)
+  const fixedExtension = edit.kind === 'script' ? '.star' : ''
+  const commit = async () => {
+    if (committing.current || cancelled.current) return
+    if (!edit.name.trim()) { onCancel(); return }
+    committing.current = true
+    const completed = await onCommit()
+    committing.current = false
+    if (!completed) window.requestAnimationFrame(() => { input.current?.focus(); input.current?.select() })
+  }
+  return <label className="tree-inline-control" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+    <input ref={input} data-testid={testId} aria-label={edit.mode === 'create' ? '新しい項目の名前' : '新しいファイル名'} autoFocus value={edit.name} spellCheck={false} onChange={(event) => onChange(edit.kind === 'script' ? event.target.value.replace(/(?:\.star)+$/i, '') : event.target.value)} onFocus={(event) => event.currentTarget.select()} onBlur={() => void commit()} onKeyDown={(event) => {
+      event.stopPropagation()
+      if (event.key === 'Escape') { event.preventDefault(); cancelled.current = true; onCancel() }
+      if (event.key === 'Enter') { event.preventDefault(); void commit() }
+    }}/>
+    {fixedExtension && <span className="tree-fixed-extension" data-testid="tree-inline-extension">{fixedExtension}</span>}
+  </label>
+}
+
+function FileTree({ documents, scripts, folders, assets, activeTab, inlineEdit, expansionCommand, getAssetPath, getFolderPath, onOpenGraph, onOpenScript, onPreview, onContextMenu, onInlineChange, onInlineCommit, onInlineCancel, onMoveScript }: { documents: GraphDocument[]; scripts: ScriptDocument[]; folders: WorkspaceFolder[]; assets: AssetEntry[]; activeTab: string | null; inlineEdit: TreeInlineEdit | null; expansionCommand: TreeExpansionCommand; getAssetPath: (asset: AssetEntry) => string; getFolderPath: (path: string) => string; onOpenGraph: (document: GraphDocument) => void; onOpenScript: (script: ScriptDocument) => void; onPreview: (asset: AssetEntry) => void; onContextMenu: (target: TreeContextTarget, event: React.MouseEvent) => void; onInlineChange: (name: string) => void; onInlineCommit: () => Promise<boolean>; onInlineCancel: () => void; onMoveScript: (uid: string, parentPath: string) => Promise<boolean> }) {
   const [query, setQuery] = useState('')
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set())
+  const [draggedScript, setDraggedScript] = useState<string | null>(null)
+  const [scriptDropTarget, setScriptDropTarget] = useState<string | null>(null)
+  const treeItems = useRef({ documents, scripts, folders, assets })
+  treeItems.current = { documents, scripts, folders, assets }
+  useEffect(() => { if (inlineEdit?.source === 'tree') setQuery('') }, [inlineEdit])
+  useEffect(() => {
+    if (expansionCommand.expanded) { setCollapsedFolders(new Set()); return }
+    const paths = new Set(treeItems.current.folders.map((folder) => folder.path))
+    ;[...treeItems.current.documents, ...treeItems.current.scripts, ...treeItems.current.assets].forEach((item) => {
+      const parts = item.path.split('/').filter(Boolean); parts.pop(); let parent = ''
+      parts.forEach((part) => { parent = parent ? `${parent}/${part}` : part; paths.add(parent) })
+    })
+    setCollapsedFolders(paths)
+  }, [expansionCommand])
   const normalizedQuery = normalizeSearchText(query)
-  const matches = (name: string, path: string) => !normalizedQuery || normalizeSearchText(name).includes(normalizedQuery) || normalizeSearchText(path).includes(normalizedQuery)
-  const matchCount = documents.filter((document) => matches(document.name, document.path)).length + assets.filter((asset) => matches(asset.name, asset.path)).length
+  const matches = useCallback((name: string, path: string) => !normalizedQuery || normalizeSearchText(name).includes(normalizedQuery) || normalizeSearchText(path).includes(normalizedQuery), [normalizedQuery])
+  const matchCount = documents.filter((item) => matches(item.name, item.path)).length + scripts.filter((item) => matches(item.name, item.path)).length + assets.filter((item) => matches(item.name, item.path)).length + folders.filter((item) => matches(item.path.split('/').at(-1) ?? item.path, item.path)).length
   const tree = useMemo(() => {
     const rootBranch: TreeBranch = { folders: new Map(), files: [] }
     const entries: TreeFile[] = [
       ...documents.map((document) => ({ name: document.name, path: document.path, document })),
+      ...scripts.map((script) => ({ name: script.name, path: script.path, script })),
       ...assets.map((asset) => ({ name: asset.name, path: asset.path, asset })),
-    ].filter((file) => !normalizedQuery || normalizeSearchText(file.name).includes(normalizedQuery) || normalizeSearchText(file.path).includes(normalizedQuery))
+    ].filter((file) => !normalizedQuery || matches(file.name, file.path))
     entries.forEach((file) => {
-      const parts = file.path.split('/').filter(Boolean)
-      parts.pop()
-      let branch = rootBranch
-      parts.forEach((part) => {
-        if (!branch.folders.has(part)) branch.folders.set(part, { folders: new Map(), files: [] })
-        branch = branch.folders.get(part)!
-      })
+      const parts = file.path.split('/').filter(Boolean); parts.pop(); let branch = rootBranch
+      parts.forEach((part) => { if (!branch.folders.has(part)) branch.folders.set(part, { folders: new Map(), files: [] }); branch = branch.folders.get(part)! })
       branch.files.push(file)
     })
+    folders.forEach((folder) => { let branch = rootBranch; folder.path.split('/').filter(Boolean).forEach((part) => { if (!branch.folders.has(part)) branch.folders.set(part, { folders: new Map(), files: [] }); branch = branch.folders.get(part)! }) })
     return rootBranch
-  }, [assets, documents, normalizedQuery])
-  const fileIcon = (file: TreeFile) => file.document ? 'code' : file.asset?.kind === 'image' ? 'image' : ['audio', 'video'].includes(file.asset?.kind ?? '') ? 'media' : 'file'
+  }, [assets, documents, folders, matches, normalizedQuery, scripts])
+  const fileIcon = (file: TreeFile) => file.document ? 'code' : file.script ? 'script' : file.asset?.kind === 'image' ? 'image' : ['audio', 'video'].includes(file.asset?.kind ?? '') ? 'media' : 'file'
+  const inlineRow = (edit: TreeInlineEdit, depth: number) => <div className={`tree-entry tree-inline-edit ${edit.kind}`} style={{ paddingLeft: 24 + depth * 13 }} data-tree-kind={edit.kind} data-tree-edit={edit.mode}>
+    <Icon name={edit.kind === 'folder' ? 'folder' : edit.kind === 'script' ? 'script' : edit.kind === 'graph' ? 'code' : 'file'} size={13}/>
+    <InlineNameInput edit={edit} onChange={onInlineChange} onCommit={onInlineCommit} onCancel={onInlineCancel}/>
+  </div>
+  const isScriptDrag = (event: React.DragEvent) => event.dataTransfer.types.includes(SCRIPT_DRAG_TYPE)
+  const acceptScriptDrop = (parentPath: string, event: React.DragEvent) => {
+    if (!isScriptDrag(event)) return false
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'move'
+    setScriptDropTarget(parentPath)
+    return true
+  }
+  const dropScript = (parentPath: string, event: React.DragEvent) => {
+    if (!isScriptDrag(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const scriptUid = event.dataTransfer.getData(SCRIPT_DRAG_TYPE)
+    setScriptDropTarget(null)
+    setDraggedScript(null)
+    if (scriptUid) void onMoveScript(scriptUid, parentPath)
+  }
   const renderBranch = (branch: TreeBranch, depth: number, parentPath = ''): React.ReactNode => <>
-    {[...branch.folders.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, child]) => { const path = parentPath ? `${parentPath}/${name}` : name; return <details className="tree-folder" open key={`${depth}-${path}`}>
-      <summary draggable onDragStart={(event) => { const dragPath = getFolderPath(path) || '.'; activeTreeDrag = { label: name, kind: 'folder' }; event.dataTransfer.setData(FOLDER_DRAG_TYPE, dragPath); event.dataTransfer.setData('text/plain', dragPath); event.dataTransfer.effectAllowed = 'copy' }} onDragEnd={() => { activeTreeDrag = null }} style={{ paddingLeft: 8 + depth * 13 }}><Icon name="chevron" size={11}/><Icon name="folder" size={13}/><span>{name}</span></summary>
+    {inlineEdit?.source === 'tree' && inlineEdit.mode === 'create' && inlineEdit.parentPath === parentPath && inlineRow(inlineEdit, depth)}
+    {[...branch.folders.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, child]) => { const path = parentPath ? `${parentPath}/${name}` : name; const containsInlineEdit = inlineEdit?.source === 'tree' && (inlineEdit.parentPath === path || inlineEdit.target?.path === path); return <details className={`tree-folder ${containsInlineEdit ? 'has-inline-edit' : ''}`} open={containsInlineEdit || !collapsedFolders.has(path)} onToggle={(event) => { const shouldCollapse = !event.currentTarget.open; setCollapsedFolders((current) => { if (current.has(path) === shouldCollapse) return current; const next = new Set(current); if (shouldCollapse) next.add(path); else next.delete(path); return next }) }} key={`${depth}-${path}`}>
+      <summary className={scriptDropTarget === path ? 'tree-drop-target' : ''} data-tree-kind="folder" data-tree-path={path} draggable onContextMenu={(event) => onContextMenu({ kind: 'folder', path }, event)} onDragStart={(event) => { const dragPath = getFolderPath(path) || '.'; activeTreeDrag = { label: name, kind: 'folder' }; event.dataTransfer.setData(FOLDER_DRAG_TYPE, dragPath); event.dataTransfer.setData('text/plain', dragPath); event.dataTransfer.effectAllowed = 'copy' }} onDragEnd={() => { activeTreeDrag = null }} onDragOver={(event) => { acceptScriptDrop(path, event) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && scriptDropTarget === path) setScriptDropTarget(null) }} onDrop={(event) => dropScript(path, event)} style={{ paddingLeft: 8 + depth * 13 }}><Icon name="chevron" size={11}/><Icon name="folder" size={13}/><span>{name}</span></summary>
       {renderBranch(child, depth + 1, path)}
     </details> })}
-    {[...branch.files].sort((a, b) => a.name.localeCompare(b.name)).map((file) => <div className={`tree-entry ${file.document?.uid === activeUid ? 'active' : ''}`} style={{ paddingLeft: 24 + depth * 13 }} key={file.path} draggable={Boolean(file.asset)} onDragStart={(event) => { if (!file.asset) return; const path = getAssetPath(file.asset); activeTreeDrag = { label: file.name.replace(/\.[^.]+$/, ''), kind: 'media' }; event.dataTransfer.setData(ASSET_DRAG_TYPE, path); event.dataTransfer.setData('text/plain', path); event.dataTransfer.effectAllowed = 'copy' }} onDragEnd={() => { activeTreeDrag = null }}>
-      <button className="tree-entry-main" title={file.path} onClick={() => file.document ? onOpenGraph(file.document) : file.asset && onPreview(file.asset)}><Icon name={fileIcon(file)} size={13}/><span>{file.name}</span>{file.document?.dirty && <i/>}</button>
-      {file.document && <button className="tree-entry-delete" title={`${file.name}を削除`} onClick={() => onDeleteGraph(file.document!)}><Icon name="trash" size={12}/></button>}
-    </div>)}
+    {[...branch.files].sort((a, b) => a.name.localeCompare(b.name)).map((file) => { const key = file.document ? `graph:${file.document.uid}` : file.script ? `script:${file.script.uid}` : ''; const target: TreeContextTarget = file.document ? { kind: 'graph', path: file.path, uid: file.document.uid } : file.script ? { kind: 'script', path: file.path, uid: file.script.uid } : { kind: 'asset', path: file.path }; const fileParent = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''; if (inlineEdit?.source === 'tree' && inlineEdit.mode === 'rename' && inlineEdit.target?.path === file.path) return <div key={`edit:${file.path}`}>{inlineRow(inlineEdit, depth)}</div>; return <div className={`tree-entry ${key === activeTab ? 'active' : ''} ${file.script ? 'script' : ''} ${file.script?.uid === draggedScript ? 'dragging' : ''}`} style={{ paddingLeft: 24 + depth * 13 }} key={file.path} data-tree-kind={target.kind} data-tree-path={file.path} onContextMenu={(event) => onContextMenu(target, event)} draggable={Boolean(file.asset || file.script)} onDragOver={(event) => { acceptScriptDrop(fileParent, event) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && scriptDropTarget === fileParent) setScriptDropTarget(null) }} onDrop={(event) => dropScript(fileParent, event)} onDragStart={(event) => { if (file.script) { setDraggedScript(file.script.uid); event.dataTransfer.setData(SCRIPT_DRAG_TYPE, file.script.uid); event.dataTransfer.setData('text/plain', file.path); event.dataTransfer.effectAllowed = 'move'; return } if (!file.asset) return; const path = getAssetPath(file.asset); activeTreeDrag = { label: file.name.replace(/\.[^.]+$/, ''), kind: 'media' }; event.dataTransfer.setData(ASSET_DRAG_TYPE, path); event.dataTransfer.setData('text/plain', path); event.dataTransfer.effectAllowed = 'copy' }} onDragEnd={() => { activeTreeDrag = null; setDraggedScript(null); setScriptDropTarget(null) }}>
+      <button className="tree-entry-main" title={file.path} onClick={() => file.document ? onOpenGraph(file.document) : file.script ? onOpenScript(file.script) : file.asset && onPreview(file.asset)}><Icon name={fileIcon(file)} size={13}/><span>{file.name}</span>{(file.document?.dirty || file.script?.dirty) && <i/>}</button>
+    </div> })}
   </>
-  return <><label className="tree-search"><Icon name="search" size={13}/><input value={query} placeholder="ファイル名を検索" onChange={(event) => setQuery(event.target.value)}/>{query && <button title="検索をクリア" onClick={() => setQuery('')}><Icon name="close" size={11}/></button>}</label><div className="file-tree">{matchCount ? renderBranch(tree, 0) : <div className="tree-empty">一致するファイルはありません</div>}</div></>
+  return <><label className="tree-search"><Icon name="search" size={13}/><input value={query} placeholder="ファイル名を検索" onChange={(event) => setQuery(event.target.value)}/>{query && <button title="検索をクリア" onClick={() => setQuery('')}><Icon name="close" size={11}/></button>}</label><div className={`file-tree ${scriptDropTarget === '' ? 'root-drop-target' : ''}`} data-testid="tree-root-zone" onContextMenu={(event) => { if (event.target === event.currentTarget) onContextMenu({ kind: 'root', path: '' }, event) }} onDragOver={(event) => { if (event.target === event.currentTarget) acceptScriptDrop('', event) }} onDragLeave={(event) => { if (event.target === event.currentTarget && !event.currentTarget.contains(event.relatedTarget as Node | null)) setScriptDropTarget(null) }} onDrop={(event) => { if (event.target === event.currentTarget) dropScript('', event) }}>{matchCount || inlineEdit?.source === 'tree' ? renderBranch(tree, 0) : <div className="tree-empty" onContextMenu={(event) => onContextMenu({ kind: 'root', path: '' }, event)} onDragOver={(event) => { acceptScriptDrop('', event) }} onDrop={(event) => dropScript('', event)}>一致するファイルはありません</div>}</div></>
 }
 
 function AssetPreview({ asset, onClose }: { asset: AssetEntry; onClose: () => void }) {
@@ -640,11 +766,19 @@ function AssetPreview({ asset, onClose }: { asset: AssetEntry; onClose: () => vo
 
 function App() {
   const folderInput = useRef<HTMLInputElement>(null)
+  const treeInlineCommit = useRef<TreeInlineEdit | null>(null)
   const [root, setRoot] = useState<FileSystemDirectoryHandle | null>(null)
   const [rootName, setRootName] = useState('')
   const [documents, setDocuments] = useState<GraphDocument[]>([])
+  const [scripts, setScripts] = useState<ScriptDocument[]>([])
+  const [folders, setFolders] = useState<WorkspaceFolder[]>([])
   const [assets, setAssets] = useState<AssetEntry[]>([])
   const [activeUid, setActiveUid] = useState<string | null>(null)
+  const [openTabs, setOpenTabs] = useState<EditorTab[]>([])
+  const [activeTab, setActiveTab] = useState<string | null>(null)
+  const [draggedTab, setDraggedTab] = useState<string | null>(null)
+  const [tabDropTarget, setTabDropTarget] = useState<{ key: string; side: 'before' | 'after' } | null>(null)
+  const [treeExpansionCommand, setTreeExpansionCommand] = useState<TreeExpansionCommand>({ id: 0, expanded: true })
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [selectedButton, setSelectedButton] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -655,15 +789,68 @@ function App() {
   const [previewAsset, setPreviewAsset] = useState<AssetEntry | null>(null)
   const [showProblems, setShowProblems] = useState(false)
   const [showFileMenu, setShowFileMenu] = useState(false)
-  const [tabMenu, setTabMenu] = useState<{ uid: string; x: number; y: number; name: string; mode: 'menu' | 'rename' } | null>(null)
+  const [tabMenu, setTabMenu] = useState<{ kind: 'graph' | 'script'; uid: string; x: number; y: number } | null>(null)
+  const [treeMenu, setTreeMenu] = useState<{ target: TreeContextTarget; x: number; y: number } | null>(null)
+  const [treeInlineEdit, setTreeInlineEdit] = useState<TreeInlineEdit | null>(null)
+  const [scriptTests, setScriptTests] = useState<Record<string, ScriptTestState>>({})
   const [leftWidth, setLeftWidth] = useState(() => Number(localStorage.getItem('wmgf-left-width')) || 220)
   const [rightWidth, setRightWidth] = useState(() => Number(localStorage.getItem('wmgf-right-width')) || 330)
   const active = documents.find((document) => document.uid === activeUid)
+  const activeScriptUid = activeTab?.startsWith('script:') ? activeTab.slice(7) : null
+  const activeScript = scripts.find((script) => script.uid === activeScriptUid)
   const probabilityMode = weightDisplayMode === 'probability'
   const docAssets = active ? relativeAssets(active, assets) : assets
-  const issues = useMemo(() => active ? validateGraph(active.graph, docAssets) : [], [active, docAssets])
+  const docScripts = active ? relativeScripts(active, scripts) : scripts
+  const issues = useMemo(() => active ? validateGraph(active.graph, docAssets, docScripts) : [], [active, docAssets, docScripts])
 
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(null), 3200) }
+  const openGraphTab = (document: GraphDocument) => {
+    setOpenTabs((tabs) => tabs.some((tab) => tab.kind === 'graph' && tab.uid === document.uid) ? tabs : [...tabs, { kind: 'graph', uid: document.uid }])
+    setActiveTab(`graph:${document.uid}`); setActiveUid(document.uid); setSelectedNode(null); setSelectedButton(null)
+  }
+  const openScriptTab = (script: ScriptDocument) => {
+    setOpenTabs((tabs) => tabs.some((tab) => tab.kind === 'script' && tab.uid === script.uid) ? tabs : [...tabs, { kind: 'script', uid: script.uid }])
+    setActiveTab(`script:${script.uid}`); setSelectedNode(null); setSelectedButton(null)
+  }
+  const activateTab = (tab: EditorTab) => {
+    setActiveTab(`${tab.kind}:${tab.uid}`)
+    if (tab.kind === 'graph') setActiveUid(tab.uid)
+    setSelectedNode(null); setSelectedButton(null)
+  }
+  const closeTab = (tab: EditorTab) => {
+    const key = `${tab.kind}:${tab.uid}`
+    setOpenTabs((tabs) => {
+      const index = tabs.findIndex((item) => item.kind === tab.kind && item.uid === tab.uid)
+      const next = tabs.filter((item) => item !== tabs[index])
+      if (activeTab === key) {
+        const successor = next[Math.min(index, next.length - 1)]
+        setActiveTab(successor ? `${successor.kind}:${successor.uid}` : null)
+        if (successor?.kind === 'graph') setActiveUid(successor.uid)
+      }
+      return next
+    })
+  }
+  const reorderTab = (sourceKey: string, targetKey?: string, side: 'before' | 'after' = 'after') => {
+    setOpenTabs((tabs) => {
+      const sourceIndex = tabs.findIndex((tab) => `${tab.kind}:${tab.uid}` === sourceKey)
+      if (sourceIndex < 0 || sourceKey === targetKey) return tabs
+      const moving = tabs[sourceIndex]
+      const remaining = tabs.filter((_, index) => index !== sourceIndex)
+      if (!targetKey) return [...remaining, moving]
+      const targetIndex = remaining.findIndex((tab) => `${tab.kind}:${tab.uid}` === targetKey)
+      if (targetIndex < 0) return tabs
+      const insertionIndex = targetIndex + (side === 'after' ? 1 : 0)
+      return [...remaining.slice(0, insertionIndex), moving, ...remaining.slice(insertionIndex)]
+    })
+    setDraggedTab(null)
+    setTabDropTarget(null)
+  }
+  const resolveDirectory = useCallback(async (path: string, create = false) => {
+    if (!root) return undefined
+    let directory = root
+    for (const part of path.split('/').filter(Boolean)) directory = await directory.getDirectoryHandle(part, { create })
+    return directory
+  }, [root])
   const openDirectory = async () => {
     if (!window.showDirectoryPicker) return
     setBusy(true)
@@ -671,8 +858,12 @@ function App() {
       const handle = await window.showDirectoryPicker({ mode: 'readwrite' })
       const result = await readDirectory(handle)
       const restored = restoreDrafts(handle.name, result.documents)
-      setRoot(handle); setRootName(handle.name); setDocuments(restored); setAssets(result.assets)
-      setActiveUid(restored[0]?.uid ?? null); setSelectedNode(null); setSelectedButton(null)
+      const restoredScripts = restoreScriptDrafts(handle.name, result.scripts)
+      const first = restored[0]
+      treeInlineCommit.current = null; setTreeInlineEdit(null); setTreeMenu(null); setTabMenu(null)
+      setRoot(handle); setRootName(handle.name); setDocuments(restored); setScripts(restoredScripts); setFolders(result.folders); setAssets(result.assets)
+      setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))
+      setActiveUid(first?.uid ?? null); setOpenTabs(first ? [{ kind: 'graph', uid: first.uid }] : []); setActiveTab(first ? `graph:${first.uid}` : null); setSelectedNode(null); setSelectedButton(null)
       if (result.errors.length) notify(`${result.errors.length}件のファイルを読み込めませんでした`)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return
@@ -680,25 +871,33 @@ function App() {
     } finally { setBusy(false) }
   }
   const requestOpenDirectory = () => {
-    if (documents.some((document) => document.dirty) && !window.confirm('未保存の変更があります。保存せずに新しいフォルダを開きますか？')) return
+    if ((documents.some((document) => document.dirty) || scripts.some((script) => script.dirty)) && !window.confirm('未保存の変更があります。保存せずに新しいフォルダを開きますか？')) return
     if (window.showDirectoryPicker) void openDirectory()
     else folderInput.current?.click()
   }
   const openFallback = async (files: FileList) => {
     setBusy(true)
     const docs: GraphDocument[] = []
+    const nextScripts: ScriptDocument[] = []
+    const folderPaths = new Set<string>()
     const nextAssets: AssetEntry[] = []
     const list = Array.from(files)
     const commonRoot = list[0]?.webkitRelativePath.split('/')[0] ?? 'content'
     for (const file of list) {
       const rawPath = file.webkitRelativePath || file.name
       const path = rawPath.startsWith(`${commonRoot}/`) ? rawPath.slice(commonRoot.length + 1) : rawPath
+      const parts = path.split('/'); parts.pop(); let folder = ''; parts.forEach((part) => { folder = folder ? `${folder}/${part}` : part; if (folder) folderPaths.add(folder) })
       if (path.toLowerCase().endsWith('.wmg.json')) {
         try { docs.push({ uid: uid(), name: file.name, path, graph: normalizeGraph(JSON.parse(await file.text())), dirty: false }) } catch { notify(`${path} を読み込めませんでした`) }
-      } else nextAssets.push({ name: file.name, path, kind: fileKind(path), file })
+      } else if (path.toLowerCase().endsWith('.star')) nextScripts.push({ uid: uid(), name: file.name, path, content: await file.text(), dirty: false })
+      else nextAssets.push({ name: file.name, path, kind: fileKind(path), file })
     }
     const restored = restoreDrafts(commonRoot, docs)
-    setRootName(commonRoot); setDocuments(restored); setAssets(nextAssets); setActiveUid(restored[0]?.uid ?? null); setSelectedButton(null); setBusy(false)
+    const restoredScripts = restoreScriptDrafts(commonRoot, nextScripts)
+    const first = restored[0]
+    treeInlineCommit.current = null; setTreeInlineEdit(null); setTreeMenu(null); setTabMenu(null)
+    setRootName(commonRoot); setDocuments(restored); setScripts(restoredScripts); setFolders([...folderPaths].map((path) => ({ path }))); setAssets(nextAssets); setActiveUid(first?.uid ?? null); setOpenTabs(first ? [{ kind: 'graph', uid: first.uid }] : []); setActiveTab(first ? `graph:${first.uid}` : null); setSelectedNode(null); setSelectedButton(null); setBusy(false)
+    setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))
   }
   const updateActive = useCallback((updater: (document: GraphDocument) => GraphDocument) => {
     setDocuments((current) => current.map((document) => document.uid === activeUid ? updater(document) : document))
@@ -727,7 +926,7 @@ function App() {
   const setSelectedNodeTerminal = (enabled: boolean) => {
     if (!active || !selectedNode) return
     const current = active.graph.nodes[selectedNode]
-    if (!current || Boolean(current.terminal) === enabled) return
+    if (!current || current.type === 'script' || Boolean(current.terminal) === enabled) return
     const outgoingCount = (current.onEnd ?? []).length + (current.buttons?.length ?? 0)
     if (enabled && outgoingCount > 0 && !window.confirm('終端ノードにすると出力側の接続は強制的に解除されます。\n続行しますか？')) return
     updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [selectedNode]: { ...current, terminal: enabled, onEnd: enabled ? [] : current.onEnd, buttons: enabled ? [] : current.buttons } } })
@@ -784,7 +983,7 @@ function App() {
   const attachButton = (nodeId: string, buttonId: string) => {
     if (!active) return
     const node = active.graph.nodes[nodeId]
-    if (!node || node.terminal || !active.graph.buttons[buttonId]) return
+    if (!node || node.type === 'script' || node.terminal || !active.graph.buttons[buttonId]) return
     if (node.buttons?.includes(buttonId)) { notify('このノードには既に接続されています'); return }
     updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [nodeId]: { ...node, buttons: [...(node.buttons ?? []), buttonId] } } })
   }
@@ -833,7 +1032,7 @@ function App() {
     const replace = (transitions: Transition[]) => transitions.map((transition, index) => index === edge.index ? { ...transition, to: id } : transition)
     const x = ((sourcePosition.x ?? 0) + (destination.editor?.x ?? 0)) / 2
     const y = ((sourcePosition.y ?? 0) + (destination.editor?.y ?? 0)) / 2
-    const node: WmgNode = { media: [], onEnd: [{ to: edge.to, weight: 1 }], buttons: [], editor: { x: Math.round(x), y: Math.round(y), label: `Node ${number}`, color: nextNodeColor(active.graph.nodes) } }
+    const node: WmgNode = { type: 'media', media: [], onEnd: [{ to: edge.to, weight: 1 }], buttons: [], editor: { x: Math.round(x), y: Math.round(y), label: `Node ${number}`, color: nextNodeColor(active.graph.nodes) } }
     if (edge.type === 'end') {
       const source = active.graph.nodes[edge.from]
       updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [edge.from]: { ...source, onEnd: replace(source.onEnd ?? []) }, [id]: node } })
@@ -849,9 +1048,18 @@ function App() {
     let number = Object.keys(active.graph.nodes).length + 1
     while (active.graph.nodes[`node-${number}`]) number++
     const id = `node-${number}`
-    updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { media: [], onEnd: [], buttons: [], editor: { x: Math.max(20, Math.round(x)), y: Math.max(20, Math.round(y)), label: `Node ${number}`, color: nextNodeColor(active.graph.nodes) } } } })
+    updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { type: 'media', media: [], onEnd: [], buttons: [], editor: { x: Math.max(20, Math.round(x)), y: Math.max(20, Math.round(y)), label: `Node ${number}`, color: nextNodeColor(active.graph.nodes) } } } })
     setSelectedNode(id)
     setSelectedButton(null)
+  }
+  const addScriptNode = (x = 160, y = 140) => {
+    if (!active) return
+    let number = 1
+    while (active.graph.nodes[`script-${number}`]) number++
+    const id = `script-${number}`
+    updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { type: 'script', script: docScripts[0] ? { path: docScripts[0].path, function: 'jump' } : undefined, onEnd: [], editor: { x: Math.max(20, Math.round(x)), y: Math.max(20, Math.round(y)), label: `Script ${number}`, color: '#8d65b5' } } } })
+    setSelectedNode(id); setSelectedButton(null)
+    if (!scripts.length) notify('Script Nodeを作成しました。ファイルツリーの右クリックからStarlarkファイルを作成してください')
   }
   const addButton = (x = 210, y = 240, attachToNode?: string) => {
     if (!active) return
@@ -874,11 +1082,16 @@ function App() {
     if (!rect) { addButton(); return }
     addButton((rect.width / 2 - view.x) / view.zoom - 75, (rect.height / 2 - view.y) / view.zoom - 21)
   }
+  const addScriptNodeAtGraphCenter = () => {
+    const rect = document.querySelector('.graph-surface')?.getBoundingClientRect()
+    if (!rect) { addScriptNode(); return }
+    addScriptNode((rect.width / 2 - view.x) / view.zoom - 78, (rect.height / 2 - view.y) / view.zoom - 24)
+  }
   const bindAssetToNode = (nodeId: string, path: string) => {
     if (!active) return
     const asset = docAssets.find((item) => item.path === path)
     const node = active.graph.nodes[nodeId]
-    if (!asset || !node) return
+    if (!asset || !node || node.type === 'script') return
     const media = [...(node.media ?? [])]
     if (asset.kind === 'subtitle') {
       if (media[0]) media[0] = { ...media[0], source: { ...media[0].source, subtitle: path } }
@@ -911,7 +1124,7 @@ function App() {
     let number = Object.keys(active.graph.nodes).length + 1
     while (active.graph.nodes[`node-${number}`]) number++
     const id = `node-${number}`
-    updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { media: [media], onEnd: [], buttons: [], editor: { x: Math.round(x - 92), y: Math.round(y - 42), label: asset.name.replace(/\.[^.]+$/, ''), color: nextNodeColor(active.graph.nodes) } } } })
+    updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { type: 'media', media: [media], onEnd: [], buttons: [], editor: { x: Math.round(x - 92), y: Math.round(y - 42), label: asset.name.replace(/\.[^.]+$/, ''), color: nextNodeColor(active.graph.nodes) } } } })
     setSelectedNode(id)
   }
   const folderAssets = (folderPath: string) => {
@@ -922,7 +1135,7 @@ function App() {
     if (!active) return
     const node = active.graph.nodes[nodeId]
     const folderMedia = folderAssets(folderPath)
-    if (!node || !folderMedia.length) { notify('このフォルダに音声・動画がありません'); return }
+    if (!node || node.type === 'script' || !folderMedia.length) { notify('このフォルダに音声・動画がありません'); return }
     const used = new Set((node.media ?? []).map((item) => item.id))
     const additions = folderMedia.map((asset, index) => mediaForAsset(asset, asset.path, (node.media?.length ?? 0) + index)!).map((item) => { const base = item.id; let id = base; let suffix = 2; while (used.has(id)) id = `${base}-${suffix++}`; used.add(id); return id === item.id ? item : { ...item, id } })
     updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [nodeId]: { ...node, media: [...(node.media ?? []), ...additions] } } })
@@ -939,7 +1152,7 @@ function App() {
     const id = `node-${number}`
     const label = folderPath === '.' ? rootName : folderPath.split('/').filter(Boolean).at(-1) ?? `Node ${number}`
     const media = folderMedia.map((asset, index) => mediaForAsset(asset, asset.path, index)!)
-    updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { media, onEnd: [], buttons: [], editor: { x: Math.round(x - 92), y: Math.round(y - 42), label, color: nextNodeColor(active.graph.nodes) } } } })
+    updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { type: 'media', media, onEnd: [], buttons: [], editor: { x: Math.round(x - 92), y: Math.round(y - 42), label, color: nextNodeColor(active.graph.nodes) } } } })
     setSelectedNode(id)
     notify(`${media.length}件の音声・動画を追加しました`)
   }
@@ -974,14 +1187,14 @@ function App() {
         return [...current.filter((item) => !paths.has(item.path)), ...imported]
       })
       if (active) {
-        let targetId = !options?.forceNew && selectedNode && active.graph.nodes[selectedNode] ? selectedNode : ''
+        let targetId = !options?.forceNew && selectedNode && active.graph.nodes[selectedNode]?.type === 'media' ? selectedNode : ''
         const nodes = { ...active.graph.nodes }
         if (!targetId) {
           let number = Object.keys(nodes).length + 1
           while (nodes[`node-${number}`]) number++
           targetId = `node-${number}`
           const sourceName = handles[0]?.name ?? `Node ${number}`
-          nodes[targetId] = { media: [], onEnd: [], buttons: [], editor: { x: Math.round(options?.forceNew ? (options.x ?? 252) - 92 : options?.x ?? 160), y: Math.round(options?.forceNew ? (options.y ?? 182) - 42 : options?.y ?? 140), label: sourceName.replace(/\.[^.]+$/, ''), color: nextNodeColor(nodes) } }
+          nodes[targetId] = { type: 'media', media: [], onEnd: [], buttons: [], editor: { x: Math.round(options?.forceNew ? (options.x ?? 252) - 92 : options?.x ?? 160), y: Math.round(options?.forceNew ? (options.y ?? 182) - 42 : options?.y ?? 140), label: sourceName.replace(/\.[^.]+$/, ''), color: nextNodeColor(nodes) } }
         }
         const target = nodes[targetId]
         const additions = imported.map((asset, index) => mediaForAsset(asset, asset.path.slice(parent.length), (target.media?.length ?? 0) + index)!).filter(Boolean)
@@ -998,7 +1211,7 @@ function App() {
     let number = documents.length + 1
     while (documents.some((document) => document.name === `graph-${number}.wmg.json`)) number++
     const document: GraphDocument = { uid: uid(), name: `graph-${number}.wmg.json`, path: `graph-${number}.wmg.json`, graph: createGraph(), dirty: true }
-    setDocuments((current) => [...current, document]); setActiveUid(document.uid); setSelectedNode('start'); setSelectedButton(null)
+    setDocuments((current) => [...current, document]); setOpenTabs((tabs) => [...tabs, { kind: 'graph', uid: document.uid }]); setActiveTab(`graph:${document.uid}`); setActiveUid(document.uid); setSelectedNode('start'); setSelectedButton(null)
   }
   const duplicateDocument = (target: GraphDocument) => {
     const parent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/') + 1) : ''
@@ -1008,7 +1221,7 @@ function App() {
     while (documents.some((document) => document.path.toLowerCase() === `${parent}${name}`.toLowerCase())) name = `${stem}-copy-${++number}.wmg.json`
     const copy: GraphDocument = { uid: uid(), name, path: `${parent}${name}`, graph: structuredClone(target.graph), dirty: true }
     setDocuments((current) => current.flatMap((document) => document.uid === target.uid ? [document, copy] : [document]))
-    setActiveUid(copy.uid)
+    setOpenTabs((tabs) => [...tabs, { kind: 'graph', uid: copy.uid }]); setActiveTab(`graph:${copy.uid}`); setActiveUid(copy.uid)
     setSelectedNode(Object.entries(copy.graph.nodes).find(([, node]) => node.start)?.[0] ?? Object.keys(copy.graph.nodes)[0] ?? null)
     setSelectedButton(null)
     notify(`${target.name} を ${name} として複製しました`)
@@ -1026,8 +1239,9 @@ function App() {
       }
       const remaining = documents.filter((document) => document.uid !== target.uid)
       setDocuments(remaining)
+      closeTab({ kind: 'graph', uid: target.uid })
       localStorage.removeItem(draftKey(rootName, target.path))
-      if (activeUid === target.uid) { setActiveUid(remaining[0]?.uid ?? null); setSelectedNode(null); setSelectedButton(null) }
+      if (activeUid === target.uid && activeTab === `graph:${target.uid}`) { setActiveUid(remaining[0]?.uid ?? null); setSelectedNode(null); setSelectedButton(null) }
       notify(`${target.name} を削除しました`)
     } catch (error) {
       notify(error instanceof Error ? error.message : 'グラフを削除できませんでした')
@@ -1035,13 +1249,13 @@ function App() {
   }
   const renameDocument = async (target: GraphDocument, requestedName: string) => {
     let name = requestedName.trim()
-    if (!name) { notify('ファイル名は空にできません'); return }
-    if (name.includes('/') || name.includes('\\')) { notify('ファイル名にパス区切りは使用できません'); return }
+    if (!name) { notify('ファイル名は空にできません'); return false }
+    if (name.includes('/') || name.includes('\\')) { notify('ファイル名にパス区切りは使用できません'); return false }
     if (!name.toLowerCase().endsWith('.wmg.json')) name = `${name.replace(/\.json$/i, '')}.wmg.json`
-    if (name === target.name) return
+    if (name === target.name) return true
     const parent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/') + 1) : ''
     const nextPath = `${parent}${name}`
-    if (documents.some((document) => document.uid !== target.uid && document.path.toLowerCase() === nextPath.toLowerCase())) { notify('同じ名前のグラフが既にあります'); return }
+    if (workspacePathExists(nextPath, target.path)) { notify('同じ名前の項目が既にあります'); return false }
     try {
       let handle = target.handle
       let dirty = target.dirty
@@ -1060,7 +1274,212 @@ function App() {
       setDocuments((current) => current.map((document) => document.uid === target.uid ? { ...document, name, path: nextPath, handle, dirty } : document))
       localStorage.removeItem(draftKey(rootName, target.path))
       notify(`${target.name} を ${name} に変更しました`)
-    } catch (error) { notify(error instanceof Error ? error.message : 'ファイル名を変更できませんでした') }
+      return true
+    } catch (error) { notify(error instanceof Error ? error.message : 'ファイル名を変更できませんでした'); return false }
+  }
+  const workspacePathExists = (path: string, except?: string) => [
+    ...documents.map((item) => item.path), ...scripts.map((item) => item.path), ...assets.map((item) => item.path), ...folders.map((item) => item.path),
+  ].some((item) => item !== except && item.toLowerCase() === path.toLowerCase())
+  const createWorkspaceEntry = async (parentPath: string, kind: 'file' | 'folder' | 'script', requestedName: string) => {
+    let name = requestedName.trim()
+    if (!name || name.includes('/') || name.includes('\\')) { notify('有効な名前を入力してください'); return false }
+    if (kind === 'script') name = scriptFileName(name)
+    if (!name) { notify('有効な名前を入力してください'); return false }
+    if (kind === 'file' && name.toLowerCase().endsWith('.star')) { notify('Starlarkスクリプトは専用メニューから作成してください'); return false }
+    const path = parentPath ? `${parentPath}/${name}` : name
+    if (workspacePathExists(path)) { notify('同じ名前の項目が既にあります'); return false }
+    try {
+      const directory = await resolveDirectory(parentPath, true)
+      if (kind === 'folder') {
+        const handle = directory ? await directory.getDirectoryHandle(name, { create: true }) : undefined
+        setFolders((items) => [...items, { path, handle }])
+        notify(`${path} を作成しました`)
+        return true
+      }
+      const handle = directory ? await directory.getFileHandle(name, { create: true }) : undefined
+      if (kind === 'script') {
+        const content = defaultScriptSource(name.replace(/\.star$/i, ''))
+        if (handle) { const writable = await handle.createWritable(); await writable.write(content); await writable.close() }
+        const script: ScriptDocument = { uid: uid(), name, path, content, dirty: !handle, handle }
+        setScripts((items) => [...items, script]); openScriptTab(script)
+      } else {
+        if (handle) { const writable = await handle.createWritable(); await writable.write(''); await writable.close() }
+        setAssets((items) => [...items, { name, path, kind: fileKind(path), file: new File([''], name, { type: 'text/plain' }) }])
+      }
+      notify(`${path} を作成しました`)
+      return true
+    } catch (error) { notify(error instanceof Error ? error.message : '項目を作成できませんでした'); return false }
+  }
+  const saveScript = useCallback(async (target: ScriptDocument) => {
+    try {
+      let handle = target.handle
+      if (!handle && root) {
+        const parent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/')) : ''
+        const directory = await resolveDirectory(parent, true)
+        handle = await directory?.getFileHandle(target.name, { create: true })
+      }
+      if (handle) {
+        const writable = await handle.createWritable(); await writable.write(target.content); await writable.close()
+        setScripts((items) => items.map((item) => item.uid === target.uid ? { ...item, handle, dirty: false } : item))
+        localStorage.removeItem(scriptDraftKey(rootName, target.path)); notify(`${target.name} を保存しました`)
+      } else {
+        const url = URL.createObjectURL(new Blob([target.content], { type: 'text/plain' })); const link = document.createElement('a'); link.href = url; link.download = target.name; link.click(); URL.revokeObjectURL(url)
+        setScripts((items) => items.map((item) => item.uid === target.uid ? { ...item, dirty: false } : item)); localStorage.removeItem(scriptDraftKey(rootName, target.path)); notify(`${target.name} をダウンロードしました`)
+      }
+    } catch (error) { notify(error instanceof Error ? error.message : 'スクリプトを保存できませんでした') }
+  }, [resolveDirectory, root, rootName])
+  const updateScriptReferences = (oldPath: string, nextPath: string) => {
+    setDocuments((items) => items.map((document) => {
+      const graphParent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
+      const oldReference = graphParent && oldPath.startsWith(graphParent) ? oldPath.slice(graphParent.length) : oldPath
+      const newReference = graphParent && nextPath.startsWith(graphParent) ? nextPath.slice(graphParent.length) : nextPath
+      let changed = false
+      const nodes = Object.fromEntries(Object.entries(document.graph.nodes).map(([id, node]) => { if (node.script?.path !== oldReference) return [id, node]; changed = true; return [id, { ...node, script: { ...node.script, path: newReference } }] }))
+      const buttons = Object.fromEntries(Object.entries(document.graph.buttons).map(([id, button]) => { if (button.render?.path !== oldReference) return [id, button]; changed = true; return [id, { ...button, render: { ...button.render, path: newReference } }] }))
+      return changed ? { ...document, graph: { ...document.graph, nodes, buttons }, dirty: true } : document
+    }))
+  }
+  const relocateScript = async (target: ScriptDocument, destinationParent: string, requestedName: string, action: 'rename' | 'move') => {
+    if (requestedName.includes('/') || requestedName.includes('\\')) { notify('有効なファイル名を入力してください'); return false }
+    const name = scriptFileName(requestedName)
+    if (!name) { notify('有効なファイル名を入力してください'); return false }
+    const nextPath = destinationParent ? `${destinationParent}/${name}` : name
+    if (nextPath === target.path) return true
+    if (nextPath.toLowerCase() === target.path.toLowerCase()) { notify('大文字・小文字だけの名前変更には対応していません'); return false }
+    if (workspacePathExists(nextPath, target.path)) { notify('同じ名前の項目が既にあります'); return false }
+    try {
+      let handle = target.handle
+      let dirty = target.dirty
+      if (root && target.handle) {
+        const oldParent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/')) : ''
+        const sourceDirectory = await resolveDirectory(oldParent)
+        const destinationDirectory = await resolveDirectory(destinationParent, true)
+        const nextHandle = await destinationDirectory?.getFileHandle(name, { create: true })
+        if (!nextHandle || !sourceDirectory) throw new Error('移動先のファイルを作成できませんでした')
+        const writable = await nextHandle.createWritable()
+        await writable.write(target.content)
+        await writable.close()
+        try {
+          await sourceDirectory.removeEntry(target.name)
+        } catch (error) {
+          try { await destinationDirectory?.removeEntry(name) } catch { /* Best-effort rollback. */ }
+          throw error
+        }
+        handle = nextHandle
+        dirty = false
+      } else if (!root) dirty = true
+      setScripts((items) => items.map((item) => item.uid === target.uid ? { ...item, name, path: nextPath, handle, dirty } : item))
+      updateScriptReferences(target.path, nextPath)
+      localStorage.removeItem(scriptDraftKey(rootName, target.path))
+      if (dirty) {
+        try { localStorage.setItem(scriptDraftKey(rootName, nextPath), JSON.stringify({ savedAt: Date.now(), content: target.content })) } catch { /* Storage quota errors must not interrupt editing. */ }
+      }
+      notify(action === 'move' ? `${target.path} を ${destinationParent || rootName} へ移動しました` : `${target.name} を ${name} に変更しました`)
+      return true
+    } catch (error) { notify(error instanceof Error ? error.message : action === 'move' ? 'スクリプトを移動できませんでした' : 'スクリプト名を変更できませんでした'); return false }
+  }
+  const renameScript = (target: ScriptDocument, requestedName: string) => {
+    const parent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/')) : ''
+    return relocateScript(target, parent, requestedName, 'rename')
+  }
+  const moveScript = async (scriptUid: string, destinationParent: string) => {
+    const target = scripts.find((script) => script.uid === scriptUid)
+    if (!target) return false
+    return relocateScript(target, destinationParent, target.name, 'move')
+  }
+  const renameAsset = async (target: AssetEntry, requestedName: string) => {
+    const name = requestedName.trim()
+    if (!name || name.includes('/') || name.includes('\\')) { notify('有効なファイル名を入力してください'); return false }
+    const parent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/') + 1) : ''
+    const nextPath = `${parent}${name}`
+    if (nextPath === target.path) return true
+    if (workspacePathExists(nextPath, target.path)) { notify('同じ名前の項目が既にあります'); return false }
+    try {
+      if (root) {
+        const directory = await resolveDirectory(parent)
+        const handle = await directory?.getFileHandle(name, { create: true })
+        if (handle) { const writable = await handle.createWritable(); await writable.write(target.file); await writable.close(); await directory?.removeEntry(target.name) }
+      }
+      const nextFile = new File([target.file], name, { type: target.file.type, lastModified: target.file.lastModified })
+      setAssets((items) => items.map((item) => item.path === target.path ? { ...item, name, path: nextPath, kind: fileKind(nextPath), file: nextFile } : item))
+      setDocuments((items) => items.map((document) => {
+        const graphParent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
+        const oldReference = graphParent && target.path.startsWith(graphParent) ? target.path.slice(graphParent.length) : target.path
+        const newReference = graphParent && nextPath.startsWith(graphParent) ? nextPath.slice(graphParent.length) : nextPath
+        let changed = false
+        const replace = (value?: string) => { if (value !== oldReference) return value; changed = true; return newReference }
+        const nodes = Object.fromEntries(Object.entries(document.graph.nodes).map(([id, node]) => [id, { ...node, media: node.media?.map((media) => ({ ...media, source: { ...media.source, audio: replace(media.source.audio), image: replace(media.source.image), video: replace(media.source.video), subtitle: replace(media.source.subtitle) } })) }]))
+        const buttons = Object.fromEntries(Object.entries(document.graph.buttons).map(([id, button]) => [id, { ...button, appearance: button.appearance ? { ...button.appearance, backgroundImage: replace(button.appearance.backgroundImage) } : undefined }]))
+        return changed ? { ...document, graph: { ...document.graph, nodes, buttons }, dirty: true } : document
+      }))
+      notify(`${target.name} を ${name} に変更しました`)
+      return true
+    } catch (error) { notify(error instanceof Error ? error.message : 'ファイル名を変更できませんでした'); return false }
+  }
+  const beginTreeCreate = (target: TreeContextTarget, kind: 'file' | 'folder' | 'script') => {
+    const parentPath = target.kind === 'folder' ? target.path : ''
+    treeInlineCommit.current = null
+    setTreeInlineEdit({ mode: 'create', kind, parentPath, name: '', source: 'tree' })
+    setTreeMenu(null)
+  }
+  const beginTreeRename = (target: TreeContextTarget, source: 'tree' | 'tab') => {
+    if (target.kind === 'root' || target.kind === 'folder') return
+    const fileName = target.path.split('/').at(-1) ?? ''
+    const parentPath = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/')) : ''
+    treeInlineCommit.current = null
+    setTreeInlineEdit({ mode: 'rename', kind: target.kind, parentPath, name: target.kind === 'script' ? scriptStem(fileName) : fileName, source, target })
+    setTreeMenu(null)
+    setTabMenu(null)
+  }
+  const commitTreeInlineEdit = async () => {
+    const edit = treeInlineEdit
+    if (!edit) return false
+    if (treeInlineCommit.current === edit) return false
+    treeInlineCommit.current = edit
+    let completed = false
+    if (edit.mode === 'create' && (edit.kind === 'file' || edit.kind === 'folder' || edit.kind === 'script')) {
+      completed = await createWorkspaceEntry(edit.parentPath, edit.kind, edit.name)
+    } else if (edit.mode === 'rename' && edit.target) {
+      if (edit.target.kind === 'graph') {
+        const target = documents.find((item) => item.uid === edit.target?.uid)
+        if (target) completed = await renameDocument(target, edit.name)
+      } else if (edit.target.kind === 'script') {
+        const target = scripts.find((item) => item.uid === edit.target?.uid)
+        if (target) completed = await renameScript(target, edit.name)
+      } else if (edit.target.kind === 'asset') {
+        const target = assets.find((item) => item.path === edit.target?.path)
+        if (target) completed = await renameAsset(target, edit.name)
+      }
+    }
+    if (completed) setTreeInlineEdit((current) => current === edit ? null : current)
+    else treeInlineCommit.current = null
+    return completed
+  }
+  const deleteWorkspaceTarget = async (target: TreeContextTarget) => {
+    const label = target.path || rootName
+    if (!window.confirm(`「${label}」を削除しますか？\nこの操作は元に戻せません。`)) return
+    try {
+      if (target.kind === 'graph') { const document = documents.find((item) => item.uid === target.uid); if (document) await deleteDocument(document); return }
+      if (root && target.path) {
+        const parts = target.path.split('/'); const name = parts.pop()!; const directory = await resolveDirectory(parts.join('/'))
+        await directory?.removeEntry(name, { recursive: target.kind === 'folder' })
+      }
+      if (target.kind === 'script') {
+        const script = scripts.find((item) => item.uid === target.uid)
+        if (script) { setScripts((items) => items.filter((item) => item.uid !== script.uid)); closeTab({ kind: 'script', uid: script.uid }); localStorage.removeItem(scriptDraftKey(rootName, script.path)) }
+      } else if (target.kind === 'asset') setAssets((items) => items.filter((item) => item.path !== target.path))
+      else if (target.kind === 'folder') {
+        const prefix = `${target.path}/`
+        const removedGraphIds = new Set(documents.filter((item) => item.path.startsWith(prefix)).map((item) => item.uid))
+        const removedScriptIds = new Set(scripts.filter((item) => item.path.startsWith(prefix)).map((item) => item.uid))
+        setDocuments((items) => items.filter((item) => !item.path.startsWith(prefix))); setScripts((items) => items.filter((item) => !item.path.startsWith(prefix))); setAssets((items) => items.filter((item) => !item.path.startsWith(prefix))); setFolders((items) => items.filter((item) => item.path !== target.path && !item.path.startsWith(prefix)))
+        const remainingTabs = openTabs.filter((tab) => tab.kind === 'graph' ? !removedGraphIds.has(tab.uid) : !removedScriptIds.has(tab.uid))
+        setOpenTabs(remainingTabs)
+        const activeRemoved = activeTab ? (activeTab.startsWith('graph:') ? removedGraphIds.has(activeTab.slice(6)) : removedScriptIds.has(activeTab.slice(7))) : false
+        if (activeRemoved) { const next = remainingTabs[0]; setActiveTab(next ? `${next.kind}:${next.uid}` : null); if (next?.kind === 'graph') setActiveUid(next.uid) }
+      }
+      notify(`${label} を削除しました`)
+    } catch (error) { notify(error instanceof Error ? error.message : '削除できませんでした') }
   }
   const save = useCallback(async () => {
     if (!active) return
@@ -1076,6 +1495,49 @@ function App() {
       }
     } catch (error) { notify(error instanceof Error ? error.message : '保存できませんでした') }
   }, [active, root, rootName, updateActive])
+  const saveCurrent = useCallback(async () => {
+    if (activeScript && activeTab?.startsWith('script:')) await saveScript(activeScript)
+    else await save()
+  }, [activeScript, activeTab, save, saveScript])
+  const updateScriptContent = (script: ScriptDocument, content: string) => setScripts((items) => items.map((item) => item.uid === script.uid ? { ...item, content, dirty: true } : item))
+  const testScript = async (script: ScriptDocument, functionName: string) => {
+    setScriptTests((items) => ({ ...items, [script.uid]: { status: 'running', functionName } }))
+    try {
+      const now = new Date()
+      const runStartedAt = new Date(now.getTime() - 15_000).toISOString()
+      const sampleHistory: PlaybackHistoryEntry[] = [{
+        schemaVersion: 1,
+        id: 'sample-history-1',
+        runId: 'test-run',
+        graphId: active?.path ?? 'preview.wmg.json',
+        nodeId: 'previous-node',
+        mediaId: 'previous-media',
+        source: 'audio/sample.mp3',
+        startedAt: new Date(now.getTime() - 14_000).toISOString(),
+        endedAt: new Date(now.getTime() - 2_000).toISOString(),
+        mediaDurationMs: 60_000,
+        activePlayMs: 10_000,
+        startPositionMs: 0,
+        endPositionMs: 12_000,
+        endReason: 'completed',
+      }]
+      const context = createStarlarkContext({
+        graphId: active?.path ?? 'preview.wmg.json',
+        runId: 'test-run',
+        runStartedAt,
+        history: sampleHistory,
+        current: { nodeId: 'preview-node', mediaId: 'preview-media', source: 'audio/preview.mp3', startedAt: new Date(now.getTime() - 1_500).toISOString(), positionMs: 1_250, mediaDurationMs: 60_000, activePlayMs: 1_000 },
+        trigger: { type: 'test' },
+        now,
+      })
+      const result = await runStarlark({ scripts, path: script.path, functionName, args: [context], timeoutMs: 1200 })
+      setScriptTests((items) => ({ ...items, [script.uid]: { status: 'success', functionName, result: result.value, prints: result.prints, durationMs: result.durationMs } }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const location = parseStarlarkErrorLocation(message)
+      setScriptTests((items) => ({ ...items, [script.uid]: { status: 'error', functionName, message, ...location } }))
+    }
+  }
   const beginResize = (side: 'left' | 'right', event: React.PointerEvent) => {
     event.preventDefault()
     const startX = event.clientX
@@ -1102,7 +1564,7 @@ function App() {
   }
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void save() }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void saveCurrent() }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); newDocument() }
       if ((event.key === 'Delete' || event.key === 'Backspace') && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) {
         if (selectedButton) deleteButtonById(selectedButton)
@@ -1112,7 +1574,7 @@ function App() {
     window.addEventListener('keydown', keydown); return () => window.removeEventListener('keydown', keydown)
   })
   useEffect(() => {
-    const closeMenus = () => { setShowFileMenu(false); setTabMenu(null) }
+    const closeMenus = () => { setShowFileMenu(false); setTabMenu(null); setTreeMenu(null) }
     window.addEventListener('pointerdown', closeMenus)
     return () => window.removeEventListener('pointerdown', closeMenus)
   }, [])
@@ -1130,29 +1592,50 @@ function App() {
     }, 1200)
     return () => window.clearTimeout(timer)
   }, [documents, rootName])
+  useEffect(() => {
+    if (!rootName) return
+    const timer = window.setTimeout(() => {
+      scripts.forEach((script) => {
+        const key = scriptDraftKey(rootName, script.path)
+        try {
+          if (script.dirty) localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), content: script.content }))
+          else localStorage.removeItem(key)
+        } catch { /* Storage quota errors must not interrupt editing. */ }
+      })
+    }, 1200)
+    return () => window.clearTimeout(timer)
+  }, [rootName, scripts])
 
   if (!rootName) return <><Welcome busy={busy} onOpen={() => void openDirectory()} onFallback={(files) => void openFallback(files)}/>{toast && <div className="toast">{toast}</div>}</>
   return <div className="app-shell" onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' } }} onDrop={(event) => { if (!event.dataTransfer.types.includes('Files')) return; event.preventDefault(); const promises = Array.from(event.dataTransfer.items).map((item) => (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> }).getAsFileSystemHandle?.() ?? Promise.resolve(null)); void importDroppedHandles(promises) }}>
-    <header className="titlebar"><div className="brand"><div className="brand-mark"><span/><span/><span/></div><strong>WMGF</strong><span>Editor</span></div><nav><div className="menu-anchor"><button onPointerDown={(event) => event.stopPropagation()} onClick={() => setShowFileMenu(!showFileMenu)}>ファイル</button>{showFileMenu && <div className="app-menu" onPointerDown={(event) => event.stopPropagation()}><button disabled={!active} onClick={() => { void save(); setShowFileMenu(false) }}><Icon name="save" size={13}/><span>保存</span><kbd>Ctrl+S</kbd></button><div className="menu-separator"/><button onClick={() => { setShowFileMenu(false); requestOpenDirectory() }}><Icon name="folder" size={13}/><span>新しいフォルダを開く</span></button></div>}</div></nav><div className="title-actions"><span className="workspace-name"><Icon name="folder" size={13}/>{rootName}</span><button className="toolbar-button" disabled={!active} onClick={() => void save()}><Icon name="save" size={14}/>保存</button><button className="primary-button compact" disabled={!active} onClick={() => setShowPreview(true)}><Icon name="play" size={13}/>プレビュー</button></div></header>
-    <div className="workspace" style={{ gridTemplateColumns: `${leftWidth}px 4px minmax(360px, 1fr) 4px ${rightWidth}px` }}>
-      <aside className="explorer"><div className="panel-title"><span>ファイル</span><div><button className="icon-button" title="新規グラフ" onClick={newDocument}><Icon name="plus" size={14}/></button><button className="icon-button" title="新しいフォルダを開く" onClick={requestOpenDirectory}><Icon name="folder" size={14}/></button></div></div><div className="explorer-scroll">
-        <FileTree documents={documents} assets={assets} activeUid={activeUid} getAssetPath={(asset) => docAssets.find((item) => item.file === asset.file)?.path ?? asset.path} getFolderPath={(path) => { const parent = active?.path.includes('/') ? active.path.slice(0, active.path.lastIndexOf('/') + 1) : ''; return parent && path.startsWith(parent) ? path.slice(parent.length) : path }} onOpenGraph={(document) => { setActiveUid(document.uid); setSelectedNode(null); setSelectedButton(null) }} onPreview={setPreviewAsset} onDeleteGraph={(document) => void deleteDocument(document)}/>
-      </div><button className="add-file" onClick={newDocument}><Icon name="plus" size={13}/>新規グラフ</button></aside>
+    <header className="titlebar"><div className="brand"><div className="brand-mark"><span/><span/><span/></div><strong>WMGF</strong><span>Editor</span></div><nav><div className="menu-anchor"><button onPointerDown={(event) => event.stopPropagation()} onClick={() => setShowFileMenu(!showFileMenu)}>ファイル</button>{showFileMenu && <div className="app-menu" onPointerDown={(event) => event.stopPropagation()}><button disabled={!activeTab} onClick={() => { void saveCurrent(); setShowFileMenu(false) }}><Icon name="save" size={13}/><span>保存</span><kbd>Ctrl+S</kbd></button><div className="menu-separator"/><button onClick={() => { setShowFileMenu(false); requestOpenDirectory() }}><Icon name="folder" size={13}/><span>新しいフォルダを開く</span></button></div>}</div></nav><div className="title-actions"><span className="workspace-name"><Icon name="folder" size={13}/>{rootName}</span><button className="toolbar-button" disabled={!activeTab} onClick={() => void saveCurrent()}><Icon name="save" size={14}/>保存</button><button className="primary-button compact" disabled={!active} onClick={() => setShowPreview(true)}><Icon name="play" size={13}/>プレビュー</button></div></header>
+    <div className="workspace" style={{ gridTemplateColumns: `${leftWidth}px 4px minmax(360px, 1fr) 4px ${rightWidth}px` }}><Suspense fallback={<div className="workspace-loading">エディタを読み込み中…</div>}>
+      <aside className="explorer"><div className="panel-title"><span>ファイル</span><div><button className="icon-button" data-testid="tree-expand-all" title="すべて展開" onClick={() => setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))}><Icon name="expandAll" size={13}/></button><button className="icon-button" data-testid="tree-collapse-all" title="すべて折りたたむ" onClick={() => setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: false }))}><Icon name="collapseAll" size={13}/></button><button className="icon-button" title="新規グラフ" onClick={newDocument}><Icon name="plus" size={14}/></button><button className="icon-button" title="新しいフォルダを開く" onClick={requestOpenDirectory}><Icon name="folder" size={14}/></button></div></div><div className="explorer-scroll">
+        <FileTree documents={documents} scripts={scripts} folders={folders} assets={assets} activeTab={activeTab} inlineEdit={treeInlineEdit} expansionCommand={treeExpansionCommand} getAssetPath={(asset) => docAssets.find((item) => item.file === asset.file)?.path ?? asset.path} getFolderPath={(path) => { const parent = active?.path.includes('/') ? active.path.slice(0, active.path.lastIndexOf('/') + 1) : ''; return parent && path.startsWith(parent) ? path.slice(parent.length) : path }} onOpenGraph={openGraphTab} onOpenScript={openScriptTab} onPreview={setPreviewAsset} onContextMenu={(target, event) => { event.preventDefault(); event.stopPropagation(); setTreeMenu({ target, x: Math.min(event.clientX, window.innerWidth - 250), y: Math.min(event.clientY, window.innerHeight - 210) }) }} onInlineChange={(name) => setTreeInlineEdit((edit) => edit ? { ...edit, name } : edit)} onInlineCommit={commitTreeInlineEdit} onInlineCancel={() => { treeInlineCommit.current = null; setTreeInlineEdit(null) }} onMoveScript={moveScript}/>
+      </div><button className="add-file" onClick={(event) => setTreeMenu({ target: { kind: 'root', path: '' }, x: event.clientX, y: event.clientY - 120 })}><Icon name="plus" size={13}/>新規作成</button></aside>
       <div className="resize-handle left" title="ファイルペインの幅を変更" onPointerDown={(event) => beginResize('left', event)}/>
       <main className="editor-area">
-        <div className="tabs">{documents.map((document) => <div className={`tab ${document.uid === activeUid ? 'active' : ''}`} key={document.uid} onClick={() => { setActiveUid(document.uid); setSelectedNode(null); setSelectedButton(null) }} onContextMenu={(event) => { event.preventDefault(); setTabMenu({ uid: document.uid, x: Math.min(event.clientX, window.innerWidth - 260), y: Math.min(event.clientY, window.innerHeight - 145), name: document.name, mode: 'menu' }) }}><Icon name="code" size={13}/><span>{document.name}</span>{document.dirty && <i/>}</div>)}<button className="new-tab" onClick={newDocument}><Icon name="plus" size={14}/></button></div>
-        {active ? <><div className="graph-toolbar"><div><button className="tool-button" onClick={addNodeAtGraphCenter}><Icon name="plus" size={14}/>ノード</button><button className="tool-button" onClick={addButtonAtGraphCenter}><span className="button-glyph">B</span>ボタン</button><span className="toolbar-separator"/><button className={`segmented ${weightDisplayMode === 'weight' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('weight')}>重み</button><button className={`segmented ${weightDisplayMode === 'probability' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('probability')}>確率</button><button className={`segmented ${weightDisplayMode === 'hidden' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('hidden')}>非表示</button></div><div><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.max(.5, view.zoom - .1) })}>−</button><button className="zoom-value" onClick={() => setView({ zoom: 1, x: 80, y: 65 })}>{Math.round(view.zoom * 100)}%</button><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.min(1.6, view.zoom + .1) })}>＋</button><span className="toolbar-separator"/><button className="tool-button icon-only" title="JSONをエクスポート" onClick={exportJson}><Icon name="code" size={14}/></button></div></div>
-          <GraphCanvas graph={active.graph} selectedNode={selectedNode} selectedButton={selectedButton} probabilityMode={probabilityMode} showWeights={weightDisplayMode !== 'hidden'} view={view} onView={setView} onSelectNode={(id) => { setSelectedNode(id); setSelectedButton(null) }} onSelectButton={(id) => { setSelectedButton(id); setSelectedNode(null) }} onMoveNode={(id, x, y) => { const node = active.graph.nodes[id]; updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { ...node, editor: { ...node.editor, x: Math.round(x), y: Math.round(y) } } } }) }} onMoveButton={(id, x, y) => { const button = active.graph.buttons[id]; updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [id]: { ...button, editor: { ...button.editor, x: Math.round(x), y: Math.round(y) } } } }) }} onAddNode={addNode} onAddButton={(x, y) => addButton(x, y)} onConnectNode={(from, to) => { const source = active.graph.nodes[from]; if (!source || source.terminal) return; if ((source.onEnd ?? []).some((transition) => transition.to === to)) { notify('このノード間は既に接続されています'); return } updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [from]: { ...source, onEnd: [...(source.onEnd ?? []), { to, weight: 1 }] } } }) }} onConnectButton={(buttonId, to) => { const button = active.graph.buttons[buttonId]; if (!button) return; if ((button.onPress ?? []).some((transition) => transition.to === to)) { notify('このボタンから既に接続されています'); return } updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [buttonId]: { ...button, onPress: [...(button.onPress ?? []), { to, weight: 1 }] } } }) }} onAttachButton={attachButton} onAssetDrop={dropAssetOnGraph} onFolderDrop={dropFolderOnGraph} onExternalDrop={(promises, x, y) => void importDroppedHandles(promises, { forceNew: true, x, y })} onWeightChange={changeEdgeWeight} onDisconnect={disconnectEdge} onInsertNode={insertNodeOnEdge} onDeleteNode={deleteNodeById} onDeleteButton={deleteButtonById} onSave={() => void save()}/>
-        </> : <div className="no-document"><Icon name="code" size={42}/><strong>グラフがありません</strong><span>新規グラフを作成するか、別のフォルダを開いてください</span><button className="primary-button" onClick={newDocument}><Icon name="plus" size={14}/>新規グラフ</button></div>}
+        <div className="tabs" data-testid="editor-tabs" onDragOver={(event) => { if (event.target === event.currentTarget && event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); setTabDropTarget(null) } }} onDrop={(event) => { if (event.target === event.currentTarget && event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '') } }}>{openTabs.flatMap((tab) => {
+          const item = tab.kind === 'graph' ? documents.find((document) => document.uid === tab.uid) : scripts.find((script) => script.uid === tab.uid)
+          if (!item) return []
+          const key = `${tab.kind}:${tab.uid}`
+          const renaming = treeInlineEdit?.source === 'tab' && treeInlineEdit.mode === 'rename' && treeInlineEdit.target?.uid === tab.uid
+          const dropSide = tabDropTarget?.key === key ? tabDropTarget.side : null
+          return [<div className={`tab ${key === activeTab ? 'active' : ''} ${tab.kind} ${renaming ? 'renaming' : ''} ${draggedTab === key ? 'dragging' : ''} ${dropSide ? `drop-${dropSide}` : ''}`} key={key} data-tab-key={key} draggable={!renaming} onDragStart={(event) => { event.dataTransfer.setData(TAB_DRAG_TYPE, key); event.dataTransfer.setData('text/plain', item.name); event.dataTransfer.effectAllowed = 'move'; setDraggedTab(key) }} onDragEnd={() => { setDraggedTab(null); setTabDropTarget(null) }} onDragOver={(event) => { if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE) || draggedTab === key) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; const rect = event.currentTarget.getBoundingClientRect(); setTabDropTarget({ key, side: event.clientX < rect.left + rect.width / 2 ? 'before' : 'after' }) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && tabDropTarget?.key === key) setTabDropTarget(null) }} onDrop={(event) => { if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return; event.preventDefault(); event.stopPropagation(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '', key, tabDropTarget?.key === key ? tabDropTarget.side : 'before') }} onClick={() => { if (!renaming) activateTab(tab) }} onContextMenu={(event) => { event.preventDefault(); if (!renaming) setTabMenu({ kind: tab.kind, uid: tab.uid, x: Math.min(event.clientX, window.innerWidth - 260), y: Math.min(event.clientY, window.innerHeight - 180) }) }}><Icon name={tab.kind === 'script' ? 'script' : 'code'} size={13}/>{renaming && treeInlineEdit ? <InlineNameInput edit={treeInlineEdit} testId="tab-rename-input" onChange={(name) => setTreeInlineEdit((edit) => edit ? { ...edit, name } : edit)} onCommit={commitTreeInlineEdit} onCancel={() => { treeInlineCommit.current = null; setTreeInlineEdit(null) }}/> : <><span>{item.name}</span>{item.dirty && <i/>}<button draggable={false} aria-label={`${item.name}を閉じる`} title="閉じる（ファイルは削除しません）" onDragStart={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); closeTab(tab) }}><Icon name="close" size={11}/></button></>}</div>]
+        })}<button className={`new-tab ${draggedTab && !tabDropTarget ? 'drop-end' : ''}`} title="新規グラフ" onDragOver={(event) => { if (event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); setTabDropTarget(null) } }} onDrop={(event) => { if (event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '') } }} onClick={newDocument}><Icon name="plus" size={14}/></button></div>
+        {activeScript ? <ScriptEditor key={activeScript.uid} script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }} onChange={(content) => updateScriptContent(activeScript, content)} onSave={() => void saveScript(activeScript)} onTest={(functionName) => void testScript(activeScript, functionName)}/> : active && activeTab?.startsWith('graph:') ? <><div className="graph-toolbar"><div><button className="tool-button" onClick={addNodeAtGraphCenter}><Icon name="plus" size={14}/>メディアNode</button><button className="tool-button script-tool" onClick={addScriptNodeAtGraphCenter}><Icon name="script" size={14}/>Script Node</button><button className="tool-button" onClick={addButtonAtGraphCenter}><span className="button-glyph">B</span>ボタン</button><span className="toolbar-separator"/><button className={`segmented ${weightDisplayMode === 'weight' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('weight')}>重み</button><button className={`segmented ${weightDisplayMode === 'probability' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('probability')}>確率</button><button className={`segmented ${weightDisplayMode === 'hidden' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('hidden')}>非表示</button></div><div><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.max(.5, view.zoom - .1) })}>−</button><button className="zoom-value" onClick={() => setView({ zoom: 1, x: 80, y: 65 })}>{Math.round(view.zoom * 100)}%</button><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.min(1.6, view.zoom + .1) })}>＋</button><span className="toolbar-separator"/><button className="tool-button icon-only" title="JSONをエクスポート" onClick={exportJson}><Icon name="code" size={14}/></button></div></div>
+          <GraphCanvas graph={active.graph} selectedNode={selectedNode} selectedButton={selectedButton} probabilityMode={probabilityMode} showWeights={weightDisplayMode !== 'hidden'} view={view} onView={setView} onSelectNode={(id) => { setSelectedNode(id); setSelectedButton(null) }} onSelectButton={(id) => { setSelectedButton(id); setSelectedNode(null) }} onMoveNode={(id, x, y) => { const node = active.graph.nodes[id]; updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { ...node, editor: { ...node.editor, x: Math.round(x), y: Math.round(y) } } } }) }} onMoveButton={(id, x, y) => { const button = active.graph.buttons[id]; updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [id]: { ...button, editor: { ...button.editor, x: Math.round(x), y: Math.round(y) } } } }) }} onAddNode={addNode} onAddScriptNode={addScriptNode} onAddButton={(x, y) => addButton(x, y)} onConnectNode={(from, to) => { const source = active.graph.nodes[from]; if (!source || source.terminal) return; if ((source.onEnd ?? []).some((transition) => transition.to === to)) { notify('このノード間は既に接続されています'); return } updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [from]: { ...source, onEnd: [...(source.onEnd ?? []), { to, weight: 1 }] } } }) }} onConnectButton={(buttonId, to) => { const button = active.graph.buttons[buttonId]; if (!button) return; if ((button.onPress ?? []).some((transition) => transition.to === to)) { notify('このボタンから既に接続されています'); return } updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [buttonId]: { ...button, onPress: [...(button.onPress ?? []), { to, weight: 1 }] } } }) }} onAttachButton={attachButton} onAssetDrop={dropAssetOnGraph} onFolderDrop={dropFolderOnGraph} onExternalDrop={(promises, x, y) => void importDroppedHandles(promises, { forceNew: true, x, y })} onWeightChange={changeEdgeWeight} onDisconnect={disconnectEdge} onInsertNode={insertNodeOnEdge} onDeleteNode={deleteNodeById} onDeleteButton={deleteButtonById} onSave={() => void save()}/>
+        </> : <div className="no-document"><Icon name="code" size={42}/><strong>開いているタブがありません</strong><span>ファイルツリーからグラフまたはスクリプトを開いてください</span><button className="primary-button" onClick={newDocument}><Icon name="plus" size={14}/>新規グラフ</button></div>}
       </main>
       <div className="resize-handle right" title="インスペクターの幅を変更" onPointerDown={(event) => beginResize('right', event)}/>
-      {active ? <Inspector nodeId={selectedNode} buttonId={selectedButton} graph={active.graph} assets={docAssets} probabilityMode={probabilityMode} issues={issues} onChange={updateNode} onChangeButton={updateSelectedButton} onSetStart={setSelectedNodeStart} onSetTerminal={setSelectedNodeTerminal} onRename={renameNode} onRenameButton={renameButton} onDelete={deleteNode} onDeleteButton={() => selectedButton && deleteButtonById(selectedButton)} onPick={(id) => { setSelectedNode(id); setSelectedButton(null) }} onPickButton={(id) => { setSelectedButton(id); setSelectedNode(null) }} onAddButton={(nodeId) => { const node = active.graph.nodes[nodeId]; addButton((node.editor?.x ?? 0) + 17, (node.editor?.y ?? 0) + 110, nodeId) }} onDetachButton={detachButton} onAssetDrop={(path) => selectedNode && bindAssetToNode(selectedNode, path)} onFolderDrop={(path) => selectedNode && appendFolderToNode(selectedNode, path)}/> : <aside className="inspector"><div className="panel-title"><span>インスペクター</span></div><div className="blank-panel"><Icon name="target" size={30}/></div></aside>}
-    </div>
-    <footer className="statusbar"><button className={issues.some((issue) => issue.severity === 'error') ? 'has-error' : ''} onClick={() => setShowProblems(!showProblems)}>{issues.length ? <Icon name="warning" size={12}/> : <Icon name="check" size={12}/>} {issues.filter((issue) => issue.severity === 'error').length} エラー　{issues.filter((issue) => issue.severity === 'warning').length} 警告</button><div><span>WMGF v1</span><span>{active ? `${Object.keys(active.graph.nodes).length} ノード · ${Object.keys(active.graph.buttons).length} ボタン` : 'グラフなし'}</span><span>{assets.length} ファイル</span></div></footer>
-    {showProblems && <div className="problems-panel" style={{ left: leftWidth + 4, right: rightWidth + 4 }}><header><strong>問題</strong><button className="icon-button" onClick={() => setShowProblems(false)}><Icon name="close" size={13}/></button></header>{issues.length ? issues.map((issue, index) => <button key={index} onClick={() => { if (issue.nodeId) { setSelectedNode(issue.nodeId); setSelectedButton(null) } else if (issue.buttonId) { setSelectedButton(issue.buttonId); setSelectedNode(null) } setShowProblems(false) }}><Icon name="warning" size={13}/><span>{issue.message}</span><small>{issue.nodeId ?? issue.buttonId ?? 'グラフ'}</small></button>) : <div className="problems-empty"><Icon name="check" size={15}/>問題は見つかりませんでした</div>}</div>}
-    {showPreview && active && <Preview graph={active.graph} assets={docAssets} onClose={() => setShowPreview(false)}/>}
+      {activeScript ? <ScriptInspector script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }}/> : active && activeTab?.startsWith('graph:') ? <Inspector nodeId={selectedNode} buttonId={selectedButton} graph={active.graph} graphName={active.name} assets={docAssets} scripts={docScripts} probabilityMode={probabilityMode} issues={issues} onChangeGraph={updateGraph} onChange={updateNode} onChangeButton={updateSelectedButton} onSetStart={setSelectedNodeStart} onSetTerminal={setSelectedNodeTerminal} onRename={renameNode} onRenameButton={renameButton} onDelete={deleteNode} onDeleteButton={() => selectedButton && deleteButtonById(selectedButton)} onPick={(id) => { setSelectedNode(id); setSelectedButton(null) }} onPickButton={(id) => { setSelectedButton(id); setSelectedNode(null) }} onAddButton={(nodeId) => { const node = active.graph.nodes[nodeId]; addButton((node.editor?.x ?? 0) + 17, (node.editor?.y ?? 0) + 110, nodeId) }} onDetachButton={detachButton} onAssetDrop={(path) => selectedNode && bindAssetToNode(selectedNode, path)} onFolderDrop={(path) => selectedNode && appendFolderToNode(selectedNode, path)} onOpenScript={openScriptTab}/> : <aside className="inspector"><div className="panel-title"><span>インスペクター</span></div><div className="blank-panel"><Icon name="target" size={30}/></div></aside>}
+    </Suspense></div>
+    <footer className="statusbar"><button className={issues.some((issue) => issue.severity === 'error') ? 'has-error' : ''} onClick={() => setShowProblems(!showProblems)}>{issues.length ? <Icon name="warning" size={12}/> : <Icon name="check" size={12}/>} {issues.filter((issue) => issue.severity === 'error').length} エラー　{issues.filter((issue) => issue.severity === 'warning').length} 警告</button><div><span>WMGF v1</span><span>{active ? `${Object.keys(active.graph.nodes).length} Node · ${Object.keys(active.graph.buttons).length} Button` : 'グラフなし'}</span><span>{scripts.length} Script · {assets.length} Assets</span></div></footer>
+    {showProblems && <div className="problems-panel" style={{ left: leftWidth + 4, right: rightWidth + 4 }}><header><strong>問題</strong><button className="icon-button" onClick={() => setShowProblems(false)}><Icon name="close" size={13}/></button></header>{issues.length ? issues.map((issue, index) => <button key={index} onClick={() => { const script = issue.scriptPath ? docScripts.find((item) => item.path === issue.scriptPath) : undefined; if (script) openScriptTab(script); else { if (active) openGraphTab(active); if (issue.nodeId) { setSelectedNode(issue.nodeId); setSelectedButton(null) } else if (issue.buttonId) { setSelectedButton(issue.buttonId); setSelectedNode(null) } } setShowProblems(false) }}><Icon name="warning" size={13}/><span>{issue.message}</span><small>{issue.scriptPath ?? issue.nodeId ?? issue.buttonId ?? 'グラフ'}</small></button>) : <div className="problems-empty"><Icon name="check" size={15}/>問題は見つかりませんでした</div>}</div>}
+    {showPreview && active && <Preview graph={active.graph} graphId={active.path} assets={docAssets} scripts={docScripts} onClose={() => setShowPreview(false)}/>}
     {previewAsset && <AssetPreview asset={previewAsset} onClose={() => setPreviewAsset(null)}/>}
-    {tabMenu && <div className={`tab-context-menu ${tabMenu.mode}`} style={{ left: tabMenu.x, top: tabMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{tabMenu.mode === 'menu' ? <><button onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) duplicateDocument(target); setTabMenu(null) }}><Icon name="copy" size={13}/>複製</button><button onClick={() => setTabMenu({ ...tabMenu, mode: 'rename' })}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) void deleteDocument(target); setTabMenu(null) }}><Icon name="trash" size={13}/>削除</button></> : <><label>ファイル名を変更</label><input autoFocus value={tabMenu.name} onChange={(event) => setTabMenu({ ...tabMenu, name: event.target.value })} onFocus={(event) => event.currentTarget.select()} onKeyDown={(event) => { if (event.key === 'Escape') setTabMenu({ ...tabMenu, mode: 'menu' }); if (event.key === 'Enter') { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) void renameDocument(target, tabMenu.name); setTabMenu(null) } }}/></>}</div>}
+    {tabMenu && <div className="tab-context-menu" style={{ left: tabMenu.x, top: tabMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { closeTab({ kind: tabMenu.kind, uid: tabMenu.uid }); setTabMenu(null) }}><Icon name="close" size={13}/>タブを閉じる</button>{tabMenu.kind === 'graph' && <button onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) duplicateDocument(target); setTabMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => { const target = tabMenu.kind === 'graph' ? documents.find((item) => item.uid === tabMenu.uid) : scripts.find((item) => item.uid === tabMenu.uid); if (target) beginTreeRename({ kind: tabMenu.kind, uid: target.uid, path: target.path }, 'tab') }}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (tabMenu.kind === 'graph') { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) void deleteDocument(target) } else { const target = scripts.find((script) => script.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'script', uid: target.uid, path: target.path }) } setTabMenu(null) }}><Icon name="trash" size={13}/>ファイルを削除</button></div>}
+    {treeMenu && <div className="tab-context-menu tree-context-menu" style={{ left: treeMenu.x, top: treeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{treeMenu.target.kind === 'root' || treeMenu.target.kind === 'folder' ? <><label>{treeMenu.target.path || rootName}</label><button onClick={() => beginTreeCreate(treeMenu.target, 'file')}><Icon name="file" size={13}/>ファイルを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'folder')}><Icon name="folder" size={13}/>フォルダを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'script')}><Icon name="script" size={13}/>Starlarkスクリプトを作成</button>{treeMenu.target.kind === 'folder' && <button className="danger" onClick={() => { void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>フォルダを削除</button>}</> : <>{treeMenu.target.kind === 'graph' && <button onClick={() => { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) duplicateDocument(target); setTreeMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => beginTreeRename(treeMenu.target, 'tree')}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (treeMenu.target.kind === 'graph') { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) void deleteDocument(target) } else void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>削除</button></>}</div>}
     <input ref={folderInput} type="file" multiple hidden onChange={(event) => event.target.files && void openFallback(event.target.files)}/>
     {toast && <div className="toast">{toast}</div>}
   </div>
