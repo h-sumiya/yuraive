@@ -8,51 +8,38 @@ type RunRequest = {
   functionName: string
   args: CompatibleValue[]
   scripts: Record<string, string>
-  maxExecutionSeconds: number
+  timeoutMs: number
 }
 
-(globalThis as unknown as { window: typeof globalThis }).window = globalThis
-
-let runtimeModule: Promise<{ Starlark: typeof import('starlark-wasm')['Starlark'] }> | undefined
-let ready: Promise<void> | undefined
-
-const normalizePath = (path: string) => {
-  const parts: string[] = []
-  path.replaceAll('\\', '/').split('/').forEach((part) => {
-    if (!part || part === '.') return
-    if (part === '..') parts.pop()
-    else parts.push(part)
-  })
-  return parts.join('/')
+type RuntimeResponse = {
+  value?: CompatibleValue
+  prints?: string[]
+  error?: string
 }
 
-const parentPath = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : ''
+let runtimeModule: Promise<typeof import('./wasm/wmgf-runtime/wmgf_runtime')> | undefined
+let ready: Promise<unknown> | undefined
 
 self.onmessage = async (event: MessageEvent<RunRequest>) => {
   const request = event.data
-  const prints: string[] = []
   try {
-    runtimeModule ??= import('starlark-wasm')
-    const { Starlark } = await runtimeModule
-    if (!ready) {
-      ready = import('starlark-wasm/wasm?url').then(({ default: wasmUrl }) => Starlark.init(wasmUrl))
-    }
+    runtimeModule ??= import('./wasm/wmgf-runtime/wmgf_runtime')
+    const runtime = await runtimeModule
+    ready ??= runtime.default()
     await ready
-    const base = parentPath(request.path)
-    const runtime = new Starlark({
-      maxExecutionTime: request.maxExecutionSeconds,
-      print: (message) => prints.push(message),
-      load: async (filename) => {
-        const exact = normalizePath(filename)
-        const relative = normalizePath(`${base}${filename}`)
-        const source = request.scripts[exact] ?? request.scripts[relative]
-        if (source === undefined) throw new Error(`load先が見つかりません: ${filename}`)
-        return source
-      },
-    })
-    const value = await runtime.run(normalizePath(request.path), request.functionName, request.args, {}, request.maxExecutionSeconds)
-    self.postMessage({ id: request.id, ok: true, value, prints })
+    const response = JSON.parse(runtime.runStarlarkJson(JSON.stringify({
+      path: request.path,
+      functionName: request.functionName,
+      args: request.args,
+      scripts: request.scripts,
+      timeoutMs: request.timeoutMs,
+    }))) as RuntimeResponse
+    if (response.error) {
+      self.postMessage({ id: request.id, ok: false, error: response.error, prints: response.prints ?? [] })
+    } else {
+      self.postMessage({ id: request.id, ok: true, value: response.value ?? null, prints: response.prints ?? [] })
+    }
   } catch (error) {
-    self.postMessage({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), prints })
+    self.postMessage({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), prints: [] })
   }
 }

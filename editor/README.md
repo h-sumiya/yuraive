@@ -7,6 +7,9 @@ npm install
 npm run dev
 ```
 
+`npm run dev` / `npm run build` は `wasm-pack` を通して
+ルートの `runtime` にある Rust ランタイムを WebAssembly にビルドしてからエディタを起動します。
+
 Chromium系ブラウザではFile System Access APIを使い、選択したコンテンツフォルダ内の
 `*.wmg.json`と`*.star`を直接保存します。未対応ブラウザではフォルダを読み込み、保存時に
 対象ファイルをダウンロードします。
@@ -78,7 +81,9 @@ Script Node実行時も二重には加算しません。`trigger.type`は`start`
 履歴はメディア再生の記録であり、状態遷移先を示す`transition_to`は持ちません。
 `PlaybackHistoryEntry`の全フィールドとJSONL仕様は
 [WMGF v1仕様](../notes/WMGF_v1_SPEC.md#124-playbackhistoryentry)を参照してください。
-Starlarkは専用Web Workerで実行され、期限超過時はWorkerごと停止します。Wasmランタイムは
-プレビューまたは明示的なテスト実行まで読み込まれません。
+StarlarkはAndroidプレイヤーと共通のRust製エンジンをWebAssembly化し、専用Web Workerで
+実行します。期限超過時はRust側で中断し、応答不能時はWorkerごと停止します。Wasmランタイムは
+プレビューまたは明示的なテスト実行まで読み込まれません。`load()`は同じコンテンツ内の
+`.star`ファイルを絶対パス風または呼び出し元からの相対パスで参照できます。
 
 検証は `npm run build` と `npm run lint` で実行できます。

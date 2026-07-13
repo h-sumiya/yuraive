@@ -2,7 +2,8 @@
 set -euo pipefail
 
 crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-player_dir="$(cd "$crate_dir/.." && pwd)"
+project_dir="$(cd "$crate_dir/.." && pwd)"
+player_dir="$project_dir/player"
 output_dir="${1:-$player_dir/app/build/generated/rustJniLibs}"
 
 sdk_dir="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
@@ -25,6 +26,7 @@ if [[ ! -d "$toolchain" ]]; then
 fi
 
 mkdir -p "$output_dir"
+find "$output_dir" -type f -name 'libwmgf_validator.so' -delete
 
 build_abi() {
     local target="$1"
@@ -32,8 +34,13 @@ build_abi() {
     local linker="$3"
     local linker_var="CARGO_TARGET_${target^^}_LINKER"
     linker_var="${linker_var//-/_}"
+    local cc_var="CC_${target//-/_}"
+    local ar_var="AR_${target//-/_}"
 
-    env "$linker_var=$toolchain/$linker" \
+    env \
+        "$linker_var=$toolchain/$linker" \
+        "$cc_var=$toolchain/$linker" \
+        "$ar_var=$toolchain/llvm-ar" \
         cargo build \
         --manifest-path "$crate_dir/Cargo.toml" \
         --locked \
@@ -41,12 +48,10 @@ build_abi() {
         --target "$target"
 
     mkdir -p "$output_dir/$abi"
-    local output="$output_dir/$abi/libwmgf_validator.so"
-    cp "$crate_dir/target/$target/release/libwmgf_validator.so" "$output"
+    local output="$output_dir/$abi/libwmgf_runtime.so"
+    cp "$crate_dir/target/$target/release/libwmgf_runtime.so" "$output"
     "$toolchain/llvm-strip" --strip-unneeded "$output"
 }
 
 build_abi aarch64-linux-android arm64-v8a aarch64-linux-android26-clang
-build_abi armv7-linux-androideabi armeabi-v7a armv7a-linux-androideabi26-clang
-build_abi i686-linux-android x86 i686-linux-android26-clang
 build_abi x86_64-linux-android x86_64 x86_64-linux-android26-clang

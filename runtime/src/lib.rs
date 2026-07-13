@@ -1,11 +1,28 @@
 #![allow(dead_code)]
 
+mod script_engine;
+
+#[cfg(not(target_arch = "wasm32"))]
 use jni::objects::{JObject, JString};
+#[cfg(not(target_arch = "wasm32"))]
 use jni::sys::jstring;
+#[cfg(not(target_arch = "wasm32"))]
 use jni::JNIEnv;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+#[cfg(not(target_arch = "wasm32"))]
 use std::panic::{catch_unwind, AssertUnwindSafe};
+
+pub use script_engine::{run_starlark, run_starlark_json, StarlarkRunRequest, StarlarkRunResponse};
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = runStarlarkJson)]
+pub fn run_starlark_wasm(request_json: &str) -> String {
+    run_starlark_json(request_json)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -562,6 +579,7 @@ fn validation_json(input: &str) -> String {
 }
 
 #[no_mangle]
+#[cfg(not(target_arch = "wasm32"))]
 pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeGraphValidator_validateJsonNative<
     'local,
 >(
@@ -578,6 +596,31 @@ pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeGraphValidator_valid
     }))
     .unwrap_or_else(|_| {
         r#"[{"severity":"ERROR","message":"Rust検証器で内部エラーが発生しました"}]"#.to_owned()
+    });
+
+    env.new_string(output)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+#[cfg(not(target_arch = "wasm32"))]
+pub extern "system" fn Java_dev_hiro_wmgfplayer_playback_NativeStarlarkEngine_runJsonNative<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    input: JString<'local>,
+) -> jstring {
+    let output = catch_unwind(AssertUnwindSafe(|| match env.get_string(&input) {
+        Ok(value) => run_starlark_json(&String::from(value)),
+        Err(error) => serde_json::to_string(&StarlarkRunResponse::error(format!(
+            "実行リクエストを受け取れません: {error}"
+        )))
+        .unwrap_or_else(|_| r#"{"prints":[],"error":"実行リクエストを受け取れません"}"#.to_owned()),
+    }))
+    .unwrap_or_else(|_| {
+        r#"{"prints":[],"error":"Rustスクリプトエンジンで内部エラーが発生しました"}"#.to_owned()
     });
 
     env.new_string(output)

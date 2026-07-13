@@ -16,6 +16,7 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
     }
 
     buildFeatures { compose = true }
@@ -33,7 +34,7 @@ android {
             "META-INF/NOTICE*",
         )
         // build-android.sh already strips these with the matching NDK toolchain.
-        jniLibs.keepDebugSymbols += "**/libwmgf_validator.so"
+        jniLibs.keepDebugSymbols += "**/libwmgf_runtime.so"
     }
 
     buildTypes {
@@ -48,30 +49,30 @@ android {
 }
 
 val rustJniOutput = layout.buildDirectory.dir("generated/rustJniLibs")
-val buildRustValidator by tasks.registering(Exec::class) {
+val buildRustRuntime by tasks.registering(Exec::class) {
     workingDir(rootProject.projectDir)
-    commandLine("bash", rootProject.file("validator/build-android.sh"), rustJniOutput.get().asFile)
+    commandLine("bash", rootProject.file("../runtime/build-android.sh"), rustJniOutput.get().asFile)
     inputs.files(
-        rootProject.file("validator/Cargo.toml"),
-        rootProject.file("validator/Cargo.lock"),
-        rootProject.file("validator/build-android.sh"),
-        fileTree(rootProject.file("validator/src")),
+        rootProject.file("../runtime/Cargo.toml"),
+        rootProject.file("../runtime/Cargo.lock"),
+        rootProject.file("../runtime/build-android.sh"),
+        fileTree(rootProject.file("../runtime/src")),
     )
     outputs.dir(rustJniOutput)
 }
 
-val testRustValidator by tasks.registering(Exec::class) {
+val testRustRuntime by tasks.registering(Exec::class) {
     workingDir(rootProject.projectDir)
-    commandLine("cargo", "test", "--manifest-path", rootProject.file("validator/Cargo.toml"), "--locked")
+    commandLine("cargo", "test", "--manifest-path", rootProject.file("../runtime/Cargo.toml"), "--locked")
     inputs.files(
-        rootProject.file("validator/Cargo.toml"),
-        rootProject.file("validator/Cargo.lock"),
-        fileTree(rootProject.file("validator/src")),
+        rootProject.file("../runtime/Cargo.toml"),
+        rootProject.file("../runtime/Cargo.lock"),
+        fileTree(rootProject.file("../runtime/src")),
     )
 }
 
-tasks.named("preBuild").configure { dependsOn(buildRustValidator) }
-tasks.matching { it.name == "testDebugUnitTest" }.configureEach { dependsOn(testRustValidator) }
+tasks.named("preBuild").configure { dependsOn(buildRustRuntime) }
+tasks.matching { it.name == "testDebugUnitTest" }.configureEach { dependsOn(testRustRuntime) }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.04.01")
@@ -94,10 +95,6 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
-    implementation("com.eed3si9n.starlark:starlark:4.2.1") {
-        exclude(group = "com.google.auto.value", module = "auto-value")
-    }
-
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

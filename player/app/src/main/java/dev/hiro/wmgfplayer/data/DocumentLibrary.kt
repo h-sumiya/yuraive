@@ -48,6 +48,7 @@ class DocumentLibrary(private val context: Context) {
     private val childrenCache = ConcurrentHashMap<String, Map<String, DocumentFile>>()
     private val graphCache = ConcurrentHashMap<String, CachedGraph>()
     private val validationCache = ConcurrentHashMap<String, CachedValidation>()
+    private val scriptCache = ConcurrentHashMap<String, Map<String, String>>()
     val roots: StateFlow<List<RootGrant>> = rootsMutable
 
     fun addRoot(uri: Uri, name: String) {
@@ -65,6 +66,7 @@ class DocumentLibrary(private val context: Context) {
         childrenCache.clear()
         graphCache.clear()
         validationCache.clear()
+        scriptCache.clear()
         rootsMutable.value.map { grant ->
             runCatching {
                 val root = DocumentFile.fromTreeUri(context, Uri.parse(grant.uri))
@@ -86,6 +88,36 @@ class DocumentLibrary(private val context: Context) {
         require(GraphValidator.isSafeRelativePath(relativeAssetPath)) { "安全でないアセットパスです" }
         val file = resolveAsset(ref, relativeAssetPath) ?: error("ファイルが見つかりません: $relativeAssetPath")
         readText(file, maxBytes)
+    }
+
+    suspend fun readScriptSources(ref: GraphRef, entryPath: String): Map<String, String> = withContext(Dispatchers.IO) {
+        scriptCache[ref.graphId]?.takeIf { entryPath in it }?.let { return@withContext it }
+        require(GraphValidator.isSafeRelativePath(entryPath)) { "安全でないスクリプトパスです" }
+        val contentRoot = resolveFromRoot(ref, ref.parentPath)
+            ?.takeIf(DocumentFile::isDirectory)
+            ?: error("コンテンツフォルダが見つかりません")
+        val sources = linkedMapOf<String, String>()
+        var totalBytes = 0
+
+        fun collect(directory: DocumentFile, relativeDirectory: String, depth: Int) {
+            require(depth <= 16) { "スクリプトフォルダの階層が深すぎます" }
+            children(directory).forEach { (name, file) ->
+                val path = listOf(relativeDirectory, name).filter(String::isNotEmpty).joinToString("/")
+                if (file.isDirectory) {
+                    collect(file, path, depth + 1)
+                } else if (file.isFile && name.endsWith(".star", ignoreCase = true)) {
+                    require(sources.size < 256) { "スクリプトファイルが多すぎます" }
+                    val source = readText(file, 2 * 1024 * 1024)
+                    totalBytes += source.toByteArray(Charsets.UTF_8).size
+                    require(totalBytes <= 8 * 1024 * 1024) { "スクリプト全体が大きすぎます" }
+                    sources[path] = source
+                }
+            }
+        }
+
+        collect(contentRoot, "", 0)
+        if (entryPath !in sources) sources[entryPath] = readAssetText(ref, entryPath)
+        sources.toMap().also { scriptCache[ref.graphId] = it }
     }
 
     suspend fun assetUri(ref: GraphRef, relativeAssetPath: String): Uri? = withContext(Dispatchers.IO) {

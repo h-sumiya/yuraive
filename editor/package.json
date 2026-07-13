@@ -4,9 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "oxlint",
+    "wasm:build": "wasm-pack build ../runtime --target web --out-dir ../editor/src/wasm/wmgf-runtime --out-name wmgf_runtime --release",
+    "dev": "npm run wasm:build && vite",
+    "build": "npm run wasm:build && tsc -b && vite build",
+    "lint": "npm run wasm:build && oxlint --ignore-pattern 'src/wasm/**'",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -19,8 +20,7 @@
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.6",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "starlark-wasm": "^0.0.4"
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
@@ -29,6 +29,7 @@
     "@vitejs/plugin-react": "^6.0.3",
     "oxlint": "^1.71.0",
     "typescript": "~6.0.2",
-    "vite": "^8.1.1"
+    "vite": "^8.1.1",
+    "wasm-pack": "^0.15.0"
   }
 }

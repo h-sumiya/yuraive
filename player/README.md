@@ -1,6 +1,6 @@
 # WMGF Player for Android
 
-WMGF v1 コンテンツを端末内のフォルダから再生するネイティブ Android アプリです。複数フォルダの永続権限、Media3 によるバックグラウンド再生、動画・音声・画像・WebVTT、Starlark ノード/ボタン、JSONL 履歴、前回状態の復元に対応します。JSONごとの再生コントロール表示・操作制限、次へ/前へ、作品情報とソーシャルリンクも利用できます。
+WMGF v1 コンテンツを端末内のフォルダから再生するネイティブ Android アプリです。複数フォルダの永続権限、Media3 によるバックグラウンド再生、動画・音声・画像・WebVTT、Rust製Starlarkエンジンによるノード/ボタン、JSONL 履歴、前回状態の復元に対応します。JSONごとの再生コントロール表示・操作制限、次へ/前へ、作品情報とソーシャルリンクも利用できます。
 
 ## ビルド
 
@@ -12,6 +12,7 @@ mise run playerBuild
 ```
 
 生成物は `player/app/build/outputs/apk/debug/app-debug.apk` です。接続端末へは次のコマンドで導入できます。
+Rust Starlarkランタイムの制約により、APKの対象ABIは`arm64-v8a`と`x86_64`です。
 
 ```bash
 adb install -r player/app/build/outputs/apk/debug/app-debug.apk

@@ -21,5 +21,5 @@ dir = "player"
 run = "gradle testDebugUnitTest"
 
 [tasks.validatorTest]
-dir = "player"
-run = "cargo test --manifest-path validator/Cargo.toml --locked"
+dir = "runtime"
+run = "cargo test --locked"

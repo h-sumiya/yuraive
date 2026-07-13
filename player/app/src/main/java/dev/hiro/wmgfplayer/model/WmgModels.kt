@@ -264,7 +264,7 @@ object GraphValidator {
 }
 
 private object NativeGraphValidator {
-    init { System.loadLibrary("wmgf_validator") }
+    init { System.loadLibrary("wmgf_runtime") }
 
     fun validate(json: String): List<ValidationIssue> = WmgJson.format.decodeFromString(
         ListSerializer(NativeValidationIssue.serializer()),

@@ -76,10 +76,12 @@ export const runStarlark = ({ scripts, path, functionName, args = [], timeoutMs 
 }) => new Promise<StarlarkRunResult>((resolve, reject) => {
   const id = crypto.randomUUID()
   const current = getWorker()
+  const executionTimeoutMs = Math.min(10_000, Math.max(100, Math.round(timeoutMs)))
+  const hardTimeoutMs = Math.max(10_000, executionTimeoutMs + 5_000)
   const timer = window.setTimeout(() => {
     if (!pending.has(id)) return
-    stopWorker(`Starlarkの実行が${timeoutMs}msを超えたため停止しました`)
-  }, timeoutMs)
+    stopWorker(`Starlarkの実行が${executionTimeoutMs}msを超えたため停止しました`)
+  }, hardTimeoutMs)
   pending.set(id, { resolve, reject, timer, startedAt: performance.now() })
   current.postMessage({
     id,
@@ -87,7 +89,7 @@ export const runStarlark = ({ scripts, path, functionName, args = [], timeoutMs 
     functionName,
     args,
     scripts: scriptsToRecord(scripts),
-    maxExecutionSeconds: Math.max(.05, timeoutMs / 1000),
+    timeoutMs: executionTimeoutMs,
   })
 })
 
