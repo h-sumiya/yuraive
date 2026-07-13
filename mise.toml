@@ -1,0 +1,6 @@
+[tasks.editorDev]
+dir = "editor"
+run = "npm run dev"
+
+[tools]
+node = "latest"

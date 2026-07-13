@@ -28,7 +28,6 @@ export type Transition = {
 }
 
 export type WmgButton = {
-  id: string
   visibility?: Array<{ fromMs: number; toMs: number | null }>
   layout?: { x: number; y: number; width: number; height: number; z?: number }
   appearance?: {
@@ -38,6 +37,11 @@ export type WmgButton = {
     textColor?: string
   }
   onPress?: Transition[]
+  editor?: {
+    x?: number
+    y?: number
+    color?: string
+  }
 }
 
 export type WmgNode = {
@@ -45,7 +49,7 @@ export type WmgNode = {
   terminal?: boolean
   media?: MediaCandidate[]
   onEnd?: Transition[]
-  buttons?: WmgButton[]
+  buttons?: string[]
   editor?: {
     x?: number
     y?: number
@@ -58,6 +62,7 @@ export type WmgNode = {
 export type WmgGraph = {
   version: 1
   nodes: Record<string, WmgNode>
+  buttons: Record<string, WmgButton>
 }
 
 export type AssetEntry = {
@@ -80,6 +85,7 @@ export type ValidationIssue = {
   severity: 'error' | 'warning'
   message: string
   nodeId?: string
+  buttonId?: string
 }
 
 declare global {

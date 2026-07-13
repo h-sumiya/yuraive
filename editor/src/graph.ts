@@ -1,4 +1,4 @@
-import type { AssetEntry, MediaCandidate, ValidationIssue, WmgGraph, WmgNode } from './types'
+import type { AssetEntry, MediaCandidate, ValidationIssue, WmgButton, WmgGraph, WmgNode } from './types'
 
 const hslToHex = (hue: number, saturation = 55, lightness = 52) => {
   const s = saturation / 100
@@ -21,8 +21,8 @@ const hexHue = (color?: string) => {
   return (hue + 360) % 360
 }
 
-export const nextNodeColor = (nodes: Record<string, WmgNode>) => {
-  const hues = Object.values(nodes).map((node) => hexHue(node.editor?.color)).filter((hue): hue is number => hue !== undefined).sort((a, b) => a - b)
+const nextEditorColor = (items: Record<string, { editor?: { color?: string } }>) => {
+  const hues = Object.values(items).map((item) => hexHue(item.editor?.color)).filter((hue): hue is number => hue !== undefined).sort((a, b) => a - b)
   let hue = Math.random() * 360
   if (hues.length) {
     let largestGap = -1
@@ -36,6 +36,9 @@ export const nextNodeColor = (nodes: Record<string, WmgNode>) => {
   return hslToHex(hue, 50 + Math.random() * 12, 47 + Math.random() * 8)
 }
 
+export const nextNodeColor = (nodes: Record<string, WmgNode>) => nextEditorColor(nodes)
+export const nextButtonColor = (buttons: Record<string, WmgButton>) => nextEditorColor(buttons)
+
 export const createGraph = (): WmgGraph => ({
   version: 1,
   nodes: {
@@ -47,16 +50,21 @@ export const createGraph = (): WmgGraph => ({
       editor: { x: 120, y: 160, label: 'Start', color: hslToHex(Math.random() * 360, 56, 52) },
     },
   },
+  buttons: {},
 })
 
 export const normalizeGraph = (value: unknown): WmgGraph => {
   if (!value || typeof value !== 'object') throw new Error('JSONのルートがオブジェクトではありません')
-  const raw = value as { version?: unknown; nodes?: unknown }
+  const raw = value as { version?: unknown; nodes?: unknown; buttons?: unknown }
   if (raw.version !== 1) throw new Error('対応しているWMGFバージョンは1です')
   if (!raw.nodes || typeof raw.nodes !== 'object' || Array.isArray(raw.nodes)) {
     throw new Error('nodesが見つかりません')
   }
+  if (!raw.buttons || typeof raw.buttons !== 'object' || Array.isArray(raw.buttons)) {
+    throw new Error('buttonsが見つかりません。独立ボタン形式のWMGFを使用してください')
+  }
   const nodes = raw.nodes as Record<string, WmgNode>
+  const buttons = raw.buttons as Record<string, WmgButton>
   const baseHue = Math.random() * 360
   Object.values(nodes).forEach((node, index) => {
     node.media ??= []
@@ -65,7 +73,12 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
     node.editor ??= { x: 100 + (index % 4) * 240, y: 100 + Math.floor(index / 4) * 170 }
     node.editor.color ??= hslToHex((baseHue + index * 137.508) % 360, 54, 51)
   })
-  return { version: 1, nodes }
+  Object.values(buttons).forEach((button, index) => {
+    button.onPress ??= []
+    button.editor ??= { x: 180 + (index % 4) * 190, y: 360 + Math.floor(index / 4) * 90 }
+    button.editor.color ??= hslToHex((baseHue + 70 + index * 137.508) % 360, 42, 56)
+  })
+  return { version: 1, nodes, buttons }
 }
 
 export const fileKind = (path: string): AssetEntry['kind'] => {
@@ -90,14 +103,13 @@ export const chooseWeighted = <T extends { weight: number }>(items: T[]): T | un
   return selectable.find((item) => ((cursor -= item.weight) < 0)) ?? selectable.at(-1)
 }
 
-const allPaths = (node: WmgNode) => [
+const allNodePaths = (node: WmgNode) => [
   ...(node.media ?? []).flatMap((candidate) => [
     candidate.source.audio,
     candidate.source.image,
     candidate.source.video,
     candidate.source.subtitle,
   ]),
-  ...(node.buttons ?? []).map((button) => button.appearance?.backgroundImage),
 ].filter(Boolean) as string[]
 
 export const validateGraph = (graph: WmgGraph, assets: AssetEntry[]): ValidationIssue[] => {
@@ -106,23 +118,19 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[]): Validation
   const starts = entries.filter(([, node]) => node.start)
   if (starts.length !== 1) issues.push({ severity: 'error', message: `開始ノードは1件必要です（現在${starts.length}件）` })
   const nodeIds = new Set(entries.map(([id]) => id))
+  const buttonEntries = Object.entries(graph.buttons)
+  const buttonIds = new Set(buttonEntries.map(([id]) => id))
   const assetPaths = new Set(assets.map((asset) => asset.path))
 
   for (const [nodeId, node] of entries) {
     if (!nodeId.trim()) issues.push({ severity: 'error', nodeId, message: '空のノードIDは使用できません' })
-    const transitions = [
-      ...(node.onEnd ?? []),
-      ...(node.buttons ?? []).flatMap((button) => button.onPress ?? []),
-    ]
-    transitions.forEach((transition) => {
+    ;(node.onEnd ?? []).forEach((transition) => {
       if (!nodeIds.has(transition.to)) issues.push({ severity: 'error', nodeId, message: `遷移先「${transition.to}」がありません` })
       if (transition.weight < 0) issues.push({ severity: 'error', nodeId, message: '遷移の重みは0以上にしてください' })
     })
-    ;[node.onEnd ?? [], ...(node.buttons ?? []).map((button) => button.onPress ?? [])].forEach((set) => {
-      if (set.length && !set.some((transition) => transition.weight > 0)) {
-        issues.push({ severity: 'error', nodeId, message: '遷移候補の重みがすべて0です' })
-      }
-    })
+    if (node.onEnd?.length && !node.onEnd.some((transition) => transition.weight > 0)) issues.push({ severity: 'error', nodeId, message: '遷移候補の重みがすべて0です' })
+    node.buttons?.forEach((buttonId) => { if (!buttonIds.has(buttonId)) issues.push({ severity: 'error', nodeId, message: `ボタン「${buttonId}」がありません` }) })
+    if (new Set(node.buttons ?? []).size !== (node.buttons?.length ?? 0)) issues.push({ severity: 'error', nodeId, message: '同じボタンが重複して接続されています' })
     if (node.terminal && ((node.onEnd?.length ?? 0) || (node.buttons?.length ?? 0))) {
       issues.push({ severity: 'error', nodeId, message: '終端ノードには遷移やボタンを設定できません' })
     }
@@ -139,18 +147,26 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[]): Validation
       if (media.weight < 0) issues.push({ severity: 'error', nodeId, message: 'メディアの重みは0以上にしてください' })
       if ((media.source.volume ?? 1) < 0 || (media.source.volume ?? 1) > 1) issues.push({ severity: 'error', nodeId, message: '音量は0〜1で指定してください' })
     })
-    const buttonIds = new Set<string>()
-    node.buttons?.forEach((button) => {
-      if (buttonIds.has(button.id)) issues.push({ severity: 'error', nodeId, message: `ボタンID「${button.id}」が重複しています` })
-      buttonIds.add(button.id)
-    })
-    allPaths(node).forEach((path) => {
+    allNodePaths(node).forEach((path) => {
       if (/^(?:[a-z]+:|\/)/i.test(path) || path.split('/').includes('..')) {
         issues.push({ severity: 'error', nodeId, message: `コンテンツ外を参照するパスです: ${path}` })
       } else if (assets.length && !assetPaths.has(path)) {
         issues.push({ severity: 'warning', nodeId, message: `ファイルが見つかりません: ${path}` })
       }
     })
+  }
+
+  for (const [buttonId, button] of buttonEntries) {
+    if (!buttonId.trim()) issues.push({ severity: 'error', buttonId, message: '空のボタンIDは使用できません' })
+    ;(button.onPress ?? []).forEach((transition) => {
+      if (!nodeIds.has(transition.to)) issues.push({ severity: 'error', buttonId, message: `遷移先「${transition.to}」がありません` })
+      if (transition.weight < 0) issues.push({ severity: 'error', buttonId, message: '遷移の重みは0以上にしてください' })
+    })
+    if (button.onPress?.length && !button.onPress.some((transition) => transition.weight > 0)) issues.push({ severity: 'error', buttonId, message: '遷移候補の重みがすべて0です' })
+    if (!entries.some(([, node]) => node.buttons?.includes(buttonId))) issues.push({ severity: 'warning', buttonId, message: 'どのノードにも接続されていないボタンです' })
+    const path = button.appearance?.backgroundImage
+    if (path && (/^(?:[a-z]+:|\/)/i.test(path) || path.split('/').includes('..'))) issues.push({ severity: 'error', buttonId, message: `コンテンツ外を参照するパスです: ${path}` })
+    else if (path && assets.length && !assetPaths.has(path)) issues.push({ severity: 'warning', buttonId, message: `ファイルが見つかりません: ${path}` })
   }
 
   return issues
