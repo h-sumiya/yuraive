@@ -3,8 +3,10 @@ package dev.hiro.wmgfplayer.data
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import dev.hiro.wmgfplayer.model.GraphMetadataExtractor
 import dev.hiro.wmgfplayer.model.GraphRef
 import dev.hiro.wmgfplayer.model.GraphValidator
+import dev.hiro.wmgfplayer.model.MetadataPrefixRead
 import dev.hiro.wmgfplayer.model.ValidationIssue
 import dev.hiro.wmgfplayer.model.WmgGraph
 import dev.hiro.wmgfplayer.model.WmgJson
@@ -27,18 +29,45 @@ data class LibraryGraph(
     val author: String? = null,
     val thumbnailPath: String? = null,
     val parseError: String? = null,
+    val modifiedAt: Long = 0,
 )
 
 data class LibraryRoot(
     val grant: RootGrant,
+    val directory: LibraryDirectory? = null,
+    val error: String? = null,
+)
+
+data class LibraryFolder(
+    val name: String,
+    val relativePath: String,
+)
+
+data class LibraryDirectory(
+    val grant: RootGrant,
+    val name: String,
+    val relativePath: String,
+    val folders: List<LibraryFolder> = emptyList(),
     val graphs: List<LibraryGraph> = emptyList(),
     val error: String? = null,
 )
 
-data class LibraryFileEntry(
-    val name: String,
-    val relativePath: String,
-    val isDirectory: Boolean,
+val LibraryDirectory.isContent: Boolean
+    get() = graphs.isNotEmpty()
+
+val LibraryRoot.previewGraph: LibraryGraph?
+    get() = directory?.graphs?.firstOrNull()
+
+val LibraryRoot.hasContent: Boolean
+    get() = directory?.isContent == true
+
+private const val METADATA_PREFIX_LIMIT = 512 * 1024
+private const val METADATA_READ_CHUNK = 16 * 1024
+
+private data class PreviewMetadata(
+    val displayName: String? = null,
+    val author: String? = null,
+    val thumbnail: String? = null,
 )
 
 class DocumentLibrary(private val context: Context) {
@@ -46,10 +75,15 @@ class DocumentLibrary(private val context: Context) {
     private val rootsMutable = MutableStateFlow(readRoots())
     private val rootCache = ConcurrentHashMap<String, DocumentFile>()
     private val childrenCache = ConcurrentHashMap<String, Map<String, DocumentFile>>()
+    private val directoryCache = ConcurrentHashMap<String, LibraryDirectory>()
     private val graphCache = ConcurrentHashMap<String, CachedGraph>()
     private val validationCache = ConcurrentHashMap<String, CachedValidation>()
     private val scriptCache = ConcurrentHashMap<String, Map<String, String>>()
+    private val knownGraphsMutable = MutableStateFlow<List<LibraryGraph>>(emptyList())
+    private val favoriteIdsMutable = MutableStateFlow(preferences.getStringSet("favorites", emptySet()).orEmpty().toSet())
     val roots: StateFlow<List<RootGrant>> = rootsMutable
+    val knownGraphs: StateFlow<List<LibraryGraph>> = knownGraphsMutable
+    val favoriteIds: StateFlow<Set<String>> = favoriteIdsMutable
 
     fun addRoot(uri: Uri, name: String) {
         val updated = (rootsMutable.value.filterNot { it.uri == uri.toString() } + RootGrant(uri.toString(), name)).sortedBy { it.name.lowercase() }
@@ -58,22 +92,73 @@ class DocumentLibrary(private val context: Context) {
 
     fun removeRoot(uri: String) {
         runCatching { context.contentResolver.releasePersistableUriPermission(Uri.parse(uri), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        knownGraphsMutable.value = knownGraphsMutable.value.filterNot { it.ref.rootUri == uri }
         persist(rootsMutable.value.filterNot { it.uri == uri })
+    }
+
+    fun toggleFavorite(graphId: String) {
+        val updated = favoriteIdsMutable.value.toMutableSet()
+        val added = updated.add(graphId)
+        if (!added) updated.remove(graphId)
+        preferences.edit()
+            .putStringSet("favorites", updated)
+            .apply {
+                if (added) putLong(favoriteTimestampKey(graphId), System.currentTimeMillis())
+                else remove(favoriteTimestampKey(graphId))
+            }
+            .apply()
+        favoriteIdsMutable.value = updated
+    }
+
+    fun favoriteIdsByRecent(): List<String> = favoriteIdsMutable.value.sortedByDescending {
+        preferences.getLong(favoriteTimestampKey(it), 0)
     }
 
     suspend fun scanAll(): List<LibraryRoot> = withContext(Dispatchers.IO) {
         rootCache.clear()
         childrenCache.clear()
+        directoryCache.clear()
         graphCache.clear()
         validationCache.clear()
         scriptCache.clear()
-        rootsMutable.value.map { grant ->
+        val scanned = rootsMutable.value.map { grant ->
             runCatching {
                 val root = DocumentFile.fromTreeUri(context, Uri.parse(grant.uri))
                     ?: error("フォルダを開けません")
                 rootCache[grant.uri] = root
-                LibraryRoot(grant, scanRoot(grant, root))
+                LibraryRoot(grant, scanDirectory(grant, root, ""))
             }.getOrElse { LibraryRoot(grant, error = it.message ?: "フォルダを読み込めません") }
+        }
+        knownGraphsMutable.value = scanned.flatMap { it.directory?.graphs.orEmpty() }
+        scanned
+    }
+
+    suspend fun inspectDirectory(grant: RootGrant, relativePath: String): LibraryDirectory = withContext(Dispatchers.IO) {
+        require(relativePath.isEmpty() || GraphValidator.isSafeRelativePath(relativePath)) { "安全でないフォルダパスです" }
+        val key = directoryKey(grant.uri, relativePath)
+        directoryCache[key]?.let { return@withContext it }
+        val directory = resolveFromRoot(grant.uri, relativePath) ?: error("フォルダが見つかりません")
+        require(directory.isDirectory) { "フォルダではありません" }
+        scanDirectory(grant, directory, relativePath).also { scanned ->
+            directoryCache[key] = scanned
+            mergeKnownGraphs(scanned.graphs)
+        }
+    }
+
+    suspend fun resolveGraphs(graphIds: List<String>): List<LibraryGraph> = withContext(Dispatchers.IO) {
+        val known = knownGraphsMutable.value.associateBy { it.ref.graphId }.toMutableMap()
+        graphIds.distinct().mapNotNull { graphId ->
+            known[graphId] ?: run {
+                val grant = rootsMutable.value.firstOrNull { graphId.startsWith("${it.uri}::") }
+                    ?: return@mapNotNull null
+                val relativePath = graphId.removePrefix("${grant.uri}::")
+                if (!GraphValidator.isSafeRelativePath(relativePath)) return@mapNotNull null
+                val parentPath = relativePath.substringBeforeLast('/', "")
+                runCatching { inspectDirectory(grant, parentPath) }.getOrNull()
+                    ?.graphs
+                    ?.firstOrNull { it.ref.graphId == graphId }
+                    ?.also { known[graphId] = it }
+            }
         }
     }
 
@@ -156,46 +241,104 @@ class DocumentLibrary(private val context: Context) {
         issues.toList().also { validationCache[ref.graphId] = CachedValidation(graph, it) }
     }
 
-    suspend fun listDirectory(grant: RootGrant, relativePath: String): List<LibraryFileEntry> = withContext(Dispatchers.IO) {
-        require(relativePath.isEmpty() || GraphValidator.isSafeRelativePath(relativePath)) { "安全でないフォルダパスです" }
-        val directory = resolveFromRoot(grant.uri, relativePath) ?: error("フォルダが見つかりません")
-        require(directory.isDirectory) { "フォルダではありません" }
-        children(directory).values.mapNotNull { file ->
-            val name = file.name ?: return@mapNotNull null
-            LibraryFileEntry(
-                name = name,
-                relativePath = listOf(relativePath, name).filter(String::isNotEmpty).joinToString("/"),
-                isDirectory = file.isDirectory,
-            )
-        }.sortedWith(compareBy<LibraryFileEntry> { !it.isDirectory }.thenBy { it.name.lowercase() })
-    }
-
-    private fun scanRoot(grant: RootGrant, directory: DocumentFile): List<LibraryGraph> {
-        val graphs = mutableListOf<LibraryGraph>()
+    private fun scanDirectory(grant: RootGrant, directory: DocumentFile, relativePath: String): LibraryDirectory {
         val files = directory.listFiles()
         childrenCache[directory.uri.toString()] = files.mapNotNull { file ->
             file.name?.let { it to file }
         }.toMap()
-        files.forEach { file ->
-            val fileName = file.name ?: return@forEach
-            if (!file.isFile || !fileName.endsWith(".wmg.json", ignoreCase = true)) return@forEach
-            val ref = GraphRef(grant.uri, grant.name, fileName)
-            graphs += runCatching {
-                val sourceJson = readText(file, 8 * 1024 * 1024)
-                val graph = WmgJson.format.decodeFromString<WmgGraph>(sourceJson)
-                graphCache[ref.graphId] = CachedGraph(graph, sourceJson)
-                LibraryGraph(
-                    ref = ref,
-                    displayName = graph.metadata?.displayName?.takeIf(String::isNotBlank) ?: fileName.removeSuffix(".wmg.json"),
-                    author = graph.metadata?.author?.takeIf(String::isNotBlank),
-                    thumbnailPath = graph.metadata?.thumbnail,
-                )
-            }.getOrElse {
-                LibraryGraph(ref, fileName.removeSuffix(".wmg.json"), parseError = it.message ?: "JSON を解析できません")
-            }
+        val jsonFiles = files.filter { file ->
+            file.isFile && file.name?.endsWith(".wmg.json", ignoreCase = true) == true
         }
-        return graphs.sortedBy { it.displayName.lowercase() }
+        val name = relativePath.substringAfterLast('/').ifBlank { grant.name }
+        if (jsonFiles.isNotEmpty()) {
+            return LibraryDirectory(
+                grant = grant,
+                name = name,
+                relativePath = relativePath,
+                graphs = jsonFiles.map { scanGraphPreview(grant, relativePath, it) },
+            ).also { directoryCache[directoryKey(grant.uri, relativePath)] = it }
+        }
+
+        return LibraryDirectory(
+            grant = grant,
+            name = name,
+            relativePath = relativePath,
+            folders = files.mapNotNull { file ->
+                val fileName = file.name ?: return@mapNotNull null
+                if (!file.isDirectory) return@mapNotNull null
+                LibraryFolder(
+                    name = fileName,
+                    relativePath = listOf(relativePath, fileName).filter(String::isNotEmpty).joinToString("/"),
+                )
+            }.sortedBy { it.name.lowercase() },
+        ).also { directoryCache[directoryKey(grant.uri, relativePath)] = it }
     }
+
+    private fun scanGraphPreview(grant: RootGrant, parentPath: String, file: DocumentFile): LibraryGraph {
+        val fileName = file.name ?: "content.wmg.json"
+        val relativePath = listOf(parentPath, fileName).filter(String::isNotEmpty).joinToString("/")
+        val ref = GraphRef(grant.uri, grant.name, relativePath)
+        return runCatching {
+            val metadata = readMetadataPrefix(file)
+            LibraryGraph(
+                ref = ref,
+                displayName = metadata.displayName?.takeIf(String::isNotBlank) ?: fileName.removeSuffix(".wmg.json"),
+                author = metadata.author?.takeIf(String::isNotBlank),
+                thumbnailPath = metadata.thumbnail?.takeIf(String::isNotBlank),
+                modifiedAt = file.lastModified(),
+            )
+        }.getOrElse {
+            LibraryGraph(
+                ref = ref,
+                displayName = fileName.removeSuffix(".wmg.json"),
+                parseError = it.message ?: "JSON メタデータを解析できません",
+                modifiedAt = file.lastModified(),
+            )
+        }
+    }
+
+    private fun readMetadataPrefix(file: DocumentFile): PreviewMetadata {
+        return context.contentResolver.openInputStream(file.uri)?.bufferedReader(Charsets.UTF_8)?.use { reader ->
+            val prefix = StringBuilder()
+            val buffer = CharArray(METADATA_READ_CHUNK)
+            while (prefix.length < METADATA_PREFIX_LIMIT) {
+                val count = reader.read(buffer, 0, minOf(buffer.size, METADATA_PREFIX_LIMIT - prefix.length))
+                if (count < 0) {
+                    return@use when (val result = GraphMetadataExtractor.read(prefix.toString())) {
+                        is MetadataPrefixRead.Found -> result.metadata.toPreviewMetadata()
+                        MetadataPrefixRead.Missing -> PreviewMetadata()
+                        MetadataPrefixRead.NeedMore -> error("JSON が途中で終了しています")
+                        is MetadataPrefixRead.Invalid -> error(result.message)
+                    }
+                }
+                prefix.append(buffer, 0, count)
+                when (val result = GraphMetadataExtractor.read(prefix.toString())) {
+                    is MetadataPrefixRead.Found -> return@use result.metadata.toPreviewMetadata()
+                    MetadataPrefixRead.Missing -> return@use PreviewMetadata()
+                    MetadataPrefixRead.NeedMore -> Unit
+                    is MetadataPrefixRead.Invalid -> error(result.message)
+                }
+            }
+            error("メタデータがJSONの先頭 ${METADATA_PREFIX_LIMIT / 1024} KiB以内にありません")
+        } ?: error("ファイルを開けません: ${file.name}")
+    }
+
+    private fun dev.hiro.wmgfplayer.model.GraphMetadataPreview?.toPreviewMetadata() = PreviewMetadata(
+        displayName = this?.displayName,
+        author = this?.author,
+        thumbnail = this?.thumbnail,
+    )
+
+    private fun mergeKnownGraphs(graphs: List<LibraryGraph>) {
+        if (graphs.isEmpty()) return
+        knownGraphsMutable.value = (knownGraphsMutable.value + graphs)
+            .associateBy { it.ref.graphId }
+            .values
+            .toList()
+    }
+
+    private fun directoryKey(rootUri: String, relativePath: String) = "$rootUri::$relativePath"
+    private fun favoriteTimestampKey(graphId: String) = "favoriteAt:$graphId"
 
     private fun resolveAsset(ref: GraphRef, path: String): DocumentFile? {
         val complete = listOf(ref.parentPath, path).filter(String::isNotEmpty).joinToString("/")

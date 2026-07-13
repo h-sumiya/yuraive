@@ -236,6 +236,50 @@ object WmgJson {
     }
 }
 
+@Serializable
+data class GraphMetadataPreview(
+    val displayName: String? = null,
+    val author: String? = null,
+    val thumbnail: String? = null,
+)
+
+@Serializable
+private data class MetadataPrefixResult(
+    val status: String,
+    val metadata: GraphMetadataPreview? = null,
+    val error: String? = null,
+)
+
+internal sealed interface MetadataPrefixRead {
+    data class Found(val metadata: GraphMetadataPreview?) : MetadataPrefixRead
+    data object Missing : MetadataPrefixRead
+    data object NeedMore : MetadataPrefixRead
+    data class Invalid(val message: String) : MetadataPrefixRead
+}
+
+internal object GraphMetadataExtractor {
+    fun read(prefix: String): MetadataPrefixRead {
+        val result = runCatching {
+            WmgJson.format.decodeFromString(
+                MetadataPrefixResult.serializer(),
+                NativeGraphMetadataExtractor.extractNative(prefix),
+            )
+        }.getOrElse { return MetadataPrefixRead.Invalid(it.message ?: "メタデータを解析できません") }
+        return when (result.status) {
+            "found" -> MetadataPrefixRead.Found(result.metadata)
+            "missing" -> MetadataPrefixRead.Missing
+            "needMore" -> MetadataPrefixRead.NeedMore
+            else -> MetadataPrefixRead.Invalid(result.error ?: "メタデータを解析できません")
+        }
+    }
+}
+
+private object NativeGraphMetadataExtractor {
+    init { System.loadLibrary("wmgf_runtime") }
+
+    external fun extractNative(prefix: String): String
+}
+
 object GraphValidator {
     fun validate(graph: WmgGraph): List<ValidationIssue> =
         validateJson(WmgJson.format.encodeToString(WmgGraph.serializer(), graph))

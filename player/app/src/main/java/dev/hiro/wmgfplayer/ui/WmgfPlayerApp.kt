@@ -7,10 +7,8 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.LruCache
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -24,7 +22,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -36,6 +33,10 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -46,38 +47,38 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Update
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -85,11 +86,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -98,6 +97,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -118,12 +118,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import dev.hiro.wmgfplayer.WmgfApplication
-import dev.hiro.wmgfplayer.data.LibraryFileEntry
+import dev.hiro.wmgfplayer.data.LibraryFolder
 import dev.hiro.wmgfplayer.data.LibraryGraph
 import dev.hiro.wmgfplayer.data.LibraryRoot
 import dev.hiro.wmgfplayer.data.PlayerSettings
-import dev.hiro.wmgfplayer.data.RootGrant
 import dev.hiro.wmgfplayer.data.ThemeMode
+import dev.hiro.wmgfplayer.data.isContent
+import dev.hiro.wmgfplayer.data.previewGraph
 import dev.hiro.wmgfplayer.model.GraphRef
 import dev.hiro.wmgfplayer.model.PlaybackHistoryEntry
 import dev.hiro.wmgfplayer.model.ValidationIssue
@@ -138,7 +139,13 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToLong
 
-private enum class Destination(val label: String) { LIBRARY("ライブラリ"), HISTORY("履歴"), SETTINGS("設定") }
+private enum class Destination { LIBRARY, HISTORY, SETTINGS }
+
+private data class GraphCollection(
+    val title: String,
+    val graphs: List<LibraryGraph> = emptyList(),
+    val loading: Boolean = false,
+)
 
 private val accents = listOf(
     Color(0xFF8065C4),
@@ -158,11 +165,14 @@ fun WmgfPlayerApp(
     val settings by app.settings.state.collectAsStateWithLifecycle()
     val playback by PlaybackRuntime.state.collectAsStateWithLifecycle()
     val roots by app.library.roots.collectAsStateWithLifecycle()
+    val knownGraphs by app.library.knownGraphs.collectAsStateWithLifecycle()
+    val favoriteIds by app.library.favoriteIds.collectAsStateWithLifecycle()
     val player by PlaybackRuntime.player.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var destination by remember { mutableStateOf(Destination.LIBRARY) }
     var showPlayer by remember { mutableStateOf(false) }
-    var fileTreeRoot by remember { mutableStateOf<RootGrant?>(null) }
+    var browserRoot by remember { mutableStateOf<LibraryRoot?>(null) }
+    var collection by remember { mutableStateOf<GraphCollection?>(null) }
     var libraryRoots by remember { mutableStateOf<List<LibraryRoot>>(emptyList()) }
     var scanning by remember { mutableStateOf(true) }
     var validation by remember { mutableStateOf<Pair<GraphRef, List<ValidationIssue>>?>(null) }
@@ -170,7 +180,11 @@ fun WmgfPlayerApp(
     var scanVersion by remember { mutableStateOf(0) }
 
     BackHandler(enabled = showPlayer) { showPlayer = false }
-    BackHandler(enabled = !showPlayer && fileTreeRoot != null) { fileTreeRoot = null }
+    BackHandler(enabled = !showPlayer && collection != null) { collection = null }
+    BackHandler(enabled = !showPlayer && browserRoot != null) { browserRoot = null }
+    BackHandler(enabled = !showPlayer && browserRoot == null && collection == null && destination != Destination.LIBRARY) {
+        destination = Destination.LIBRARY
+    }
 
     val dark = when (settings.themeMode) {
         ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
@@ -211,6 +225,16 @@ fun WmgfPlayerApp(
         }
     }
 
+    val showResolvedCollection: (String, List<String>) -> Unit = { title, graphIds ->
+        collection = GraphCollection(title, loading = true)
+        scope.launch {
+            val resolved = app.library.resolveGraphs(graphIds)
+            if (collection?.title == title && collection?.loading == true) {
+                collection = GraphCollection(title, resolved)
+            }
+        }
+    }
+
     WmgTheme(dark = dark, accent = accents[settings.accentIndex.mod(accents.size)]) {
         Surface(Modifier.fillMaxSize()) {
             if (showPlayer && playback.status != PlaybackStatus.IDLE) {
@@ -226,16 +250,25 @@ fun WmgfPlayerApp(
                     onStop = { PlaybackRuntime.stop(context); showPlayer = false },
                     onButton = { PlaybackRuntime.pressButton(context, it) },
                 )
-            } else if (fileTreeRoot != null) {
-                FileTreeScreen(
-                    root = fileTreeRoot!!,
+            } else if (collection != null) {
+                GraphCollectionScreen(
+                    collection = collection!!,
+                    favoriteIds = favoriteIds,
+                    onBack = { collection = null },
+                    openGraph = openGraph,
+                    toggleFavorite = app.library::toggleFavorite,
+                )
+            } else if (browserRoot != null) {
+                DirectoryBrowserScreen(
+                    root = browserRoot!!,
                     app = app,
-                    onBack = { fileTreeRoot = null },
+                    favoriteIds = favoriteIds,
+                    onBack = { browserRoot = null },
+                    openGraph = openGraph,
+                    toggleFavorite = app.library::toggleFavorite,
                 )
             } else {
                 MainScaffold(
-                    destination = destination,
-                    onDestination = { destination = it },
                     playback = playback,
                     openPlayer = { showPlayer = true },
                     togglePlayback = { PlaybackRuntime.toggle(context) },
@@ -248,18 +281,54 @@ fun WmgfPlayerApp(
                             addFolder = addFolder,
                             refresh = { scanVersion++ },
                             removeRoot = { app.library.removeRoot(it) },
-                            browseRoot = { fileTreeRoot = it },
+                            browseRoot = { root ->
+                                if (root.directory?.isContent == true) {
+                                    collection = GraphCollection(root.grant.name, root.directory.graphs)
+                                } else {
+                                    browserRoot = root
+                                }
+                            },
+                            knownGraphs = knownGraphs,
+                            favoriteIds = favoriteIds,
+                            openHistory = { destination = Destination.HISTORY },
+                            openSettings = { destination = Destination.SETTINGS },
+                            openPlayed = {
+                                collection = GraphCollection("再生した作品", loading = true)
+                                scope.launch {
+                                    val ids = app.history.readAll().map { it.graphId }.distinct()
+                                    val graphs = app.library.resolveGraphs(ids)
+                                    if (collection?.title == "再生した作品" && collection?.loading == true) {
+                                        collection = GraphCollection("再生した作品", graphs)
+                                    }
+                                }
+                            },
+                            openRecent = {
+                                collection = GraphCollection(
+                                    "最近追加",
+                                    knownGraphs.sortedByDescending(LibraryGraph::modifiedAt),
+                                )
+                            },
+                            openFavorites = {
+                                showResolvedCollection("最近のお気に入り", app.library.favoriteIdsByRecent())
+                            },
+                            shuffle = {
+                                knownGraphs.filter { it.parseError == null }.randomOrNull()?.let(openGraph)
+                                    ?: run { collection = GraphCollection("シャッフル", emptyList()) }
+                            },
                             openGraph = openGraph,
+                            toggleFavorite = app.library::toggleFavorite,
                         )
                         Destination.HISTORY -> HistoryScreen(
                             modifier = Modifier.padding(padding),
                             app = app,
                             export = exportHistory,
+                            onBack = { destination = Destination.LIBRARY },
                         )
                         Destination.SETTINGS -> SettingsScreen(
                             modifier = Modifier.padding(padding),
                             settings = settings,
                             update = app.settings::update,
+                            onBack = { destination = Destination.LIBRARY },
                         )
                     }
                 }
@@ -299,8 +368,6 @@ fun WmgfPlayerApp(
 
 @Composable
 private fun MainScaffold(
-    destination: Destination,
-    onDestination: (Destination) -> Unit,
     playback: PlaybackUiState,
     openPlayer: () -> Unit,
     togglePlayback: () -> Unit,
@@ -309,23 +376,9 @@ private fun MainScaffold(
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            Column {
-                AnimatedVisibility(playback.status != PlaybackStatus.IDLE) {
+            AnimatedVisibility(playback.status != PlaybackStatus.IDLE) {
+                Column(Modifier.navigationBarsPadding()) {
                     MiniPlayer(playback, openPlayer, togglePlayback)
-                }
-                NavigationBar {
-                    listOf(
-                        Triple(Destination.LIBRARY, Icons.Default.Home, "ライブラリ"),
-                        Triple(Destination.HISTORY, Icons.Default.History, "履歴"),
-                        Triple(Destination.SETTINGS, Icons.Default.Settings, "設定"),
-                    ).forEach { (item, icon, label) ->
-                        NavigationBarItem(
-                            selected = destination == item,
-                            onClick = { onDestination(item) },
-                            icon = { Icon(icon, label) },
-                            label = { Text(label) },
-                        )
-                    }
                 }
             }
         },
@@ -360,163 +413,423 @@ private fun LibraryScreen(
     addFolder: () -> Unit,
     refresh: () -> Unit,
     removeRoot: (String) -> Unit,
-    browseRoot: (RootGrant) -> Unit,
+    browseRoot: (LibraryRoot) -> Unit,
+    knownGraphs: List<LibraryGraph>,
+    favoriteIds: Set<String>,
+    openHistory: () -> Unit,
+    openSettings: () -> Unit,
+    openPlayed: () -> Unit,
+    openRecent: () -> Unit,
+    openFavorites: () -> Unit,
+    shuffle: () -> Unit,
     openGraph: (LibraryGraph) -> Unit,
+    toggleFavorite: (String) -> Unit,
 ) {
+    val context = LocalContext.current
+    val app = context.applicationContext as WmgfApplication
+    var searching by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    BackHandler(enabled = searching) {
+        searching = false
+        query = ""
+    }
+    val normalizedQuery = query.trim()
+    val filteredRoots = if (normalizedQuery.isEmpty()) roots else roots.filter {
+        it.grant.name.contains(normalizedQuery, ignoreCase = true)
+    }
+    val filteredGraphs = if (normalizedQuery.isEmpty()) knownGraphs else knownGraphs.filter {
+        it.displayName.contains(normalizedQuery, ignoreCase = true) ||
+            it.author?.contains(normalizedQuery, ignoreCase = true) == true
+    }
+
     Scaffold(
         modifier = modifier,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
-            TopAppBar(
-                title = { Text("ライブラリ", fontWeight = FontWeight.Bold) },
-                actions = {
-                    IconButton(onClick = refresh) { Icon(Icons.Default.Refresh, "更新") }
-                    IconButton(onClick = addFolder) { Icon(Icons.Default.Add, "フォルダを追加") }
-                },
-            )
-        },
-        floatingActionButton = {
-            if (roots.isEmpty() && !scanning) FloatingActionButton(onClick = addFolder) { Icon(Icons.Default.FolderOpen, "フォルダを追加") }
+            if (searching) {
+                TopAppBar(
+                    title = {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
+                            placeholder = { Text("ライブラリを検索") },
+                            singleLine = true,
+                            leadingIcon = {
+                                IconButton(onClick = { searching = false; query = "" }) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "検索を閉じる")
+                                }
+                            },
+                        )
+                    },
+                )
+            } else {
+                CenterAlignedTopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { searching = true }) { Icon(Icons.Default.Search, "検索") }
+                    },
+                    title = { Text("WMGF Player", fontWeight = FontWeight.Bold) },
+                    actions = {
+                        IconButton(onClick = openHistory) { Icon(Icons.Default.History, "履歴") }
+                        IconButton(onClick = openSettings) { Icon(Icons.Default.Settings, "設定") }
+                    },
+                )
+            }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            if (roots.isEmpty() && !scanning) {
-                Column(Modifier.align(Alignment.TopCenter).padding(top = 72.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Icon(Icons.Default.FolderOpen, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
-                    Text("WMGF フォルダを追加", style = MaterialTheme.typography.titleMedium)
-                }
-            } else LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                roots.forEach { root ->
-                    item(key = root.grant.uri) {
-                        RootHeader(root, browseRoot, removeRoot)
-                        root.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (!searching) {
+                    item(key = "quick-played") { QuickActionCard("履歴", Icons.Default.History, openPlayed) }
+                    item(key = "quick-recent") { QuickActionCard("最近追加", Icons.Default.Update, openRecent) }
+                    item(key = "quick-favorite") { QuickActionCard("最近のお気に入り", Icons.Default.Favorite, openFavorites) }
+                    item(key = "quick-shuffle") { QuickActionCard("シャッフル", Icons.Default.Shuffle, shuffle) }
+                    item(key = "library-title", span = { GridItemSpan(maxLineSpan) }) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("ライブラリ", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                            IconButton(onClick = refresh) { Icon(Icons.Default.Refresh, "更新") }
+                            IconButton(onClick = addFolder) { Icon(Icons.Default.Add, "フォルダを追加") }
+                        }
                     }
-                    if (root.error == null && root.graphs.isEmpty()) {
-                        item(key = "empty:${root.grant.uri}") {
+                } else {
+                    item(key = "search-title", span = { GridItemSpan(maxLineSpan) }) {
+                        Text("検索結果", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                gridItems(filteredRoots, key = { "root:${it.grant.uri}" }) { root ->
+                    RootGridCard(root, app, { browseRoot(root) }, { removeRoot(root.grant.uri) })
+                }
+                if (!searching) {
+                    item(key = "add-folder") { AddFolderCard(addFolder) }
+                } else {
+                    gridItems(filteredGraphs, key = { "graph:${it.ref.graphId}" }) { graph ->
+                        GraphGridCard(graph, graph.ref.graphId in favoriteIds, openGraph, toggleFavorite)
+                    }
+                    if (filteredRoots.isEmpty() && filteredGraphs.isEmpty()) {
+                        item(key = "no-results", span = { GridItemSpan(maxLineSpan) }) {
                             Text(
-                                "ルート直下に WMGF JSON はありません",
+                                "一致する項目はありません",
+                                Modifier.fillMaxWidth().padding(vertical = 48.dp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                             )
                         }
                     }
-                    items(root.graphs, key = { it.ref.graphId }) { graph -> GraphRow(graph, openGraph) }
                 }
             }
-            if (scanning) CircularProgressIndicator(Modifier.align(Alignment.TopCenter).padding(top = 72.dp).size(36.dp))
+            if (scanning) CircularProgressIndicator(Modifier.align(Alignment.TopCenter).padding(top = 28.dp).size(36.dp))
         }
     }
 }
 
 @Composable
-private fun RootHeader(root: LibraryRoot, browseRoot: (RootGrant) -> Unit, removeRoot: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 12.dp, start = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.primary)
-        Text(root.grant.name, Modifier.weight(1f).padding(horizontal = 10.dp), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        IconButton(onClick = { browseRoot(root.grant) }) { Icon(Icons.Default.Info, "ファイルツリー") }
-        IconButton(onClick = { removeRoot(root.grant.uri) }) { Icon(Icons.Default.DeleteOutline, "削除") }
+private fun QuickActionCard(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().height(86.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+            Text(label, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
 @Composable
-private fun GraphRow(graph: LibraryGraph, open: (LibraryGraph) -> Unit) {
+private fun RootGridCard(root: LibraryRoot, app: WmgfApplication, open: () -> Unit, remove: () -> Unit) {
+    val preview = root.previewGraph
+    val thumbnailUri = rememberThumbnailUri(preview, app)
+    Card(
+        onClick = open,
+        enabled = root.error == null,
+        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                if (preview != null && thumbnailUri != null) {
+                    Artwork(thumbnailUri, Modifier.fillMaxSize(), fallback = false, blurredCover = true)
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(
+                            if (root.error == null) Icons.Default.Folder else Icons.Default.WarningAmber,
+                            null,
+                            Modifier.size(54.dp),
+                            tint = if (root.error == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = remove,
+                    modifier = Modifier.align(Alignment.TopEnd).background(MaterialTheme.colorScheme.surface.copy(alpha = .85f), CircleShape),
+                ) { Icon(Icons.Default.DeleteOutline, "削除") }
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth().height(60.dp),
+            ) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.Center) {
+                    Text(root.grant.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    root.error?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, maxLines = 1) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddFolderCard(addFolder: () -> Unit) {
+    Card(
+        onClick = addFolder,
+        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Add, null, Modifier.size(42.dp), tint = MaterialTheme.colorScheme.primary)
+            }
+            Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.CenterStart) {
+                Text("フォルダを追加", Modifier.padding(horizontal = 12.dp), fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderGridCard(
+    folder: LibraryFolder,
+    root: LibraryRoot,
+    app: WmgfApplication,
+    open: () -> Unit,
+) {
+    var previewGraph by remember(root.grant.uri, folder.relativePath) { mutableStateOf<LibraryGraph?>(null) }
+    LaunchedEffect(root.grant.uri, folder.relativePath) {
+        // Only inspect a folder once its card is composed. This keeps traversal lazy while
+        // allowing a direct child content folder to inherit its first JSON thumbnail.
+        previewGraph = runCatching {
+            app.library.inspectDirectory(root.grant, folder.relativePath).graphs.firstOrNull()
+        }.getOrNull()
+    }
+    val thumbnailUri = rememberThumbnailUri(previewGraph, app)
+    Card(
+        onClick = open,
+        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                if (thumbnailUri != null) {
+                    Artwork(thumbnailUri, Modifier.fillMaxSize(), fallback = false, blurredCover = true)
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.Folder, null, Modifier.size(52.dp), tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth().height(60.dp),
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                    Text(
+                        folder.name,
+                        Modifier.padding(horizontal = 12.dp),
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GraphGridCard(
+    graph: LibraryGraph,
+    favorite: Boolean,
+    open: (LibraryGraph) -> Unit,
+    toggleFavorite: (String) -> Unit,
+) {
     val context = LocalContext.current
     val app = context.applicationContext as WmgfApplication
-    var thumbnailUri by remember(graph.ref.graphId, graph.thumbnailPath) { mutableStateOf<String?>(null) }
-    LaunchedEffect(graph.ref.graphId, graph.thumbnailPath) {
-        thumbnailUri = graph.thumbnailPath?.let { app.library.assetUri(graph.ref, it)?.toString() }
-    }
+    val thumbnailUri = rememberThumbnailUri(graph, app)
     Card(
         onClick = { open(graph) },
         enabled = graph.parseError == null,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
-        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Artwork(thumbnailUri, Modifier.size(58.dp).clip(RoundedCornerShape(14.dp)), fallback = true)
-            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(graph.displayName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(graph.parseError ?: graph.author ?: graph.ref.fileName, style = MaterialTheme.typography.bodySmall, color = if (graph.parseError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column {
+            Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
+                Artwork(thumbnailUri, Modifier.fillMaxSize(), fallback = true, blurredCover = true)
+                IconButton(
+                    onClick = { toggleFavorite(graph.ref.graphId) },
+                    modifier = Modifier.align(Alignment.TopEnd).background(MaterialTheme.colorScheme.surface.copy(alpha = .85f), CircleShape),
+                ) {
+                    Icon(
+                        if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        if (favorite) "お気に入りから削除" else "お気に入りに追加",
+                        tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             }
-            Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
+            Column(Modifier.padding(12.dp)) {
+                Text(graph.displayName, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    graph.parseError ?: graph.author ?: graph.ref.fileName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (graph.parseError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
 
-private data class VisibleFileEntry(val entry: LibraryFileEntry, val depth: Int)
-
 @Composable
-private fun FileTreeScreen(root: RootGrant, app: WmgfApplication, onBack: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    val children = remember(root.uri) { mutableStateMapOf<String, List<LibraryFileEntry>>() }
-    val expanded = remember(root.uri) { mutableStateMapOf<String, Boolean>() }
-    val loading = remember(root.uri) { mutableStateMapOf<String, Boolean>() }
-    var error by remember(root.uri) { mutableStateOf<String?>(null) }
-
-    fun load(path: String) {
-        if (loading[path] == true || path in children) return
-        loading[path] = true
-        scope.launch {
-            runCatching { app.library.listDirectory(root, path) }
-                .onSuccess { children[path] = it }
-                .onFailure { error = it.message ?: "フォルダを読み込めません" }
-            loading.remove(path)
+private fun rememberThumbnailUri(graph: LibraryGraph?, app: WmgfApplication): String? {
+    var thumbnailUri by remember(graph?.ref?.graphId, graph?.thumbnailPath) { mutableStateOf<String?>(null) }
+    LaunchedEffect(graph?.ref?.graphId, graph?.thumbnailPath) {
+        thumbnailUri = if (graph == null) null else graph.thumbnailPath?.let {
+            app.library.assetUri(graph.ref, it)?.toString()
         }
     }
+    return thumbnailUri
+}
 
-    LaunchedEffect(root.uri) { load("") }
-    val visibleEntries = flattenFileTree(children, expanded)
-
+@Composable
+private fun GraphCollectionScreen(
+    collection: GraphCollection,
+    favoriteIds: Set<String>,
+    onBack: () -> Unit,
+    openGraph: (LibraryGraph) -> Unit,
+    toggleFavorite: (String) -> Unit,
+) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Column {
-                        Text(root.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
-                        Text("ファイルツリー", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                },
+                title = { Text(collection.title, fontWeight = FontWeight.Bold) },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") } },
             )
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                gridItems(collection.graphs, key = { it.ref.graphId }) { graph ->
+                    GraphGridCard(graph, graph.ref.graphId in favoriteIds, openGraph, toggleFavorite)
+                }
+            }
             when {
-                loading[""] == true && "" !in children -> CircularProgressIndicator(Modifier.align(Alignment.TopCenter).padding(top = 72.dp))
-                visibleEntries.isEmpty() && error == null -> Text("ファイルはありません", Modifier.align(Alignment.TopCenter).padding(top = 72.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)) {
-                    items(visibleEntries, key = { it.entry.relativePath }) { visible ->
-                        val entry = visible.entry
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable(enabled = entry.isDirectory) {
-                                    val opening = expanded[entry.relativePath] != true
-                                    expanded[entry.relativePath] = opening
-                                    if (opening) load(entry.relativePath)
-                                }
-                                .padding(start = (8 + visible.depth * 20).dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (entry.isDirectory) {
-                                Icon(
-                                    if (expanded[entry.relativePath] == true) Icons.Default.ExpandMore else Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    null,
-                                    Modifier.size(24.dp),
-                                )
-                            } else Spacer(Modifier.width(24.dp))
-                            Icon(
-                                if (entry.isDirectory) Icons.Default.Folder else Icons.Default.Description,
-                                null,
-                                Modifier.padding(horizontal = 8.dp),
-                                tint = if (entry.isDirectory || entry.name.endsWith(".json", true)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(entry.name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (loading[entry.relativePath] == true) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                collection.loading -> CircularProgressIndicator(Modifier.align(Alignment.TopCenter).padding(top = 64.dp))
+                collection.graphs.isEmpty() -> Text(
+                    "作品はまだありません",
+                    Modifier.align(Alignment.TopCenter).padding(top = 64.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DirectoryBrowserScreen(
+    root: LibraryRoot,
+    app: WmgfApplication,
+    favoriteIds: Set<String>,
+    onBack: () -> Unit,
+    openGraph: (LibraryGraph) -> Unit,
+    toggleFavorite: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var directories by remember(root.grant.uri) { mutableStateOf(root.directory?.let(::listOf).orEmpty()) }
+    var loading by remember(root.grant.uri) { mutableStateOf(root.directory == null) }
+    var error by remember(root.grant.uri) { mutableStateOf(root.error) }
+    val current = directories.lastOrNull()
+
+    fun load(path: String, replace: Boolean = false) {
+        if (loading) return
+        loading = true
+        error = null
+        scope.launch {
+            runCatching { app.library.inspectDirectory(root.grant, path) }
+                .onSuccess { directory ->
+                    directories = if (replace) listOf(directory) else directories + directory
+                }
+                .onFailure { error = it.message ?: "フォルダを読み込めません" }
+            loading = false
+        }
+    }
+
+    LaunchedEffect(root.grant.uri) {
+        if (directories.isEmpty()) {
+            loading = false
+            load("", replace = true)
+        }
+    }
+    fun goBack() {
+        if (directories.size > 1) directories = directories.dropLast(1) else onBack()
+    }
+    BackHandler { goBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(current?.name ?: root.grant.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold) },
+                navigationIcon = { IconButton(onClick = ::goBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") } },
+            )
+        },
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            val directory = current
+            if (directory != null) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (directory.isContent) {
+                        gridItems(directory.graphs, key = { it.ref.graphId }) { graph ->
+                            GraphGridCard(graph, graph.ref.graphId in favoriteIds, openGraph, toggleFavorite)
+                        }
+                    } else {
+                        gridItems(directory.folders, key = { it.relativePath }) { folder ->
+                            FolderGridCard(folder, root, app) { load(folder.relativePath) }
                         }
                     }
                 }
             }
+            if (!loading && directory != null && directory.graphs.isEmpty() && directory.folders.isEmpty()) {
+                Text("フォルダは空です", Modifier.align(Alignment.TopCenter).padding(top = 64.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (loading) CircularProgressIndicator(Modifier.align(Alignment.TopCenter).padding(top = 64.dp))
             error?.let { message ->
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
@@ -526,19 +839,6 @@ private fun FileTreeScreen(root: RootGrant, app: WmgfApplication, onBack: () -> 
             }
         }
     }
-}
-
-private fun flattenFileTree(
-    children: Map<String, List<LibraryFileEntry>>,
-    expanded: Map<String, Boolean>,
-): List<VisibleFileEntry> = buildList {
-    fun append(path: String, depth: Int) {
-        children[path].orEmpty().forEach { entry ->
-            add(VisibleFileEntry(entry, depth))
-            if (entry.isDirectory && expanded[entry.relativePath] == true) append(entry.relativePath, depth + 1)
-        }
-    }
-    append("", 0)
 }
 
 @Composable
@@ -697,7 +997,7 @@ private fun ContentInfoDialog(state: PlaybackUiState, close: () -> Unit) {
 }
 
 @Composable
-private fun HistoryScreen(modifier: Modifier, app: WmgfApplication, export: () -> Unit) {
+private fun HistoryScreen(modifier: Modifier, app: WmgfApplication, export: () -> Unit, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var entries by remember { mutableStateOf<List<PlaybackHistoryEntry>>(emptyList()) }
     val expandedSessions = remember { mutableStateMapOf<String, Boolean>() }
@@ -714,6 +1014,7 @@ private fun HistoryScreen(modifier: Modifier, app: WmgfApplication, export: () -
         topBar = {
             TopAppBar(
                 title = { Text("履歴", fontWeight = FontWeight.Bold) },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") } },
                 actions = {
                     IconButton(onClick = export, enabled = entries.isNotEmpty()) { Icon(Icons.Default.SaveAlt, "書き出し") }
                     IconButton(onClick = { clearDialog = true }, enabled = entries.isNotEmpty()) { Icon(Icons.Default.DeleteOutline, "削除") }
@@ -799,11 +1100,21 @@ private fun historyGraphName(graphId: String): String = graphId
     .removeSuffix(".wmg.json")
 
 @Composable
-private fun SettingsScreen(modifier: Modifier, settings: PlayerSettings, update: ((PlayerSettings) -> PlayerSettings) -> Unit) {
+private fun SettingsScreen(
+    modifier: Modifier,
+    settings: PlayerSettings,
+    update: ((PlayerSettings) -> PlayerSettings) -> Unit,
+    onBack: () -> Unit,
+) {
     Scaffold(
         modifier = modifier,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        topBar = { TopAppBar(title = { Text("設定", fontWeight = FontWeight.Bold) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("設定", fontWeight = FontWeight.Bold) },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") } },
+            )
+        },
     ) { padding ->
         LazyColumn(Modifier.padding(padding), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(26.dp)) {
             item {
@@ -811,10 +1122,34 @@ private fun SettingsScreen(modifier: Modifier, settings: PlayerSettings, update:
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(ThemeMode.SYSTEM to Icons.Default.Settings, ThemeMode.LIGHT to Icons.Default.LightMode, ThemeMode.DARK to Icons.Default.DarkMode).forEach { (mode, icon) ->
                             val selected = settings.themeMode == mode
-                            OutlinedButton(onClick = { update { it.copy(themeMode = mode) } }, modifier = Modifier.weight(1f)) {
-                                Icon(if (selected) Icons.Default.Check else icon, null)
-                                Spacer(Modifier.width(6.dp))
-                                Text(when (mode) { ThemeMode.SYSTEM -> "自動"; ThemeMode.LIGHT -> "Light"; ThemeMode.DARK -> "Dark" })
+                            Surface(
+                                onClick = { update { it.copy(themeMode = mode) } },
+                                modifier = Modifier.weight(1f).aspectRatio(1.05f),
+                                shape = RoundedCornerShape(18.dp),
+                                color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    if (selected) 2.dp else 1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                ),
+                            ) {
+                                Column(
+                                    Modifier.fillMaxSize().padding(8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center,
+                                ) {
+                                    Icon(
+                                        if (selected) Icons.Default.Check else icon,
+                                        null,
+                                        Modifier.size(28.dp),
+                                        tint = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.primary,
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        when (mode) { ThemeMode.SYSTEM -> "システム"; ThemeMode.LIGHT -> "ライト"; ThemeMode.DARK -> "ダーク" },
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 1,
+                                    )
+                                }
                             }
                         }
                     }
@@ -868,7 +1203,13 @@ private fun SettingGroup(title: String, content: @Composable androidx.compose.fo
 }
 
 @Composable
-private fun Artwork(uri: String?, modifier: Modifier, fallback: Boolean, scale: ContentScale = ContentScale.Crop) {
+private fun Artwork(
+    uri: String?,
+    modifier: Modifier,
+    fallback: Boolean,
+    scale: ContentScale = ContentScale.Crop,
+    blurredCover: Boolean = false,
+) {
     val context = LocalContext.current
     var bitmap by remember(uri) { mutableStateOf<android.graphics.Bitmap?>(null) }
     LaunchedEffect(uri) {
@@ -878,8 +1219,22 @@ private fun Artwork(uri: String?, modifier: Modifier, fallback: Boolean, scale: 
     }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest), contentAlignment = Alignment.Center) {
         val current = bitmap
-        if (current != null) Image(current.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = scale)
-        else if (fallback) Icon(Icons.Default.PlayArrow, null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary)
+        if (current != null) {
+            if (blurredCover) {
+                Image(
+                    current.asImageBitmap(),
+                    null,
+                    Modifier.fillMaxSize().blur(20.dp),
+                    contentScale = ContentScale.Crop,
+                )
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .18f)))
+                Image(current.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            } else {
+                Image(current.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = scale)
+            }
+        } else if (fallback) {
+            Icon(Icons.Default.PlayArrow, null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary)
+        }
     }
 }
 

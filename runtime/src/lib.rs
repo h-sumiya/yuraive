@@ -101,6 +101,221 @@ struct Metadata {
     social_links: Vec<SocialLink>,
 }
 
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct MetadataPreview {
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    thumbnail: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct MetadataPrefixResult {
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<MetadataPreview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl MetadataPrefixResult {
+    fn found(metadata: Option<MetadataPreview>) -> Self {
+        Self {
+            status: "found",
+            metadata,
+            error: None,
+        }
+    }
+
+    fn simple(status: &'static str) -> Self {
+        Self {
+            status,
+            metadata: None,
+            error: None,
+        }
+    }
+
+    fn invalid(error: impl Into<String>) -> Self {
+        Self {
+            status: "invalid",
+            metadata: None,
+            error: Some(error.into()),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PrefixScanError {
+    NeedMore,
+    Invalid(&'static str),
+}
+
+fn skip_json_whitespace(bytes: &[u8], mut cursor: usize) -> usize {
+    while cursor < bytes.len() && matches!(bytes[cursor], b' ' | b'\n' | b'\r' | b'\t') {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn json_string_end(bytes: &[u8], start: usize) -> Result<usize, PrefixScanError> {
+    if bytes.get(start) != Some(&b'"') {
+        return Err(PrefixScanError::Invalid("JSONのキーが文字列ではありません"));
+    }
+    let mut cursor = start + 1;
+    let mut escaped = false;
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == b'"' {
+            return Ok(cursor + 1);
+        } else if byte < 0x20 {
+            return Err(PrefixScanError::Invalid(
+                "JSON文字列に制御文字が含まれています",
+            ));
+        }
+        cursor += 1;
+    }
+    Err(PrefixScanError::NeedMore)
+}
+
+fn json_value_end(bytes: &[u8], start: usize) -> Result<usize, PrefixScanError> {
+    let start = skip_json_whitespace(bytes, start);
+    let Some(first) = bytes.get(start).copied() else {
+        return Err(PrefixScanError::NeedMore);
+    };
+    if first == b'"' {
+        return json_string_end(bytes, start);
+    }
+    if matches!(first, b'{' | b'[') {
+        let mut stack = vec![first];
+        let mut cursor = start + 1;
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                b'"' => cursor = json_string_end(bytes, cursor)?,
+                b'{' | b'[' => {
+                    stack.push(bytes[cursor]);
+                    cursor += 1;
+                }
+                b'}' => {
+                    if stack.pop() != Some(b'{') {
+                        return Err(PrefixScanError::Invalid("JSONオブジェクトの終端が不正です"));
+                    }
+                    cursor += 1;
+                    if stack.is_empty() {
+                        return Ok(cursor);
+                    }
+                }
+                b']' => {
+                    if stack.pop() != Some(b'[') {
+                        return Err(PrefixScanError::Invalid("JSON配列の終端が不正です"));
+                    }
+                    cursor += 1;
+                    if stack.is_empty() {
+                        return Ok(cursor);
+                    }
+                }
+                _ => cursor += 1,
+            }
+        }
+        return Err(PrefixScanError::NeedMore);
+    }
+
+    let mut cursor = start;
+    while cursor < bytes.len()
+        && !matches!(
+            bytes[cursor],
+            b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t'
+        )
+    {
+        cursor += 1;
+    }
+    if cursor == bytes.len() {
+        Err(PrefixScanError::NeedMore)
+    } else if cursor == start {
+        Err(PrefixScanError::Invalid("JSONの値が不正です"))
+    } else {
+        Ok(cursor)
+    }
+}
+
+fn extract_metadata_prefix(input: &str) -> MetadataPrefixResult {
+    let bytes = input.as_bytes();
+    let mut cursor = skip_json_whitespace(bytes, 0);
+    if bytes.get(cursor) != Some(&b'{') {
+        return if cursor == bytes.len() {
+            MetadataPrefixResult::simple("needMore")
+        } else {
+            MetadataPrefixResult::invalid("JSONのルートがオブジェクトではありません")
+        };
+    }
+    cursor += 1;
+
+    loop {
+        cursor = skip_json_whitespace(bytes, cursor);
+        let Some(byte) = bytes.get(cursor).copied() else {
+            return MetadataPrefixResult::simple("needMore");
+        };
+        if byte == b'}' {
+            return MetadataPrefixResult::simple("missing");
+        }
+
+        let key_end = match json_string_end(bytes, cursor) {
+            Ok(end) => end,
+            Err(PrefixScanError::NeedMore) => return MetadataPrefixResult::simple("needMore"),
+            Err(PrefixScanError::Invalid(error)) => return MetadataPrefixResult::invalid(error),
+        };
+        let key = match serde_json::from_slice::<String>(&bytes[cursor..key_end]) {
+            Ok(key) => key,
+            Err(error) => return MetadataPrefixResult::invalid(error.to_string()),
+        };
+        cursor = skip_json_whitespace(bytes, key_end);
+        if bytes.get(cursor) != Some(&b':') {
+            return if cursor == bytes.len() {
+                MetadataPrefixResult::simple("needMore")
+            } else {
+                MetadataPrefixResult::invalid("JSONのキーの後にコロンがありません")
+            };
+        }
+        cursor += 1;
+        let value_start = skip_json_whitespace(bytes, cursor);
+
+        let value_end = match json_value_end(bytes, value_start) {
+            Ok(end) => end,
+            Err(PrefixScanError::NeedMore) => return MetadataPrefixResult::simple("needMore"),
+            Err(PrefixScanError::Invalid(error)) => return MetadataPrefixResult::invalid(error),
+        };
+        if key == "metadata" {
+            return match serde_json::from_slice::<Option<MetadataPreview>>(
+                &bytes[value_start..value_end],
+            ) {
+                Ok(metadata) => MetadataPrefixResult::found(metadata),
+                Err(error) => MetadataPrefixResult::invalid(error.to_string()),
+            };
+        }
+
+        cursor = skip_json_whitespace(bytes, value_end);
+        match bytes.get(cursor) {
+            Some(b',') => cursor += 1,
+            Some(b'}') => return MetadataPrefixResult::simple("missing"),
+            None => return MetadataPrefixResult::simple("needMore"),
+            _ => return MetadataPrefixResult::invalid("JSONオブジェクトの区切りが不正です"),
+        }
+    }
+}
+
+fn metadata_prefix_json(input: &str) -> String {
+    serde_json::to_string(&extract_metadata_prefix(input)).unwrap_or_else(|error| {
+        format!(r#"{{"status":"invalid","error":"結果を生成できません: {error}"}}"#)
+    })
+}
+
 #[derive(Deserialize)]
 struct SocialLink {
     label: String,
@@ -605,6 +820,32 @@ pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeGraphValidator_valid
 
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
+pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeGraphMetadataExtractor_extractNative<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    input: JString<'local>,
+) -> jstring {
+    let output = catch_unwind(AssertUnwindSafe(|| match env.get_string(&input) {
+        Ok(value) => metadata_prefix_json(&String::from(value)),
+        Err(error) => serde_json::to_string(&MetadataPrefixResult::invalid(format!(
+            "JSONを受け取れません: {error}"
+        )))
+        .unwrap_or_else(|_| r#"{"status":"invalid"}"#.to_owned()),
+    }))
+    .unwrap_or_else(|_| {
+        r#"{"status":"invalid","error":"Rustメタデータ解析器で内部エラーが発生しました"}"#
+            .to_owned()
+    });
+
+    env.new_string(output)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+#[cfg(not(target_arch = "wasm32"))]
 pub extern "system" fn Java_dev_hiro_wmgfplayer_playback_NativeStarlarkEngine_runJsonNative<
     'local,
 >(
@@ -700,5 +941,53 @@ mod tests {
         }"#,
         );
         assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn extracts_metadata_without_reading_nodes() {
+        let result = extract_metadata_prefix(
+            r#"{"version":1,"metadata":{"displayName":"Rain","author":"Hiro","thumbnail":"cover.webp"},"nodes":{"huge":"#,
+        );
+        assert_eq!(result.status, "found");
+        assert_eq!(
+            result.metadata,
+            Some(MetadataPreview {
+                display_name: Some("Rain".to_owned()),
+                author: Some("Hiro".to_owned()),
+                thumbnail: Some("cover.webp".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn metadata_prefix_reports_partial_and_missing_metadata() {
+        assert_eq!(
+            extract_metadata_prefix(r#"{"version":1,"meta"#).status,
+            "needMore"
+        );
+        assert_eq!(
+            extract_metadata_prefix(r#"{"version":1,"nodes":{"still":"not read""#).status,
+            "needMore"
+        );
+        assert_eq!(
+            extract_metadata_prefix(r#"{"version":1,"nodes":{},"buttons":{}}"#).status,
+            "missing"
+        );
+    }
+
+    #[test]
+    fn extracts_legacy_metadata_after_nodes_without_deserializing_nodes() {
+        let result = extract_metadata_prefix(
+            r#"{"version":1,"nodes":{"large":{"nested":[1,2,3]}},"metadata":{"displayName":"Legacy","thumbnail":"images/cover.png"},"buttons":{}}"#,
+        );
+        assert_eq!(result.status, "found");
+        assert_eq!(
+            result.metadata,
+            Some(MetadataPreview {
+                display_name: Some("Legacy".to_owned()),
+                author: None,
+                thumbnail: Some("images/cover.png".to_owned()),
+            })
+        );
     }
 }
