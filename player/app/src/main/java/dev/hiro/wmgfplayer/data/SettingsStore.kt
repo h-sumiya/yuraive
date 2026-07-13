@@ -11,6 +11,7 @@ data class PlayerSettings(
     val accentIndex: Int = 0,
     val scriptTimeoutMs: Long = 1_200,
     val forceShowPlayerControls: Boolean = false,
+    val keepScreenOnInPlayer: Boolean = false,
 )
 
 class SettingsStore(context: Context) {
@@ -26,6 +27,7 @@ class SettingsStore(context: Context) {
             .putInt("accent", value.accentIndex)
             .putLong("scriptTimeout", value.scriptTimeoutMs)
             .putBoolean("forceShowPlayerControls", value.forceShowPlayerControls)
+            .putBoolean("keepScreenOnInPlayer", value.keepScreenOnInPlayer)
             .apply()
         mutable.value = value
     }
@@ -35,5 +37,6 @@ class SettingsStore(context: Context) {
         accentIndex = preferences.getInt("accent", 0),
         scriptTimeoutMs = preferences.getLong("scriptTimeout", 1_200).coerceIn(100, 10_000),
         forceShowPlayerControls = preferences.getBoolean("forceShowPlayerControls", false),
+        keepScreenOnInPlayer = preferences.getBoolean("keepScreenOnInPlayer", false),
     )
 }

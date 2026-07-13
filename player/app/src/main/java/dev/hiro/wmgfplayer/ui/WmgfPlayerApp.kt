@@ -9,11 +9,20 @@ import android.util.LruCache
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -43,8 +52,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ExpandMore
@@ -54,7 +63,9 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
@@ -87,9 +98,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -99,10 +112,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -138,6 +157,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToLong
+import kotlin.math.PI
+import kotlin.math.sin
 
 private enum class Destination { LIBRARY, HISTORY, SETTINGS }
 
@@ -153,6 +174,9 @@ private val accents = listOf(
     Color(0xFF955C9D),
     Color(0xFF5F6DB4),
 )
+
+private const val HiddenTextPlaceholder = "???"
+private const val HiddenTimePlaceholder = "??:??"
 
 @Composable
 fun WmgfPlayerApp(
@@ -186,6 +210,7 @@ fun WmgfPlayerApp(
         destination = Destination.LIBRARY
     }
 
+    val playerVisible = showPlayer && playback.status != PlaybackStatus.IDLE
     val dark = when (settings.themeMode) {
         ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
         ThemeMode.LIGHT -> false
@@ -195,9 +220,13 @@ fun WmgfPlayerApp(
     SideEffect {
         val window = (view.context as? ComponentActivity)?.window ?: return@SideEffect
         WindowCompat.getInsetsController(window, view).apply {
-            isAppearanceLightStatusBars = !dark
-            isAppearanceLightNavigationBars = !dark
+            isAppearanceLightStatusBars = !dark && !playerVisible
+            isAppearanceLightNavigationBars = !dark && !playerVisible
         }
+    }
+    DisposableEffect(view, playerVisible, settings.keepScreenOnInPlayer) {
+        view.keepScreenOn = playerVisible && settings.keepScreenOnInPlayer
+        onDispose { view.keepScreenOn = false }
     }
 
     LaunchedEffect(roots, scanVersion) {
@@ -237,35 +266,25 @@ fun WmgfPlayerApp(
 
     WmgTheme(dark = dark, accent = accents[settings.accentIndex.mod(accents.size)]) {
         Surface(Modifier.fillMaxSize()) {
-            if (showPlayer && playback.status != PlaybackStatus.IDLE) {
+            if (playerVisible) {
                 PlayerScreen(
                     state = playback,
                     player = player,
+                    favorite = playback.graphRef?.graphId in favoriteIds,
                     onBack = { showPlayer = false },
                     onToggle = { PlaybackRuntime.toggle(context) },
                     onSeek = { PlaybackRuntime.seek(context, it) },
                     onRetry = { PlaybackRuntime.restart(context) },
                     onNext = { PlaybackRuntime.next(context) },
                     onPrevious = { PlaybackRuntime.previous(context) },
-                    onStop = { PlaybackRuntime.stop(context); showPlayer = false },
+                    onToggleFavorite = { playback.graphRef?.graphId?.let(app.library::toggleFavorite) },
+                    onTheme = {
+                        showPlayer = false
+                        collection = null
+                        browserRoot = null
+                        destination = Destination.SETTINGS
+                    },
                     onButton = { PlaybackRuntime.pressButton(context, it) },
-                )
-            } else if (collection != null) {
-                GraphCollectionScreen(
-                    collection = collection!!,
-                    favoriteIds = favoriteIds,
-                    onBack = { collection = null },
-                    openGraph = openGraph,
-                    toggleFavorite = app.library::toggleFavorite,
-                )
-            } else if (browserRoot != null) {
-                DirectoryBrowserScreen(
-                    root = browserRoot!!,
-                    app = app,
-                    favoriteIds = favoriteIds,
-                    onBack = { browserRoot = null },
-                    openGraph = openGraph,
-                    toggleFavorite = app.library::toggleFavorite,
                 )
             } else {
                 MainScaffold(
@@ -273,8 +292,27 @@ fun WmgfPlayerApp(
                     openPlayer = { showPlayer = true },
                     togglePlayback = { PlaybackRuntime.toggle(context) },
                 ) { padding ->
-                    when (destination) {
-                        Destination.LIBRARY -> LibraryScreen(
+                    when {
+                        collection != null -> Box(Modifier.fillMaxSize().padding(padding)) {
+                            GraphCollectionScreen(
+                                collection = collection!!,
+                                favoriteIds = favoriteIds,
+                                onBack = { collection = null },
+                                openGraph = openGraph,
+                                toggleFavorite = app.library::toggleFavorite,
+                            )
+                        }
+                        browserRoot != null -> Box(Modifier.fillMaxSize().padding(padding)) {
+                            DirectoryBrowserScreen(
+                                root = browserRoot!!,
+                                app = app,
+                                favoriteIds = favoriteIds,
+                                onBack = { browserRoot = null },
+                                openGraph = openGraph,
+                                toggleFavorite = app.library::toggleFavorite,
+                            )
+                        }
+                        destination == Destination.LIBRARY -> LibraryScreen(
                             modifier = Modifier.padding(padding),
                             roots = libraryRoots,
                             scanning = scanning || validating,
@@ -318,13 +356,13 @@ fun WmgfPlayerApp(
                             openGraph = openGraph,
                             toggleFavorite = app.library::toggleFavorite,
                         )
-                        Destination.HISTORY -> HistoryScreen(
+                        destination == Destination.HISTORY -> HistoryScreen(
                             modifier = Modifier.padding(padding),
                             app = app,
                             export = exportHistory,
                             onBack = { destination = Destination.LIBRARY },
                         )
-                        Destination.SETTINGS -> SettingsScreen(
+                        else -> SettingsScreen(
                             modifier = Modifier.padding(padding),
                             settings = settings,
                             update = app.settings::update,
@@ -395,7 +433,12 @@ private fun MiniPlayer(state: PlaybackUiState, open: () -> Unit, toggle: () -> U
         Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Artwork(state.visualUri, Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)), fallback = true)
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(state.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                Text(
+                    state.title.ifBlank { HiddenTextPlaceholder },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 Text(state.error ?: playerSecondaryLabel(state), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = if (state.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = toggle, enabled = state.status != PlaybackStatus.LOADING) {
@@ -845,70 +888,231 @@ private fun DirectoryBrowserScreen(
 private fun PlayerScreen(
     state: PlaybackUiState,
     player: androidx.media3.common.Player?,
+    favorite: Boolean,
     onBack: () -> Unit,
     onToggle: () -> Unit,
     onSeek: (Long) -> Unit,
     onRetry: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
-    onStop: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onTheme: () -> Unit,
     onButton: (String) -> Unit,
 ) {
     var showInfo by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        if (state.isVideo && player != null) {
-            AndroidView(
-                factory = { context -> PlayerView(context).apply { useController = false; this.player = player } },
-                update = { view ->
-                    view.player = player
-                    view.resizeMode = when (state.fit) {
-                        "cover" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                        "stretch" -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                        else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    }
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Crossfade(state.visualUri, animationSpec = tween(state.imageTransitionMs), label = "artwork") { uri ->
-                Artwork(uri, Modifier.fillMaxSize(), fallback = true, scale = if (state.fit == "contain") ContentScale.Fit else ContentScale.Crop)
+    var rawDragOffset by remember { mutableFloatStateOf(0f) }
+    var draggingPlayer by remember { mutableStateOf(false) }
+    val swipeThreshold = with(LocalDensity.current) { 96.dp.toPx() }
+    val dragOffset by animateFloatAsState(
+        targetValue = if (draggingPlayer) rawDragOffset else 0f,
+        animationSpec = if (draggingPlayer) snap() else tween(180),
+        label = "player swipe offset",
+    )
+    val playerBackground = Color(0xFF101116)
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .graphicsLayer {
+                translationY = dragOffset
+                alpha = 1f - (dragOffset / (size.height.coerceAtLeast(1f) * .8f)).coerceIn(0f, .45f)
             }
-        }
-
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = if (state.isVideo) .16f else .25f)))
-
+            .background(playerBackground)
+            .pointerInput(swipeThreshold) {
+                detectVerticalDragGestures(
+                    onDragStart = { draggingPlayer = true },
+                    onDragCancel = {
+                        draggingPlayer = false
+                        rawDragOffset = 0f
+                    },
+                    onDragEnd = {
+                        val dismiss = rawDragOffset >= swipeThreshold
+                        draggingPlayer = false
+                        rawDragOffset = 0f
+                        if (dismiss) onBack()
+                    },
+                ) { change, amount ->
+                    val nextOffset = (rawDragOffset + amount).coerceAtLeast(0f)
+                    if (amount > 0f || rawDragOffset > 0f) change.consume()
+                    rawDragOffset = nextOffset
+                }
+            },
+    ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            state.buttons.filter { it.visible }.forEach { button ->
-                val color = parseColor(button.style.backgroundColor, MaterialTheme.colorScheme.primary)
-                val textColor = parseColor(button.style.textColor, Color.White)
-                val borderColor = parseColor(button.style.borderColor, Color.Transparent)
-                val shape = RoundedCornerShape((button.style.borderRadius ?: 18f).dp)
-                Surface(
-                    onClick = { onButton(button.id) },
-                    shape = shape,
-                    color = color.copy(alpha = button.style.opacity ?: .94f),
-                    contentColor = textColor,
-                    border = androidx.compose.foundation.BorderStroke((button.style.borderWidth ?: 0f).dp, borderColor),
-                    modifier = Modifier
-                        .offset(maxWidth * button.layout.x, maxHeight * button.layout.y)
-                        .size(maxWidth * button.layout.width, maxHeight * button.layout.height),
+            val compactHeight = maxHeight < 760.dp
+            val veryCompactHeight = maxHeight < 700.dp
+            val horizontalPadding = if (maxWidth < 380.dp) 16.dp else 20.dp
+            val minimumArtwork = when {
+                veryCompactHeight -> 180.dp
+                compactHeight -> 210.dp
+                else -> 236.dp
+            }
+            val artworkHeightLimit = maxHeight * when {
+                veryCompactHeight -> .29f
+                compactHeight -> .33f
+                else -> .36f
+            }
+            val artworkSize = (maxWidth - horizontalPadding * 2)
+                .coerceAtMost(artworkHeightLimit)
+                .coerceAtMost(420.dp)
+                .coerceAtLeast(minimumArtwork)
+            val headerToArtwork = when {
+                veryCompactHeight -> 12.dp
+                compactHeight -> 18.dp
+                else -> 24.dp
+            }
+            val artworkToMetadata = when {
+                veryCompactHeight -> 12.dp
+                compactHeight -> 18.dp
+                else -> 22.dp
+            }
+            val metadataToProgress = when {
+                veryCompactHeight -> 6.dp
+                compactHeight -> 10.dp
+                else -> 14.dp
+            }
+            val progressToTransport = when {
+                veryCompactHeight -> 8.dp
+                compactHeight -> 14.dp
+                else -> 18.dp
+            }
+
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = horizontalPadding, vertical = if (compactHeight) 8.dp else 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    "再生中",
+                    color = Color.White.copy(alpha = .72f),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    state.title.ifBlank { HiddenTextPlaceholder },
+                    color = Color.White,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                Spacer(Modifier.height(headerToArtwork))
+
+                Box(
+                    Modifier
+                        .size(artworkSize)
+                        .clip(RoundedCornerShape(if (compactHeight) 22.dp else 28.dp))
+                        .background(Color.White.copy(alpha = .06f)),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        button.style.backgroundImage?.let { Artwork(it, Modifier.fillMaxSize(), fallback = false) }
-                        Box(Modifier.fillMaxSize().background(color.copy(alpha = if (button.style.backgroundImage == null) 0f else .38f)))
-                        Text(button.text, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 10.dp), color = textColor)
+                    if (state.isVideo && player != null) {
+                        AndroidView(
+                            factory = { context -> PlayerView(context).apply { useController = false; this.player = player } },
+                            update = { view ->
+                                view.player = player
+                                view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Crossfade(state.visualUri, animationSpec = tween(state.imageTransitionMs), label = "artwork") { uri ->
+                            Artwork(uri, Modifier.fillMaxSize(), fallback = true, blurredCover = true)
+                        }
+                    }
+                    BoxWithConstraints(Modifier.fillMaxSize()) {
+                        state.buttons.filter { it.visible }.forEach { button ->
+                            val color = parseColor(button.style.backgroundColor, MaterialTheme.colorScheme.primary)
+                            val textColor = parseColor(button.style.textColor, Color.White)
+                            val borderColor = parseColor(button.style.borderColor, Color.Transparent)
+                            val shape = RoundedCornerShape((button.style.borderRadius ?: 18f).dp)
+                            Surface(
+                                onClick = { onButton(button.id) },
+                                shape = shape,
+                                color = color.copy(alpha = button.style.opacity ?: .94f),
+                                contentColor = textColor,
+                                border = androidx.compose.foundation.BorderStroke((button.style.borderWidth ?: 0f).dp, borderColor),
+                                modifier = Modifier
+                                    .offset(maxWidth * button.layout.x, maxHeight * button.layout.y)
+                                    .size(maxWidth * button.layout.width, maxHeight * button.layout.height),
+                            ) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    button.style.backgroundImage?.let { Artwork(it, Modifier.fillMaxSize(), fallback = false) }
+                                    Box(Modifier.fillMaxSize().background(color.copy(alpha = if (button.style.backgroundImage == null) 0f else .38f)))
+                                    Text(button.text, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 10.dp), color = textColor)
+                                }
+                            }
+                        }
                     }
                 }
+
+                Spacer(Modifier.height(artworkToMetadata))
+
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (state.controls.showSceneName) state.sceneName.ifBlank { HiddenTextPlaceholder } else HiddenTextPlaceholder,
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            if (state.controls.showFileName) state.fileName.ifBlank { HiddenTextPlaceholder } else HiddenTextPlaceholder,
+                            color = Color.White.copy(alpha = .62f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    IconButton(
+                        onClick = onToggleFavorite,
+                        enabled = state.graphRef != null,
+                        modifier = Modifier
+                            .padding(start = 10.dp)
+                            .size(52.dp)
+                            .background(Color.White.copy(alpha = .08f), RoundedCornerShape(16.dp)),
+                    ) {
+                        Icon(
+                            if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            if (favorite) "お気に入りから削除" else "お気に入りに追加",
+                            tint = when {
+                                state.graphRef == null -> Color.White.copy(alpha = .24f)
+                                favorite -> MaterialTheme.colorScheme.primary
+                                else -> Color.White.copy(alpha = .9f)
+                            },
+                        )
+                    }
+                    IconButton(
+                        onClick = {},
+                        enabled = false,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .size(52.dp)
+                            .background(Color.White.copy(alpha = .08f), RoundedCornerShape(16.dp)),
+                    ) {
+                        Icon(Icons.Default.BarChart, "再生統計（準備中）", tint = Color.White.copy(alpha = .24f))
+                    }
+                }
+
+                Spacer(Modifier.height(metadataToProgress))
+                PlayerProgress(state, onSeek)
+                Spacer(Modifier.height(progressToTransport))
+                PlayerTransportControls(state, onToggle, onNext, onPrevious, compactHeight)
+                Spacer(Modifier.weight(1f))
+                PlayerBottomActions(
+                    showInfo = { showInfo = true },
+                    showTheme = onTheme,
+                    showLyrics = {},
+                    lyricsAvailable = false,
+                )
+                Spacer(Modifier.height(if (compactHeight) 4.dp else 8.dp))
             }
         }
-
-        Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            FilledIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") }
-            Spacer(Modifier.weight(1f))
-            if (state.controls.allowStop) IconButton(onClick = onStop) { Icon(Icons.Default.Close, "再生を停止", tint = Color.White) }
-        }
-
-        PlayerControls(state, onToggle, onSeek, onNext, onPrevious, { showInfo = true }, Modifier.align(Alignment.BottomCenter))
 
         if (state.status == PlaybackStatus.LOADING) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
         if (state.status == PlaybackStatus.ERROR) {
@@ -925,51 +1129,190 @@ private fun PlayerScreen(
 }
 
 @Composable
-private fun PlayerControls(
+private fun PlayerProgress(
     state: PlaybackUiState,
-    toggle: () -> Unit,
     seek: (Long) -> Unit,
-    next: () -> Unit,
-    previous: () -> Unit,
-    showInfo: () -> Unit,
-    modifier: Modifier,
 ) {
     var dragging by remember { mutableStateOf<Float?>(null) }
     val duration = state.durationMs.coerceAtLeast(1)
     val progress = dragging ?: (state.positionMs.toFloat() / duration).coerceIn(0f, 1f)
-    Surface(modifier.fillMaxWidth(), color = Color.Black.copy(alpha = .64f)) {
-        Column(Modifier.navigationBarsPadding().padding(horizontal = 20.dp, vertical = 14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(state.title, Modifier.weight(1f), color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                IconButton(onClick = showInfo, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Info, "作品情報", tint = Color.White.copy(alpha = .82f)) }
-            }
-            if (state.status == PlaybackStatus.COMPLETED) {
-                Text("再生完了", color = Color.White.copy(alpha = .7f), style = MaterialTheme.typography.bodySmall)
-            } else {
-                if (state.controls.showSceneName && state.sceneName.isNotBlank()) Text(state.sceneName, color = Color.White.copy(alpha = .78f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (state.controls.showFileName && state.fileName.isNotBlank()) Text(state.fileName, color = Color.White.copy(alpha = .58f), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            if (state.controls.showSeekBar) Slider(
+    Column(Modifier.fillMaxWidth()) {
+        if (state.controls.showSeekBar) {
+            Slider(
                 value = progress,
                 onValueChange = { dragging = it },
                 onValueChangeFinished = { dragging?.let { seek((it * duration).roundToLong()) }; dragging = null },
                 enabled = state.controls.allowSeek && state.durationMs > 0,
+                modifier = Modifier.fillMaxWidth().height(38.dp),
             )
-            if (state.controls.showPlaybackTime) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatDuration((progress * duration).roundToLong()), color = Color.White.copy(alpha = .7f), style = MaterialTheme.typography.labelSmall)
-                Text(formatDuration(state.durationMs), color = Color.White.copy(alpha = .7f), style = MaterialTheme.typography.labelSmall)
+        } else {
+            PlaybackWaveform(active = state.isPlaying)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                if (state.controls.showPlaybackTime) formatDuration((progress * duration).roundToLong()) else HiddenTimePlaceholder,
+                color = Color.White.copy(alpha = .68f),
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Text(
+                if (state.controls.showPlaybackTime) formatDuration(state.durationMs) else HiddenTimePlaceholder,
+                color = Color.White.copy(alpha = .68f),
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayerTransportControls(
+    state: PlaybackUiState,
+    toggle: () -> Unit,
+    next: () -> Unit,
+    previous: () -> Unit,
+    compact: Boolean,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
+        val previousEnabled = state.controls.allowPrevious && state.canPrevious
+        IconButton(
+            onClick = previous,
+            enabled = previousEnabled,
+            modifier = Modifier
+                .size(if (compact) 50.dp else 54.dp)
+                .background(Color.White.copy(alpha = .08f), RoundedCornerShape(18.dp)),
+        ) {
+            Icon(Icons.Default.SkipPrevious, "前のシーン", tint = Color.White.copy(alpha = if (previousEnabled) .9f else .24f))
+        }
+        FilledIconButton(
+            onClick = toggle,
+            modifier = Modifier.size(if (compact) 68.dp else 72.dp),
+            enabled = state.status != PlaybackStatus.LOADING,
+        ) {
+            Icon(
+                if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                if (state.isPlaying) "一時停止" else "再生",
+                Modifier.size(if (compact) 34.dp else 36.dp),
+            )
+        }
+        val nextEnabled = state.controls.allowNext && state.canNext
+        IconButton(
+            onClick = next,
+            enabled = nextEnabled,
+            modifier = Modifier
+                .size(if (compact) 50.dp else 54.dp)
+                .background(Color.White.copy(alpha = .08f), RoundedCornerShape(18.dp)),
+        ) {
+            Icon(Icons.Default.SkipNext, "次のシーン", tint = Color.White.copy(alpha = if (nextEnabled) .9f else .24f))
+        }
+    }
+}
+
+@Composable
+private fun PlayerBottomActions(
+    showInfo: () -> Unit,
+    showTheme: () -> Unit,
+    showLyrics: () -> Unit,
+    lyricsAvailable: Boolean,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PlayerBottomActionPill(
+            modifier = Modifier.weight(1f),
+            icon = Icons.Default.Info,
+            label = "情報",
+            enabled = true,
+            onClick = showInfo,
+        )
+        Surface(
+            onClick = showTheme,
+            shape = CircleShape,
+            color = Color.White.copy(alpha = .09f),
+            contentColor = Color.White,
+            modifier = Modifier.size(48.dp),
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Palette, "テーマ", Modifier.size(22.dp))
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                    if (state.controls.allowPrevious) IconButton(onClick = previous, enabled = state.canPrevious) { Icon(Icons.Default.SkipPrevious, "前のシーン", tint = Color.White.copy(alpha = if (state.canPrevious) 1f else .35f)) }
-                }
-                FilledIconButton(onClick = toggle, modifier = Modifier.size(58.dp), enabled = state.status != PlaybackStatus.LOADING) {
-                    Icon(if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, if (state.isPlaying) "一時停止" else "再生", Modifier.size(30.dp))
-                }
-                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                    if (state.controls.allowNext) IconButton(onClick = next, enabled = state.canNext) { Icon(Icons.Default.SkipNext, "次のシーン", tint = Color.White.copy(alpha = if (state.canNext) 1f else .35f)) }
-                }
-            }
+        }
+        PlayerBottomActionPill(
+            modifier = Modifier.weight(1f),
+            icon = Icons.Default.Lyrics,
+            label = "歌詞",
+            enabled = lyricsAvailable,
+            onClick = showLyrics,
+        )
+    }
+}
+
+@Composable
+private fun PlayerBottomActionPill(
+    modifier: Modifier,
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(16.dp),
+        color = Color.White.copy(alpha = if (enabled) .09f else .04f),
+        contentColor = Color.White.copy(alpha = if (enabled) .92f else .24f),
+        modifier = modifier.height(48.dp),
+    ) {
+        Row(
+            Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, null, Modifier.size(22.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(label, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun PlaybackWaveform(active: Boolean) {
+    val transition = rememberInfiniteTransition(label = "playback waveform")
+    val activeColor = MaterialTheme.colorScheme.primary
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = (PI * 48).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(18_000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "playback waveform phase",
+    )
+    Canvas(Modifier.fillMaxWidth().height(40.dp)) {
+        val bars = 32
+        val step = size.width / bars
+        val stroke = minOf(step * .32f, 4.dp.toPx())
+        val runningPhase = if (active) phase else 0f
+        repeat(bars) { index ->
+            val position = index.toFloat() / bars
+            val seed = ((index * 37) % 17) / 16f
+            val speed = .75f + ((index * 7) % 3) * .25f
+            val phaseOffset = ((index * 13) % 31) / 31f * (PI * 2).toFloat()
+            val primary = (sin(runningPhase * speed + phaseOffset) + 1f) * .5f
+            val secondary = (
+                sin(runningPhase * .5f + phaseOffset * .7f + position * PI.toFloat() * 5f) + 1f
+            ) * .5f
+            val pulse = if (active) primary * .62f + secondary * .38f else primary * .35f + secondary * .25f
+            val height = size.height * (.14f + pulse * (.42f + seed * .28f)).coerceIn(.14f, .94f)
+            val drift = if (active) sin(runningPhase * .5f + phaseOffset) * size.height * .045f else 0f
+            val centerY = size.height / 2f + drift
+            val x = step * (index + .5f)
+            drawLine(
+                color = if (active) activeColor.copy(alpha = .58f + seed * .38f) else Color.White.copy(alpha = .24f + seed * .14f),
+                start = Offset(x, centerY - height / 2f),
+                end = Offset(x, centerY + height / 2f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round,
+            )
         }
     }
 }
@@ -980,7 +1323,7 @@ private fun ContentInfoDialog(state: PlaybackUiState, close: () -> Unit) {
     AlertDialog(
         onDismissRequest = close,
         icon = { Icon(Icons.Default.Info, null) },
-        title = { Text(state.title) },
+        title = { Text(state.title.ifBlank { HiddenTextPlaceholder }) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 state.author?.let { Text(it, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold) }
@@ -1170,13 +1513,19 @@ private fun SettingsScreen(
             }
             item {
                 SettingGroup("プレイヤーコントロール") {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("すべて表示・許可", fontWeight = FontWeight.SemiBold)
-                            Text("作品側の表示・操作制限を一時的に無視します", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(checked = settings.forceShowPlayerControls, onCheckedChange = { enabled -> update { it.copy(forceShowPlayerControls = enabled) } })
-                    }
+                    SettingSwitchRow(
+                        title = "すべて表示・許可",
+                        description = "作品側の表示・操作制限を一時的に無視します",
+                        checked = settings.forceShowPlayerControls,
+                        onCheckedChange = { enabled -> update { it.copy(forceShowPlayerControls = enabled) } },
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    SettingSwitchRow(
+                        title = "画面を消灯しない",
+                        description = "再生画面を表示している間、画面を点灯したままにします",
+                        checked = settings.keepScreenOnInPlayer,
+                        onCheckedChange = { enabled -> update { it.copy(keepScreenOnInPlayer = enabled) } },
+                    )
                 }
             }
             item {
@@ -1191,6 +1540,29 @@ private fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingSwitchRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(
+            Modifier.weight(1f).padding(end = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
