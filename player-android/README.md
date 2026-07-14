@@ -11,11 +11,11 @@ mise install
 mise run playerBuild
 ```
 
-生成物は `player/app/build/outputs/apk/debug/app-debug.apk` です。接続端末へは次のコマンドで導入できます。
+生成物は `player-android/app/build/outputs/apk/debug/app-debug.apk` です。接続端末へは次のコマンドで導入できます。
 Rust Starlarkランタイムの制約により、APKの対象ABIは`arm64-v8a`と`x86_64`です。
 
 ```bash
-adb install -r player/app/build/outputs/apk/debug/app-debug.apk
+adb install -r player-android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 R8・リソース縮小とRustのrelease最適化を有効にしたリリースAPKは次のタスクで生成します。
@@ -24,13 +24,13 @@ R8・リソース縮小とRustのrelease最適化を有効にしたリリースA
 mise run playerReleaseBuild
 ```
 
-署名設定を与えていない場合の生成物は `player/app/build/outputs/apk/release/app-release-unsigned.apk` です。
+署名設定を与えていない場合の生成物は `player-android/app/build/outputs/apk/release/app-release-unsigned.apk` です。
 
 ## 確認
 
 ```bash
 mise run playerTest
-cd player
+cd player-android
 ./gradlew lintDebug assembleRelease
 ```
 

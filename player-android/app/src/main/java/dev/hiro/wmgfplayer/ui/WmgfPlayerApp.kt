@@ -49,6 +49,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.CircleShape
@@ -117,6 +118,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -200,6 +202,48 @@ private val accents = listOf(
 
 private const val HiddenTextPlaceholder = "???"
 private const val HiddenTimePlaceholder = "??:??"
+private val MaxGridContentWidth = 1_200.dp
+private val MaxListContentWidth = 900.dp
+private val MaxSettingsContentWidth = 720.dp
+private val MaxPortraitPlayerWidth = 560.dp
+
+internal fun adaptiveGridColumnCount(widthDp: Int): Int = when {
+    widthDp < 600 -> 2
+    widthDp < 840 -> 3
+    widthDp < 1_200 -> 4
+    else -> 5
+}
+
+internal fun isTwoPanePlayerLayout(widthDp: Int, heightDp: Int): Boolean = widthDp > heightDp
+
+@Composable
+private fun AdaptiveGrid(
+    modifier: Modifier = Modifier,
+    content: LazyGridScope.() -> Unit,
+) {
+    BoxWithConstraints(modifier, contentAlignment = Alignment.TopCenter) {
+        val gridWidth = maxWidth.coerceAtMost(MaxGridContentWidth)
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(adaptiveGridColumnCount(gridWidth.value.toInt())),
+            modifier = Modifier.fillMaxHeight().width(gridWidth),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun CenteredContent(
+    modifier: Modifier,
+    maxContentWidth: androidx.compose.ui.unit.Dp,
+    content: @Composable (Modifier) -> Unit,
+) {
+    BoxWithConstraints(modifier, contentAlignment = Alignment.TopCenter) {
+        content(Modifier.fillMaxHeight().width(maxWidth.coerceAtMost(maxContentWidth)))
+    }
+}
 
 @Composable
 fun WmgfPlayerApp(
@@ -216,26 +260,45 @@ fun WmgfPlayerApp(
     val favoriteIds by app.library.favoriteIds.collectAsStateWithLifecycle()
     val player by PlaybackRuntime.player.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    var destination by remember { mutableStateOf(Destination.LIBRARY) }
-    var showPlayer by remember { mutableStateOf(false) }
-    var showStats by remember { mutableStateOf(false) }
+    var destination by rememberSaveable { mutableStateOf(Destination.LIBRARY) }
+    var showPlayer by rememberSaveable { mutableStateOf(false) }
+    var showStats by rememberSaveable { mutableStateOf(false) }
     var browserRoot by remember { mutableStateOf<LibraryRoot?>(null) }
-    var browserInitialPath by remember { mutableStateOf<String?>(null) }
+    var browserRootUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var browserInitialPath by rememberSaveable { mutableStateOf<String?>(null) }
     var collection by remember { mutableStateOf<GraphCollection?>(null) }
+    var savedCollectionTitle by rememberSaveable { mutableStateOf<String?>(null) }
+    var savedCollectionGraphIds by rememberSaveable { mutableStateOf<ArrayList<String>?>(null) }
     var libraryRoots by remember { mutableStateOf<List<LibraryRoot>>(emptyList()) }
     var scanning by remember { mutableStateOf(true) }
     var validation by remember { mutableStateOf<Pair<GraphRef, List<ValidationIssue>>?>(null) }
     var validating by remember { mutableStateOf(false) }
     var scanVersion by remember { mutableStateOf(0) }
 
+    val activeBrowserRoot = browserRoot ?: browserRootUri?.let { uri ->
+        libraryRoots.firstOrNull { it.grant.uri == uri }
+            ?: roots.firstOrNull { it.uri == uri }?.let(::LibraryRoot)
+    }
+
+    fun updateCollection(value: GraphCollection?, graphIds: List<String>? = value?.graphs.orEmpty().map { it.ref.graphId }) {
+        collection = value
+        savedCollectionTitle = value?.title
+        savedCollectionGraphIds = value?.let { graphIds?.let { ids -> ArrayList(ids) } }
+    }
+
+    fun updateBrowserRoot(value: LibraryRoot?) {
+        browserRoot = value
+        browserRootUri = value?.grant?.uri
+    }
+
     BackHandler(enabled = showStats) { showStats = false }
     BackHandler(enabled = showPlayer && !showStats) { showPlayer = false }
-    BackHandler(enabled = !showPlayer && collection != null) { collection = null }
-    BackHandler(enabled = !showPlayer && browserRoot != null) {
-        browserRoot = null
+    BackHandler(enabled = !showPlayer && collection != null) { updateCollection(null) }
+    BackHandler(enabled = !showPlayer && activeBrowserRoot != null) {
+        updateBrowserRoot(null)
         browserInitialPath = null
     }
-    BackHandler(enabled = !showPlayer && browserRoot == null && collection == null && destination != Destination.LIBRARY) {
+    BackHandler(enabled = !showPlayer && activeBrowserRoot == null && collection == null && destination != Destination.LIBRARY) {
         destination = Destination.LIBRARY
     }
 
@@ -264,6 +327,21 @@ fun WmgfPlayerApp(
         scanning = false
     }
 
+    LaunchedEffect(savedCollectionTitle, savedCollectionGraphIds) {
+        val title = savedCollectionTitle ?: return@LaunchedEffect
+        if (collection != null) return@LaunchedEffect
+        val graphIds = savedCollectionGraphIds ?: if (title == "再生した作品") {
+            app.history.readAll().map { it.graphId }.distinct()
+        } else {
+            emptyList()
+        }
+        savedCollectionGraphIds = ArrayList(graphIds)
+        val resolved = app.library.resolveGraphs(graphIds)
+        if (savedCollectionTitle == title && collection == null) {
+            collection = GraphCollection(title, resolved)
+        }
+    }
+
     val openGraph: (LibraryGraph) -> Unit = { item ->
         if (item.parseError == null) scope.launch {
             validating = true
@@ -284,11 +362,11 @@ fun WmgfPlayerApp(
     }
 
     val showResolvedCollection: (String, List<String>) -> Unit = { title, graphIds ->
-        collection = GraphCollection(title, loading = true)
+        updateCollection(GraphCollection(title, loading = true), graphIds)
         scope.launch {
             val resolved = app.library.resolveGraphs(graphIds)
             if (collection?.title == title && collection?.loading == true) {
-                collection = GraphCollection(title, resolved)
+                updateCollection(GraphCollection(title, resolved))
             }
         }
     }
@@ -324,8 +402,8 @@ fun WmgfPlayerApp(
                     onStats = { if (playback.hasPlaybackStats) showStats = true },
                     onTheme = {
                         showPlayer = false
-                        collection = null
-                        browserRoot = null
+                        updateCollection(null)
+                        updateBrowserRoot(null)
                         destination = Destination.SETTINGS
                     },
                     onButton = { PlaybackRuntime.pressButton(context, it) },
@@ -341,19 +419,19 @@ fun WmgfPlayerApp(
                             GraphCollectionScreen(
                                 collection = collection!!,
                                 favoriteIds = favoriteIds,
-                                onBack = { collection = null },
+                                onBack = { updateCollection(null) },
                                 openGraph = openGraph,
                                 toggleFavorite = app.library::toggleFavorite,
                             )
                         }
-                        browserRoot != null -> Box(Modifier.fillMaxSize().padding(padding)) {
+                        activeBrowserRoot != null -> Box(Modifier.fillMaxSize().padding(padding)) {
                             DirectoryBrowserScreen(
-                                root = browserRoot!!,
+                                root = activeBrowserRoot,
                                 initialPath = browserInitialPath,
                                 app = app,
                                 favoriteIds = favoriteIds,
                                 onBack = {
-                                    browserRoot = null
+                                    updateBrowserRoot(null)
                                     browserInitialPath = null
                                 },
                                 openGraph = openGraph,
@@ -370,9 +448,9 @@ fun WmgfPlayerApp(
                             browseRoot = { root ->
                                 browserInitialPath = null
                                 if (root.directory?.isContent == true) {
-                                    collection = GraphCollection(root.grant.name, root.directory.graphs)
+                                    updateCollection(GraphCollection(root.grant.name, root.directory.graphs))
                                 } else {
-                                    browserRoot = root
+                                    updateBrowserRoot(root)
                                 }
                             },
                             knownGraphs = knownGraphs,
@@ -380,27 +458,27 @@ fun WmgfPlayerApp(
                             openHistory = { destination = Destination.HISTORY },
                             openSettings = { destination = Destination.SETTINGS },
                             openPlayed = {
-                                collection = GraphCollection("再生した作品", loading = true)
+                                updateCollection(GraphCollection("再生した作品", loading = true), graphIds = null)
                                 scope.launch {
                                     val ids = app.history.readAll().map { it.graphId }.distinct()
                                     val graphs = app.library.resolveGraphs(ids)
                                     if (collection?.title == "再生した作品" && collection?.loading == true) {
-                                        collection = GraphCollection("再生した作品", graphs)
+                                        updateCollection(GraphCollection("再生した作品", graphs))
                                     }
                                 }
                             },
                             openRecent = {
-                                collection = GraphCollection(
+                                updateCollection(GraphCollection(
                                     "最近追加",
                                     knownGraphs.sortedByDescending(LibraryGraph::modifiedAt),
-                                )
+                                ))
                             },
                             openFavorites = {
                                 showResolvedCollection("最近のお気に入り", app.library.favoriteIdsByRecent())
                             },
                             shuffle = {
                                 knownGraphs.filter { it.parseError == null }.randomOrNull()?.let(openGraph)
-                                    ?: run { collection = GraphCollection("シャッフル", emptyList()) }
+                                    ?: run { updateCollection(GraphCollection("シャッフル", emptyList())) }
                             },
                             openGraph = openGraph,
                             toggleFavorite = app.library::toggleFavorite,
@@ -414,9 +492,9 @@ fun WmgfPlayerApp(
                                 val root = libraryRoots.firstOrNull { it.grant.uri == graph.ref.rootUri }
                                     ?: LibraryRoot(RootGrant(graph.ref.rootUri, graph.ref.rootName))
                                 destination = Destination.LIBRARY
-                                collection = null
+                                updateCollection(null)
                                 browserInitialPath = graph.ref.parentPath
-                                browserRoot = root
+                                updateBrowserRoot(root)
                             },
                         )
                         else -> SettingsScreen(
@@ -527,8 +605,8 @@ private fun LibraryScreen(
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as WmgfApplication
-    var searching by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
+    var searching by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
     BackHandler(enabled = searching) {
         searching = false
         query = ""
@@ -578,13 +656,7 @@ private fun LibraryScreen(
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+            AdaptiveGrid(Modifier.fillMaxSize()) {
                 if (!searching) {
                     item(key = "quick-played") { QuickActionCard("再生した作品", Icons.Default.History, openPlayed) }
                     item(key = "quick-recent") { QuickActionCard("最近追加", Icons.Default.Update, openRecent) }
@@ -834,13 +906,7 @@ private fun GraphCollectionScreen(
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+            AdaptiveGrid(Modifier.fillMaxSize()) {
                 gridItems(collection.graphs, key = { it.ref.graphId }) { graph ->
                     GraphGridCard(graph, graph.ref.graphId in favoriteIds, openGraph, toggleFavorite)
                 }
@@ -867,25 +933,18 @@ private fun DirectoryBrowserScreen(
     openGraph: (LibraryGraph) -> Unit,
     toggleFavorite: (String) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-    var directories by remember(root.grant.uri, initialPath) { mutableStateOf<List<LibraryDirectory>>(emptyList()) }
-    var loading by remember(root.grant.uri, initialPath) { mutableStateOf(true) }
-    var error by remember(root.grant.uri, initialPath) { mutableStateOf(root.error) }
+    var currentPath by rememberSaveable(root.grant.uri, initialPath) { mutableStateOf(initialPath.orEmpty()) }
+    var directories by remember(root.grant.uri) { mutableStateOf<List<LibraryDirectory>>(emptyList()) }
+    var loading by remember(root.grant.uri) { mutableStateOf(true) }
+    var error by remember(root.grant.uri) { mutableStateOf(root.error) }
     val current = directories.lastOrNull()
 
     fun load(path: String) {
         if (loading) return
-        loading = true
-        error = null
-        scope.launch {
-            runCatching { app.library.inspectDirectory(root.grant, path) }
-                .onSuccess { directory -> directories = directories + directory }
-                .onFailure { error = it.message ?: "フォルダを読み込めません" }
-            loading = false
-        }
+        currentPath = path
     }
 
-    LaunchedEffect(root.grant.uri, initialPath) {
+    LaunchedEffect(root.grant.uri, currentPath) {
         if (root.error != null) {
             loading = false
             return@LaunchedEffect
@@ -893,7 +952,7 @@ private fun DirectoryBrowserScreen(
         loading = true
         error = null
         runCatching {
-            directoryPathChain(initialPath.orEmpty()).map { path ->
+            directoryPathChain(currentPath).map { path ->
                 if (path.isEmpty()) root.directory ?: app.library.inspectDirectory(root.grant, path)
                 else app.library.inspectDirectory(root.grant, path)
             }
@@ -902,7 +961,7 @@ private fun DirectoryBrowserScreen(
         loading = false
     }
     fun goBack() {
-        if (directories.size > 1) directories = directories.dropLast(1) else onBack()
+        if (currentPath.isNotEmpty()) currentPath = currentPath.substringBeforeLast('/', "") else onBack()
     }
     BackHandler { goBack() }
 
@@ -917,13 +976,7 @@ private fun DirectoryBrowserScreen(
         Box(Modifier.fillMaxSize().padding(padding)) {
             val directory = current
             if (directory != null) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
+                AdaptiveGrid(Modifier.fillMaxSize()) {
                     if (directory.isContent) {
                         gridItems(directory.graphs, key = { it.ref.graphId }) { graph ->
                             GraphGridCard(graph, graph.ref.graphId in favoriteIds, openGraph, toggleFavorite)
@@ -1015,160 +1068,36 @@ private fun PlayerScreen(
             },
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            val compactHeight = maxHeight < 760.dp
-            val veryCompactHeight = maxHeight < 700.dp
-            val horizontalPadding = if (maxWidth < 380.dp) 16.dp else 20.dp
-            val minimumArtwork = when {
-                veryCompactHeight -> 180.dp
-                compactHeight -> 210.dp
-                else -> 236.dp
-            }
-            val artworkHeightLimit = maxHeight * when {
-                veryCompactHeight -> .29f
-                compactHeight -> .33f
-                else -> .36f
-            }
-            val artworkSize = (maxWidth - horizontalPadding * 2)
-                .coerceAtMost(artworkHeightLimit)
-                .coerceAtMost(420.dp)
-                .coerceAtLeast(minimumArtwork)
-            val headerToArtwork = when {
-                veryCompactHeight -> 12.dp
-                compactHeight -> 18.dp
-                else -> 24.dp
-            }
-            val artworkToMetadata = when {
-                veryCompactHeight -> 12.dp
-                compactHeight -> 18.dp
-                else -> 22.dp
-            }
-            val metadataToProgress = when {
-                veryCompactHeight -> 6.dp
-                compactHeight -> 10.dp
-                else -> 14.dp
-            }
-            val progressToTransport = when {
-                veryCompactHeight -> 8.dp
-                compactHeight -> 14.dp
-                else -> 18.dp
-            }
-
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = horizontalPadding, vertical = if (compactHeight) 8.dp else 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    "再生中",
-                    color = Color.White.copy(alpha = .72f),
-                    style = MaterialTheme.typography.titleMedium,
+            if (isTwoPanePlayerLayout(maxWidth.value.toInt(), maxHeight.value.toInt())) {
+                PlayerLandscapeContent(
+                    state = state,
+                    player = player,
+                    favorite = favorite,
+                    onToggle = onToggle,
+                    onSeek = onSeek,
+                    onNext = onNext,
+                    onPrevious = onPrevious,
+                    onToggleFavorite = onToggleFavorite,
+                    onStats = onStats,
+                    onTheme = onTheme,
+                    onInfo = { showInfo = true },
+                    onButton = onButton,
                 )
-                Text(
-                    state.title.ifBlank { HiddenTextPlaceholder },
-                    color = Color.White,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            } else {
+                PlayerPortraitContent(
+                    state = state,
+                    player = player,
+                    favorite = favorite,
+                    onToggle = onToggle,
+                    onSeek = onSeek,
+                    onNext = onNext,
+                    onPrevious = onPrevious,
+                    onToggleFavorite = onToggleFavorite,
+                    onStats = onStats,
+                    onTheme = onTheme,
+                    onInfo = { showInfo = true },
+                    onButton = onButton,
                 )
-
-                Spacer(Modifier.height(headerToArtwork))
-
-                Box(
-                    Modifier
-                        .size(artworkSize)
-                        .clip(RoundedCornerShape(if (compactHeight) 22.dp else 28.dp))
-                        .background(Color.White.copy(alpha = .06f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (state.isVideo && player != null) {
-                        AndroidView(
-                            factory = { context -> PlayerView(context).apply { useController = false; this.player = player } },
-                            update = { view ->
-                                view.player = player
-                                view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            },
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
-                        Crossfade(state.visualUri, animationSpec = tween(state.imageTransitionMs), label = "artwork") { uri ->
-                            Artwork(uri, Modifier.fillMaxSize(), fallback = true, blurredCover = true)
-                        }
-                    }
-                    state.layoutSource?.let { source ->
-                        ButtonLayoutView(source, state.buttons, onButton, Modifier.fillMaxSize())
-                    }
-                }
-
-                Spacer(Modifier.height(artworkToMetadata))
-
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            if (state.controls.showSceneName) state.sceneName.ifBlank { HiddenTextPlaceholder } else HiddenTextPlaceholder,
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            if (state.controls.showFileName) state.fileName.ifBlank { HiddenTextPlaceholder } else HiddenTextPlaceholder,
-                            color = Color.White.copy(alpha = .62f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    IconButton(
-                        onClick = onToggleFavorite,
-                        enabled = state.graphRef != null,
-                        modifier = Modifier
-                            .padding(start = 10.dp)
-                            .size(52.dp)
-                            .background(Color.White.copy(alpha = .08f), RoundedCornerShape(16.dp)),
-                    ) {
-                        Icon(
-                            if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                            if (favorite) "お気に入りから削除" else "お気に入りに追加",
-                            tint = when {
-                                state.graphRef == null -> Color.White.copy(alpha = .24f)
-                                favorite -> MaterialTheme.colorScheme.primary
-                                else -> Color.White.copy(alpha = .9f)
-                            },
-                        )
-                    }
-                    IconButton(
-                        onClick = onStats,
-                        enabled = state.hasPlaybackStats,
-                        modifier = Modifier
-                            .padding(start = 8.dp)
-                            .size(52.dp)
-                            .background(Color.White.copy(alpha = .08f), RoundedCornerShape(16.dp)),
-                    ) {
-                        Icon(
-                            Icons.Default.BarChart,
-                            "再生統計",
-                            tint = Color.White.copy(alpha = if (state.hasPlaybackStats) .9f else .24f),
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(metadataToProgress))
-                PlayerProgress(state, onSeek)
-                Spacer(Modifier.height(progressToTransport))
-                PlayerTransportControls(state, onToggle, onNext, onPrevious, compactHeight)
-                Spacer(Modifier.weight(1f))
-                PlayerBottomActions(
-                    showInfo = { showInfo = true },
-                    showTheme = onTheme,
-                    showLyrics = {},
-                    lyricsAvailable = false,
-                )
-                Spacer(Modifier.height(if (compactHeight) 4.dp else 8.dp))
             }
         }
 
@@ -1184,6 +1113,276 @@ private fun PlayerScreen(
         }
     }
     if (showInfo) ContentInfoDialog(state = state, close = { showInfo = false })
+}
+
+@Composable
+private fun PlayerPortraitContent(
+    state: PlaybackUiState,
+    player: androidx.media3.common.Player?,
+    favorite: Boolean,
+    onToggle: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onStats: () -> Unit,
+    onTheme: () -> Unit,
+    onInfo: () -> Unit,
+    onButton: (String) -> Unit,
+) {
+    BoxWithConstraints(
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        val compactHeight = maxHeight < 760.dp
+        val veryCompactHeight = maxHeight < 700.dp
+        val horizontalPadding = if (maxWidth < 380.dp) 16.dp else 20.dp
+        val contentWidth = (maxWidth - horizontalPadding * 2).coerceAtMost(MaxPortraitPlayerWidth)
+        val minimumArtwork = when {
+            veryCompactHeight -> 180.dp
+            compactHeight -> 210.dp
+            else -> 236.dp
+        }.coerceAtMost(contentWidth)
+        val artworkHeightLimit = maxHeight * when {
+            veryCompactHeight -> .29f
+            compactHeight -> .33f
+            else -> .36f
+        }
+        val artworkSize = contentWidth
+            .coerceAtMost(artworkHeightLimit)
+            .coerceAtMost(420.dp)
+            .coerceAtLeast(minimumArtwork)
+        val headerToArtwork = when {
+            veryCompactHeight -> 12.dp
+            compactHeight -> 18.dp
+            else -> 24.dp
+        }
+        val artworkToMetadata = when {
+            veryCompactHeight -> 12.dp
+            compactHeight -> 18.dp
+            else -> 22.dp
+        }
+        val metadataToProgress = when {
+            veryCompactHeight -> 6.dp
+            compactHeight -> 10.dp
+            else -> 14.dp
+        }
+        val progressToTransport = when {
+            veryCompactHeight -> 8.dp
+            compactHeight -> 14.dp
+            else -> 18.dp
+        }
+
+        Column(
+            Modifier.width(contentWidth).fillMaxHeight().padding(vertical = if (compactHeight) 8.dp else 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            PlayerHeader(state, compact = false)
+            Spacer(Modifier.height(headerToArtwork))
+            PlayerArtwork(
+                state = state,
+                player = player,
+                onButton = onButton,
+                modifier = Modifier.size(artworkSize),
+                compact = compactHeight,
+            )
+            Spacer(Modifier.height(artworkToMetadata))
+            PlayerMetadataActions(state, favorite, onToggleFavorite, onStats, compact = false)
+            Spacer(Modifier.height(metadataToProgress))
+            PlayerProgress(state, onSeek)
+            Spacer(Modifier.height(progressToTransport))
+            PlayerTransportControls(state, onToggle, onNext, onPrevious, compactHeight)
+            Spacer(Modifier.weight(1f))
+            PlayerBottomActions(
+                showInfo = onInfo,
+                showTheme = onTheme,
+                showLyrics = {},
+                lyricsAvailable = false,
+            )
+            Spacer(Modifier.height(if (compactHeight) 4.dp else 8.dp))
+        }
+    }
+}
+
+@Composable
+private fun PlayerLandscapeContent(
+    state: PlaybackUiState,
+    player: androidx.media3.common.Player?,
+    favorite: Boolean,
+    onToggle: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onStats: () -> Unit,
+    onTheme: () -> Unit,
+    onInfo: () -> Unit,
+    onButton: (String) -> Unit,
+) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+    ) {
+        val compactHeight = maxHeight < 480.dp
+        val expandedWidth = maxWidth >= 840.dp
+        val paneGap = if (expandedWidth) 28.dp else 12.dp
+        Row(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = if (expandedWidth) 28.dp else 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(paneGap),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BoxWithConstraints(
+                Modifier.weight(1f).fillMaxHeight(),
+                contentAlignment = Alignment.Center,
+            ) {
+                val artworkSize = minOf(maxWidth, maxHeight, 520.dp)
+                PlayerArtwork(
+                    state = state,
+                    player = player,
+                    onButton = onButton,
+                    modifier = Modifier.size(artworkSize),
+                    compact = compactHeight,
+                )
+            }
+            Column(
+                Modifier.weight(1f).fillMaxHeight().padding(horizontal = if (expandedWidth) 20.dp else 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                PlayerHeader(state, compact = true)
+                Spacer(Modifier.height(if (compactHeight) 4.dp else 14.dp))
+                PlayerMetadataActions(state, favorite, onToggleFavorite, onStats, compact = true)
+                Spacer(Modifier.height(if (compactHeight) 2.dp else 12.dp))
+                PlayerProgress(state, onSeek)
+                Spacer(Modifier.height(if (compactHeight) 2.dp else 12.dp))
+                PlayerTransportControls(state, onToggle, onNext, onPrevious, compact = true)
+                Spacer(Modifier.weight(1f))
+                PlayerBottomActions(
+                    showInfo = onInfo,
+                    showTheme = onTheme,
+                    showLyrics = {},
+                    lyricsAvailable = false,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerHeader(state: PlaybackUiState, compact: Boolean) {
+    Text(
+        "再生中",
+        color = Color.White.copy(alpha = .72f),
+        style = if (compact) MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleMedium,
+    )
+    Text(
+        state.title.ifBlank { HiddenTextPlaceholder },
+        color = Color.White,
+        style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
+private fun PlayerArtwork(
+    state: PlaybackUiState,
+    player: androidx.media3.common.Player?,
+    onButton: (String) -> Unit,
+    modifier: Modifier,
+    compact: Boolean,
+) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(if (compact) 22.dp else 28.dp))
+            .background(Color.White.copy(alpha = .06f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (state.isVideo && player != null) {
+            AndroidView(
+                factory = { context -> PlayerView(context).apply { useController = false; this.player = player } },
+                update = { view ->
+                    view.player = player
+                    view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Crossfade(state.visualUri, animationSpec = tween(state.imageTransitionMs), label = "artwork") { uri ->
+                Artwork(uri, Modifier.fillMaxSize(), fallback = true, blurredCover = true)
+            }
+        }
+        state.layoutSource?.let { source ->
+            ButtonLayoutView(source, state.buttons, onButton, Modifier.fillMaxSize())
+        }
+    }
+}
+
+@Composable
+private fun PlayerMetadataActions(
+    state: PlaybackUiState,
+    favorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onStats: () -> Unit,
+    compact: Boolean,
+) {
+    val actionSize = if (compact) 44.dp else 52.dp
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (state.controls.showSceneName) state.sceneName.ifBlank { HiddenTextPlaceholder } else HiddenTextPlaceholder,
+                color = Color.White,
+                style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                if (state.controls.showFileName) state.fileName.ifBlank { HiddenTextPlaceholder } else HiddenTextPlaceholder,
+                color = Color.White.copy(alpha = .62f),
+                style = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        IconButton(
+            onClick = onToggleFavorite,
+            enabled = state.graphRef != null,
+            modifier = Modifier
+                .padding(start = if (compact) 6.dp else 10.dp)
+                .size(actionSize)
+                .background(Color.White.copy(alpha = .08f), RoundedCornerShape(if (compact) 14.dp else 16.dp)),
+        ) {
+            Icon(
+                if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                if (favorite) "お気に入りから削除" else "お気に入りに追加",
+                tint = when {
+                    state.graphRef == null -> Color.White.copy(alpha = .24f)
+                    favorite -> MaterialTheme.colorScheme.primary
+                    else -> Color.White.copy(alpha = .9f)
+                },
+            )
+        }
+        IconButton(
+            onClick = onStats,
+            enabled = state.hasPlaybackStats,
+            modifier = Modifier
+                .padding(start = if (compact) 6.dp else 8.dp)
+                .size(actionSize)
+                .background(Color.White.copy(alpha = .08f), RoundedCornerShape(if (compact) 14.dp else 16.dp)),
+        ) {
+            Icon(
+                Icons.Default.BarChart,
+                "再生統計",
+                tint = Color.White.copy(alpha = if (state.hasPlaybackStats) .9f else .24f),
+            )
+        }
+    }
 }
 
 @Composable
@@ -1462,53 +1661,58 @@ private fun PlaybackStatsScreen(
                         else right.session.startedAt.compareTo(left.session.startedAt).takeIf { it != 0 }
                             ?: left.session.runId.compareTo(right.session.runId)
                 }
-                LazyColumn(
-                    Modifier.fillMaxSize().padding(padding),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    item {
-                        Text(stats.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    }
-                    currentItem?.let { item ->
-                        item(key = "current:${item.session.runId}") {
-                            PlaybackStatsCard(ref, item, app, onShare = { share = it })
+                CenteredContent(
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                    maxContentWidth = MaxListContentWidth,
+                ) { listModifier ->
+                    LazyColumn(
+                        listModifier,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        item {
+                            Text(stats.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         }
-                    }
-                    item {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            StatsSummaryCard("再生回数", stats.aggregate.sessionCount.toString(), Modifier.weight(1f))
-                            StatsSummaryCard("累計再生", formatStatsDuration(stats.aggregate.activePlayMs), Modifier.weight(1f))
-                            StatsSummaryCard("最終再生", stats.aggregate.lastEndedAt?.let(::formatDate) ?: "—", Modifier.weight(1f))
-                        }
-                    }
-                    item {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            StatsSort.entries.forEach { option ->
-                                val label = when (option) { StatsSort.NEWEST -> "新しい順"; StatsSort.DEFAULT -> "デフォルト" }
-                                Surface(
-                                    onClick = { sort = option },
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = if (sort == option) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-                                    contentColor = if (sort == option) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f),
-                                ) { Text(label, Modifier.padding(horizontal = 8.dp, vertical = 10.dp), textAlign = TextAlign.Center, style = MaterialTheme.typography.labelMedium) }
+                        currentItem?.let { item ->
+                            item(key = "current:${item.session.runId}") {
+                                PlaybackStatsCard(ref, item, app, onShare = { share = it })
                             }
                         }
-                    }
-                    if (currentItem == null && ordered.isEmpty()) item {
-                        Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
-                            Text("統計対象の再生セッションはありません", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        item {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                StatsSummaryCard("再生回数", stats.aggregate.sessionCount.toString(), Modifier.weight(1f))
+                                StatsSummaryCard("累計再生", formatStatsDuration(stats.aggregate.activePlayMs), Modifier.weight(1f))
+                                StatsSummaryCard("最終再生", stats.aggregate.lastEndedAt?.let(::formatDate) ?: "—", Modifier.weight(1f))
+                            }
                         }
-                    }
-                    items(ordered, key = { it.session.runId }) { item ->
-                        PlaybackStatsCard(ref, item, app, onShare = { share = it })
-                    }
-                    item {
-                        OutlinedButton(onClick = openHistory, modifier = Modifier.fillMaxWidth()) {
-                            Icon(Icons.Default.History, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("再生履歴を見る")
+                        item {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                StatsSort.entries.forEach { option ->
+                                    val label = when (option) { StatsSort.NEWEST -> "新しい順"; StatsSort.DEFAULT -> "デフォルト" }
+                                    Surface(
+                                        onClick = { sort = option },
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (sort == option) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                                        contentColor = if (sort == option) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f),
+                                    ) { Text(label, Modifier.padding(horizontal = 8.dp, vertical = 10.dp), textAlign = TextAlign.Center, style = MaterialTheme.typography.labelMedium) }
+                                }
+                            }
+                        }
+                        if (currentItem == null && ordered.isEmpty()) item {
+                            Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
+                                Text("統計対象の再生セッションはありません", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        items(ordered, key = { it.session.runId }) { item ->
+                            PlaybackStatsCard(ref, item, app, onShare = { share = it })
+                        }
+                        item {
+                            OutlinedButton(onClick = openHistory, modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Default.History, null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("再生履歴を見る")
+                            }
                         }
                     }
                 }
@@ -1826,13 +2030,18 @@ private fun HistoryScreen(
             items.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Text("再生履歴はありません", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            else -> LazyColumn(
-                Modifier.fillMaxSize().padding(padding),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                items(items, key = { it.session.runId }) { item ->
-                    HistorySessionCard(item, app) { item.graph?.let(openInLibrary) }
+            else -> CenteredContent(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                maxContentWidth = MaxListContentWidth,
+            ) { listModifier ->
+                LazyColumn(
+                    listModifier,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(items, key = { it.session.runId }) { item ->
+                        HistorySessionCard(item, app) { item.graph?.let(openInLibrary) }
+                    }
                 }
             }
         }
@@ -1991,7 +2200,11 @@ private fun SettingsScreen(
             )
         },
     ) { padding ->
-        LazyColumn(Modifier.padding(padding), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(26.dp)) {
+        CenteredContent(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            maxContentWidth = MaxSettingsContentWidth,
+        ) { listModifier ->
+        LazyColumn(listModifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(26.dp)) {
             item {
                 SettingGroup("テーマ") {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1999,7 +2212,7 @@ private fun SettingsScreen(
                             val selected = settings.themeMode == mode
                             Surface(
                                 onClick = { update { it.copy(themeMode = mode) } },
-                                modifier = Modifier.weight(1f).aspectRatio(1.05f),
+                                modifier = Modifier.weight(1f).height(112.dp),
                                 shape = RoundedCornerShape(18.dp),
                                 color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
                                 border = androidx.compose.foundation.BorderStroke(
@@ -2071,6 +2284,7 @@ private fun SettingsScreen(
                     )
                 }
             }
+        }
         }
     }
 }

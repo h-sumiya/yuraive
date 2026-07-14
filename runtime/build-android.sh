@@ -3,7 +3,7 @@ set -euo pipefail
 
 crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_dir="$(cd "$crate_dir/.." && pwd)"
-player_dir="$project_dir/player"
+player_dir="$project_dir/player-android"
 output_dir="${1:-$player_dir/app/build/generated/rustJniLibs}"
 
 sdk_dir="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"

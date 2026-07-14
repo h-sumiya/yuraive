@@ -32,6 +32,22 @@ class WmgfPlayerAppTest {
         assertEquals(listOf("", "category", "category/work"), directoryPathChain("category/work"))
     }
 
+    @Test
+    fun adaptiveGridAddsColumnsAtTabletBreakpoints() {
+        assertEquals(2, adaptiveGridColumnCount(411))
+        assertEquals(3, adaptiveGridColumnCount(600))
+        assertEquals(4, adaptiveGridColumnCount(840))
+        assertEquals(5, adaptiveGridColumnCount(1_200))
+    }
+
+    @Test
+    fun playerUsesTwoPanesOnlyWhenTheViewportIsWide() {
+        assertFalse(isTwoPanePlayerLayout(widthDp = 411, heightDp = 891))
+        assertTrue(isTwoPanePlayerLayout(widthDp = 891, heightDp = 411))
+        assertFalse(isTwoPanePlayerLayout(widthDp = 800, heightDp = 1_280))
+        assertTrue(isTwoPanePlayerLayout(widthDp = 1_280, heightDp = 800))
+    }
+
     private fun historyEntry(
         id: String,
         runId: String,

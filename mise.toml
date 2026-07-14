@@ -8,16 +8,16 @@ gradle = "8.11.1"
 rust = "stable"
 
 [tasks.playerBuild]
-dir = "player"
+dir = "player-android"
 run = "gradle assembleDebug"
 
 [tasks.playerReleaseBuild]
 description = "Build the optimized Android release APK"
-dir = "player"
+dir = "player-android"
 run = "gradle assembleRelease"
 
 [tasks.playerTest]
-dir = "player"
+dir = "player-android"
 run = "gradle testDebugUnitTest"
 
 [tasks.validatorTest]
