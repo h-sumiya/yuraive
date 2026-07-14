@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/WmgfPlayer.Core/WmgfPlayer.Core.csproj" />
+  <Project Path="src/WmgfPlayer.App/WmgfPlayer.App.csproj" />
+  <Project Path="tests/WmgfPlayer.Core.Tests/WmgfPlayer.Core.Tests.csproj" />
+</Solution>

@@ -2,11 +2,6 @@
 dir = "editor"
 run = "npm run dev"
 
-[tools]
-node = "latest"
-gradle = "8.11.1"
-rust = "stable"
-
 [tasks.playerBuild]
 dir = "player-android"
 run = "gradle assembleDebug"
@@ -23,3 +18,20 @@ run = "gradle testDebugUnitTest"
 [tasks.validatorTest]
 dir = "runtime"
 run = "cargo test --locked"
+
+[tasks.windowsBuild]
+description = "Build the WinUI 3 desktop player and native runtime (x64)"
+run = "dotnet build player-windows/WmgfPlayer.Windows.slnx"
+
+[tasks.windowsTest]
+description = "Run the Windows player core/native integration tests"
+run = "dotnet test player-windows/tests/WmgfPlayer.Core.Tests/WmgfPlayer.Core.Tests.csproj -p:Platform=x64"
+
+[tasks.windowsRun]
+description = "Run the WinUI 3 desktop player (x64)"
+run = "dotnet run --project player-windows/src/WmgfPlayer.App/WmgfPlayer.App.csproj -p:Platform=x64"
+
+[tools]
+node = "latest"
+gradle = "8.11.1"
+rust = "stable"
