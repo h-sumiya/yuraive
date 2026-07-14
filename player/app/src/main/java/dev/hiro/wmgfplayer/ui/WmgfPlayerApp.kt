@@ -61,7 +61,6 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -114,7 +113,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -153,10 +151,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import dev.hiro.wmgfplayer.WmgfApplication
+import dev.hiro.wmgfplayer.data.LibraryDirectory
 import dev.hiro.wmgfplayer.data.LibraryFolder
 import dev.hiro.wmgfplayer.data.LibraryGraph
 import dev.hiro.wmgfplayer.data.LibraryRoot
 import dev.hiro.wmgfplayer.data.PlayerSettings
+import dev.hiro.wmgfplayer.data.RootGrant
 import dev.hiro.wmgfplayer.data.ThemeMode
 import dev.hiro.wmgfplayer.data.isContent
 import dev.hiro.wmgfplayer.data.previewGraph
@@ -220,6 +220,7 @@ fun WmgfPlayerApp(
     var showPlayer by remember { mutableStateOf(false) }
     var showStats by remember { mutableStateOf(false) }
     var browserRoot by remember { mutableStateOf<LibraryRoot?>(null) }
+    var browserInitialPath by remember { mutableStateOf<String?>(null) }
     var collection by remember { mutableStateOf<GraphCollection?>(null) }
     var libraryRoots by remember { mutableStateOf<List<LibraryRoot>>(emptyList()) }
     var scanning by remember { mutableStateOf(true) }
@@ -230,7 +231,10 @@ fun WmgfPlayerApp(
     BackHandler(enabled = showStats) { showStats = false }
     BackHandler(enabled = showPlayer && !showStats) { showPlayer = false }
     BackHandler(enabled = !showPlayer && collection != null) { collection = null }
-    BackHandler(enabled = !showPlayer && browserRoot != null) { browserRoot = null }
+    BackHandler(enabled = !showPlayer && browserRoot != null) {
+        browserRoot = null
+        browserInitialPath = null
+    }
     BackHandler(enabled = !showPlayer && browserRoot == null && collection == null && destination != Destination.LIBRARY) {
         destination = Destination.LIBRARY
     }
@@ -345,9 +349,13 @@ fun WmgfPlayerApp(
                         browserRoot != null -> Box(Modifier.fillMaxSize().padding(padding)) {
                             DirectoryBrowserScreen(
                                 root = browserRoot!!,
+                                initialPath = browserInitialPath,
                                 app = app,
                                 favoriteIds = favoriteIds,
-                                onBack = { browserRoot = null },
+                                onBack = {
+                                    browserRoot = null
+                                    browserInitialPath = null
+                                },
                                 openGraph = openGraph,
                                 toggleFavorite = app.library::toggleFavorite,
                             )
@@ -360,6 +368,7 @@ fun WmgfPlayerApp(
                             refresh = { scanVersion++ },
                             removeRoot = { app.library.removeRoot(it) },
                             browseRoot = { root ->
+                                browserInitialPath = null
                                 if (root.directory?.isContent == true) {
                                     collection = GraphCollection(root.grant.name, root.directory.graphs)
                                 } else {
@@ -401,6 +410,14 @@ fun WmgfPlayerApp(
                             app = app,
                             export = exportHistory,
                             onBack = { destination = Destination.LIBRARY },
+                            openInLibrary = { graph ->
+                                val root = libraryRoots.firstOrNull { it.grant.uri == graph.ref.rootUri }
+                                    ?: LibraryRoot(RootGrant(graph.ref.rootUri, graph.ref.rootName))
+                                destination = Destination.LIBRARY
+                                collection = null
+                                browserInitialPath = graph.ref.parentPath
+                                browserRoot = root
+                            },
                         )
                         else -> SettingsScreen(
                             modifier = Modifier.padding(padding),
@@ -569,7 +586,7 @@ private fun LibraryScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (!searching) {
-                    item(key = "quick-played") { QuickActionCard("履歴", Icons.Default.History, openPlayed) }
+                    item(key = "quick-played") { QuickActionCard("再生した作品", Icons.Default.History, openPlayed) }
                     item(key = "quick-recent") { QuickActionCard("最近追加", Icons.Default.Update, openRecent) }
                     item(key = "quick-favorite") { QuickActionCard("最近のお気に入り", Icons.Default.Favorite, openFavorites) }
                     item(key = "quick-shuffle") { QuickActionCard("シャッフル", Icons.Default.Shuffle, shuffle) }
@@ -843,6 +860,7 @@ private fun GraphCollectionScreen(
 @Composable
 private fun DirectoryBrowserScreen(
     root: LibraryRoot,
+    initialPath: String?,
     app: WmgfApplication,
     favoriteIds: Set<String>,
     onBack: () -> Unit,
@@ -850,30 +868,38 @@ private fun DirectoryBrowserScreen(
     toggleFavorite: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var directories by remember(root.grant.uri) { mutableStateOf(root.directory?.let(::listOf).orEmpty()) }
-    var loading by remember(root.grant.uri) { mutableStateOf(root.directory == null) }
-    var error by remember(root.grant.uri) { mutableStateOf(root.error) }
+    var directories by remember(root.grant.uri, initialPath) { mutableStateOf<List<LibraryDirectory>>(emptyList()) }
+    var loading by remember(root.grant.uri, initialPath) { mutableStateOf(true) }
+    var error by remember(root.grant.uri, initialPath) { mutableStateOf(root.error) }
     val current = directories.lastOrNull()
 
-    fun load(path: String, replace: Boolean = false) {
+    fun load(path: String) {
         if (loading) return
         loading = true
         error = null
         scope.launch {
             runCatching { app.library.inspectDirectory(root.grant, path) }
-                .onSuccess { directory ->
-                    directories = if (replace) listOf(directory) else directories + directory
-                }
+                .onSuccess { directory -> directories = directories + directory }
                 .onFailure { error = it.message ?: "フォルダを読み込めません" }
             loading = false
         }
     }
 
-    LaunchedEffect(root.grant.uri) {
-        if (directories.isEmpty()) {
+    LaunchedEffect(root.grant.uri, initialPath) {
+        if (root.error != null) {
             loading = false
-            load("", replace = true)
+            return@LaunchedEffect
         }
+        loading = true
+        error = null
+        runCatching {
+            directoryPathChain(initialPath.orEmpty()).map { path ->
+                if (path.isEmpty()) root.directory ?: app.library.inspectDirectory(root.grant, path)
+                else app.library.inspectDirectory(root.grant, path)
+            }
+        }.onSuccess { directories = it }
+            .onFailure { error = it.message ?: "フォルダを読み込めません" }
+        loading = false
     }
     fun goBack() {
         if (directories.size > 1) directories = directories.dropLast(1) else onBack()
@@ -921,6 +947,14 @@ private fun DirectoryBrowserScreen(
                 ) { Text(message, Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onErrorContainer) }
             }
         }
+    }
+}
+
+internal fun directoryPathChain(relativePath: String): List<String> {
+    val segments = relativePath.split('/').filter(String::isNotEmpty)
+    return buildList {
+        add("")
+        segments.indices.forEach { index -> add(segments.take(index + 1).joinToString("/")) }
     }
 }
 
@@ -1763,17 +1797,32 @@ private fun formatStatsDuration(value: Long): String {
 }
 
 @Composable
-private fun HistoryScreen(modifier: Modifier, app: WmgfApplication, export: () -> Unit, onBack: () -> Unit) {
+private fun HistoryScreen(
+    modifier: Modifier,
+    app: WmgfApplication,
+    export: () -> Unit,
+    onBack: () -> Unit,
+    openInLibrary: (LibraryGraph) -> Unit,
+) {
     val scope = rememberCoroutineScope()
-    var entries by remember { mutableStateOf<List<PlaybackHistoryEntry>>(emptyList()) }
-    val expandedSessions = remember { mutableStateMapOf<String, Boolean>() }
+    var items by remember { mutableStateOf<List<HistoryListItem>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var loadError by remember { mutableStateOf<String?>(null) }
     var clearDialog by remember { mutableStateOf(false) }
     var version by remember { mutableStateOf(0) }
-    LaunchedEffect(version) { entries = app.history.readAll() }
-    val sessions = entries
-        .groupBy(PlaybackHistoryEntry::runId)
-        .map { (runId, sessionEntries) -> PlaybackSession(runId, sessionEntries.sortedBy { it.startedAt }) }
-        .sortedByDescending { it.endedAt }
+    LaunchedEffect(version) {
+        loading = true
+        loadError = null
+        runCatching {
+            val entries = app.history.readAll()
+            val sessions = withContext(Dispatchers.Default) { buildPlaybackSessions(entries) }
+            val graphs = app.library.resolveGraphs(sessions.map(PlaybackSession::graphId))
+                .associateBy { it.ref.graphId }
+            sessions.map { session -> HistoryListItem(session, graphs[session.graphId]) }
+        }.onSuccess { items = it }
+            .onFailure { loadError = it.message ?: "履歴を読み込めません" }
+        loading = false
+    }
     Scaffold(
         modifier = modifier,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -1782,20 +1831,30 @@ private fun HistoryScreen(modifier: Modifier, app: WmgfApplication, export: () -
                 title = { Text("履歴", fontWeight = FontWeight.Bold) },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") } },
                 actions = {
-                    IconButton(onClick = export, enabled = entries.isNotEmpty()) { Icon(Icons.Default.SaveAlt, "書き出し") }
-                    IconButton(onClick = { clearDialog = true }, enabled = entries.isNotEmpty()) { Icon(Icons.Default.DeleteOutline, "削除") }
+                    IconButton(onClick = export, enabled = items.isNotEmpty()) { Icon(Icons.Default.SaveAlt, "書き出し") }
+                    IconButton(onClick = { clearDialog = true }, enabled = items.isNotEmpty()) { Icon(Icons.Default.DeleteOutline, "削除") }
                 },
             )
         },
     ) { padding ->
-        if (entries.isEmpty()) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { Text("再生履歴はありません", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        else LazyColumn(Modifier.padding(padding), contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(sessions, key = PlaybackSession::runId) { session ->
-                HistorySessionCard(
-                    session = session,
-                    expanded = expandedSessions[session.runId] == true,
-                    toggle = { expandedSessions[session.runId] = expandedSessions[session.runId] != true },
-                )
+        when {
+            loading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            loadError != null -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text(loadError.orEmpty(), color = MaterialTheme.colorScheme.error)
+            }
+            items.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text("再生履歴はありません", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            else -> LazyColumn(
+                Modifier.fillMaxSize().padding(padding),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(items, key = { it.session.runId }) { item ->
+                    HistorySessionCard(item, app) { item.graph?.let(openInLibrary) }
+                }
             }
         }
     }
@@ -1808,54 +1867,125 @@ private fun HistoryScreen(modifier: Modifier, app: WmgfApplication, export: () -
     )
 }
 
-private data class PlaybackSession(
+internal data class PlaybackSession(
     val runId: String,
-    val entries: List<PlaybackHistoryEntry>,
-) {
-    val graphId: String get() = entries.first().graphId
-    val startedAt: String get() = entries.first().startedAt
-    val endedAt: String get() = entries.last().endedAt
-    val activePlayMs: Long get() = entries.sumOf(PlaybackHistoryEntry::activePlayMs)
-}
+    val graphId: String,
+    val startedAt: String,
+    val endedAt: String,
+    val activePlayMs: Long,
+    val completed: Boolean,
+)
+
+internal fun buildPlaybackSessions(entries: List<PlaybackHistoryEntry>): List<PlaybackSession> = entries
+    .groupBy(PlaybackHistoryEntry::runId)
+    .mapNotNull { (runId, sessionEntries) ->
+        val sorted = sessionEntries.sortedBy(PlaybackHistoryEntry::startedAt)
+        val first = sorted.firstOrNull() ?: return@mapNotNull null
+        val last = sorted.last()
+        PlaybackSession(
+            runId = runId,
+            graphId = first.graphId,
+            startedAt = first.startedAt,
+            endedAt = last.endedAt,
+            activePlayMs = sorted.sumOf(PlaybackHistoryEntry::activePlayMs),
+            completed = last.endReason == "completed",
+        )
+    }
+    .sortedByDescending(PlaybackSession::endedAt)
+
+private data class HistoryListItem(
+    val session: PlaybackSession,
+    val graph: LibraryGraph?,
+)
 
 @Composable
-private fun HistorySessionCard(session: PlaybackSession, expanded: Boolean, toggle: () -> Unit) {
-    Card(onClick = toggle, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(42.dp)) {
-                Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.History, null, tint = MaterialTheme.colorScheme.onSecondaryContainer) }
-            }
-            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(historyGraphName(session.graphId), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    "${formatDate(session.startedAt)} · ${session.entries.size}シーン",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+private fun HistorySessionCard(item: HistoryListItem, app: WmgfApplication, open: () -> Unit) {
+    val session = item.session
+    val graph = item.graph
+    val thumbnailUri = rememberThumbnailUri(graph, app)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = 120.dp)
+            .then(if (graph != null) Modifier.clickable(onClick = open) else Modifier),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (graph != null) {
+                Artwork(
+                    thumbnailUri,
+                    Modifier.size(96.dp).clip(RoundedCornerShape(14.dp)),
+                    fallback = true,
+                    blurredCover = true,
                 )
+            } else {
+                Surface(
+                    modifier = Modifier.size(96.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.WarningAmber, null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                }
             }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(formatDuration(session.activePlayMs), style = MaterialTheme.typography.labelLarge)
-                Text(endReasonLabel(session.entries.last().endReason), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.weight(1f).padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        graph?.displayName ?: historyGraphName(session.graphId),
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    HistoryCompletionBadge(session.completed)
+                }
+                Text(
+                    graph?.ref?.contentFolderName ?: "作品が削除されています",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (graph == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = if (graph == null) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Icon(Icons.Default.AccessTime, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        formatDate(session.startedAt),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("·", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "再生 ${formatDuration(session.activePlayMs)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (graph != null) {
+                        Spacer(Modifier.weight(1f))
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "ライブラリで開く", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
-            Icon(if (expanded) Icons.Default.ExpandMore else Icons.AutoMirrored.Filled.KeyboardArrowRight, if (expanded) "閉じる" else "詳細")
-        }
-        if (expanded) {
-            HorizontalDivider(Modifier.padding(horizontal = 14.dp))
-            session.entries.forEach { entry -> HistoryEntryRow(entry) }
         }
     }
 }
 
 @Composable
-private fun HistoryEntryRow(entry: PlaybackHistoryEntry) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(entry.mediaId, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(entry.nodeId + " · " + endReasonLabel(entry.endReason), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(formatDuration(entry.activePlayMs), style = MaterialTheme.typography.labelLarge)
-            Text(formatDate(entry.endedAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun HistoryCompletionBadge(completed: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (completed) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+        contentColor = if (completed) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            if (completed) Icon(Icons.Default.Check, null, Modifier.size(14.dp))
+            Text(if (completed) "完了" else "未完了", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -2058,15 +2188,6 @@ private fun formatDuration(value: Long): String {
 private fun formatDate(value: String): String = runCatching {
     DateTimeFormatter.ofPattern("M/d HH:mm").withZone(ZoneId.systemDefault()).format(Instant.parse(value))
 }.getOrDefault(value)
-
-private fun endReasonLabel(value: String) = when (value) {
-    "completed" -> "完了"
-    "button" -> "選択"
-    "stopped" -> "停止"
-    "restarted" -> "再スタート"
-    "error" -> "エラー"
-    else -> "中断"
-}
 
 private fun playerSecondaryLabel(state: PlaybackUiState): String = when {
     state.status == PlaybackStatus.COMPLETED -> "再生完了"
