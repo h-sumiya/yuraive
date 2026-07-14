@@ -519,6 +519,7 @@ class GraphPlaybackEngine(
             id = UUID.randomUUID().toString(),
             runId = runId,
             graphId = ref.graphId,
+            contentId = graph?.metadata?.contentId?.takeIf(String::isNotBlank),
             nodeId = nodeId,
             mediaId = media.id,
             source = media.source.video ?: media.source.audio,
@@ -599,6 +600,7 @@ class GraphPlaybackEngine(
                 fileName = (currentMedia?.source?.video ?: currentMedia?.source?.audio).orEmpty().substringAfterLast('/'),
                 nodeId = currentNodeId,
                 mediaId = currentMedia?.id,
+                sourcePath = currentMedia?.source?.video ?: currentMedia?.source?.audio,
                 positionMs = if (player.mediaItemCount > 0) currentPositionMs() else 0,
                 durationMs = player.duration.takeIf { player.mediaItemCount > 0 && it != C.TIME_UNSET && it >= 0 } ?: 0,
                 isPlaying = player.isPlaying,
@@ -608,6 +610,14 @@ class GraphPlaybackEngine(
                 imageTransitionMs = currentMedia?.source?.imageTransition?.durationMs?.coerceIn(0, 10_000)?.toInt() ?: 300,
                 buttons = visibleButtons(),
                 controls = controls,
+                contentId = metadata?.contentId?.takeIf(String::isNotBlank),
+                hasPlaybackStats = loadedGraph?.playbackStats != null,
+                runId = runId.takeIf(String::isNotBlank),
+                runStartedAt = runStartedAt.takeIf(String::isNotBlank),
+                currentStartedAt = currentStartedAt,
+                currentActivePlayMs = if (currentFinalized) 0 else activePlayNow(),
+                currentFinalized = currentFinalized,
+                historyEntryCount = history.size,
                 canNext = controls.allowNext && status != PlaybackStatus.COMPLETED && (node?.terminal == true || !node?.onEnd.isNullOrEmpty()),
                 canPrevious = controls.allowPrevious && previousCandidates.isNotEmpty(),
                 error = nonFatalError,
@@ -671,6 +681,10 @@ class GraphPlaybackEngine(
         activePlayStartedRealtime = current
     }
 
+    private fun activePlayNow(): Long = activePlayBaseMs + activePlayStartedRealtime?.let {
+        (SystemClock.elapsedRealtime() - it).coerceAtLeast(0)
+    }.let { it ?: 0L }
+
     private fun discardCurrent() {
         accumulateActiveTime()
         activePlayStartedRealtime = null
@@ -678,10 +692,12 @@ class GraphPlaybackEngine(
     }
 
     private fun resolvedControls(node: WmgNode? = graph?.nodes?.get(currentNodeId)): PlayerControlSettings {
-        if (app.settings.state.value.forceShowPlayerControls) return PlayerControlSettings.AllEnabled
         val loadedGraph = graph ?: return PlayerControlSettings.Default
         val controlId = node?.playerControl ?: loadedGraph.globalPlayerControl
-        return controlId?.let(loadedGraph.playerControls::get) ?: PlayerControlSettings.Default
+        val defined = controlId?.let(loadedGraph.playerControls::get) ?: PlayerControlSettings.Default
+        return if (app.settings.state.value.forceShowPlayerControls) {
+            PlayerControlSettings.AllEnabled.copy(accentColor = defined.accentColor)
+        } else defined
     }
 
     private fun currentPositionMs(): Long {

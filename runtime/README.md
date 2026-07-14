@@ -7,6 +7,8 @@ through WebAssembly to the editor.
 Android file existence checks stay in the Kotlin storage layer because they depend on
 the Storage Access Framework. JSON structure, graph transitions, node/button/control
 references, media constraints, social links, and safe relative paths are validated here.
+The runtime also provides the shared `random`, `randint`, `choice`, and `shuffled`
+Starlark built-ins used by both hosts.
 
 ```bash
 cargo test --manifest-path runtime/Cargo.toml --locked

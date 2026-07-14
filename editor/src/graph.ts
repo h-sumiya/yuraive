@@ -40,7 +40,9 @@ export const nextNodeColor = (nodes: Record<string, WmgNode>) => nextEditorColor
 export const nextButtonColor = (buttons: Record<string, WmgButton>) => nextEditorColor(buttons)
 export const nextPlayerControlColor = (controls: Record<string, PlayerControlSettings>) => nextEditorColor(controls)
 
-export const DEFAULT_PLAYER_CONTROLS: Omit<PlayerControlSettings, 'editor'> = {
+export type PlayerControlBooleanKey = Exclude<keyof PlayerControlSettings, 'accentColor' | 'editor'>
+
+export const DEFAULT_PLAYER_CONTROLS: Pick<PlayerControlSettings, PlayerControlBooleanKey> = {
   allowStop: true,
   showSeekBar: true,
   showPlaybackTime: true,
@@ -53,6 +55,7 @@ export const DEFAULT_PLAYER_CONTROLS: Omit<PlayerControlSettings, 'editor'> = {
 
 export const createGraph = (): WmgGraph => ({
   version: 1,
+  metadata: { contentId: crypto.randomUUID() },
   globalPlayerControl: 'default',
   nodes: {
     start: {
@@ -75,7 +78,7 @@ const normalizeMetadata = (value: unknown): WmgMetadata | undefined => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('metadataはオブジェクトで指定してください')
   const raw = value as Record<string, unknown>
   const metadata: WmgMetadata = {}
-  for (const key of ['displayName', 'description', 'author', 'thumbnail', 'createdAt', 'updatedAt'] as const) {
+  for (const key of ['contentId', 'displayName', 'description', 'author', 'thumbnail', 'createdAt', 'updatedAt'] as const) {
     if (raw[key] === undefined) continue
     if (typeof raw[key] !== 'string') throw new Error(`metadata.${key}は文字列で指定してください`)
     if (raw[key].trim()) metadata[key] = raw[key]
@@ -100,7 +103,7 @@ const normalizeMetadata = (value: unknown): WmgMetadata | undefined => {
 
 export const normalizeGraph = (value: unknown): WmgGraph => {
   if (!value || typeof value !== 'object') throw new Error('JSONのルートがオブジェクトではありません')
-  const raw = value as { version?: unknown; metadata?: unknown; nodes?: unknown; buttons?: unknown; playerControls?: unknown; globalPlayerControl?: unknown }
+  const raw = value as { version?: unknown; metadata?: unknown; nodes?: unknown; buttons?: unknown; playerControls?: unknown; globalPlayerControl?: unknown; playbackStats?: unknown }
   if (raw.version !== 1) throw new Error('対応しているWMGFバージョンは1です')
   if (!raw.nodes || typeof raw.nodes !== 'object' || Array.isArray(raw.nodes)) {
     throw new Error('nodesが見つかりません')
@@ -114,6 +117,14 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
     throw new Error('playerControlsはオブジェクトで指定してください')
   }
   if (raw.globalPlayerControl !== undefined && typeof raw.globalPlayerControl !== 'string') throw new Error('globalPlayerControlは文字列で指定してください')
+  let playbackStats: WmgGraph['playbackStats']
+  if (raw.playbackStats !== undefined) {
+    if (!raw.playbackStats || typeof raw.playbackStats !== 'object' || Array.isArray(raw.playbackStats)) throw new Error('playbackStatsはオブジェクトで指定してください')
+    const stats = raw.playbackStats as Record<string, unknown>
+    if (typeof stats.path !== 'string' || !stats.path.trim()) throw new Error('playbackStats.pathは必須です')
+    if (stats.function !== undefined && typeof stats.function !== 'string') throw new Error('playbackStats.functionは文字列で指定してください')
+    playbackStats = { path: stats.path, ...(typeof stats.function === 'string' && stats.function.trim() ? { function: stats.function } : {}) }
+  }
   const rawPlayerControls = (raw.playerControls ?? {}) as Record<string, unknown>
   const playerControls: Record<string, PlayerControlSettings> = {}
   const baseHue = Math.random() * 360
@@ -141,6 +152,8 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
       if (candidate !== undefined && typeof candidate !== 'boolean') throw new Error(`playerControls.${id}.${key}は真偽値で指定してください`)
       control[key] = candidate === undefined ? fallback : candidate
     }
+    if (rawControl.accentColor !== undefined && typeof rawControl.accentColor !== 'string') throw new Error(`playerControls.${id}.accentColorは文字列で指定してください`)
+    if (typeof rawControl.accentColor === 'string' && rawControl.accentColor.trim()) control.accentColor = rawControl.accentColor.trim()
     if (rawControl.editor !== undefined && (!rawControl.editor || typeof rawControl.editor !== 'object' || Array.isArray(rawControl.editor))) {
       throw new Error(`playerControls.${id}.editorはオブジェクトで指定してください`)
     }
@@ -154,7 +167,7 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
     playerControls[id] = control
   })
   const metadata = normalizeMetadata(raw.metadata)
-  return { version: 1, ...(metadata ? { metadata } : {}), nodes, buttons, playerControls, ...(raw.globalPlayerControl ? { globalPlayerControl: raw.globalPlayerControl } : {}) }
+  return { version: 1, ...(metadata ? { metadata } : {}), nodes, buttons, playerControls, ...(raw.globalPlayerControl ? { globalPlayerControl: raw.globalPlayerControl } : {}), ...(playbackStats ? { playbackStats } : {}) }
 }
 
 export const fileKind = (path: string): AssetEntry['kind'] => {
@@ -200,6 +213,7 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: Sc
     if (!link.label.trim()) issues.push({ severity: 'error', message: `metadata.socialLinks[${index}].labelは必須です` })
     if (!/^https?:\/\//i.test(link.url)) issues.push({ severity: 'error', message: `metadata.socialLinks[${index}].urlはhttp(s) URLで指定してください` })
   })
+  if (graph.metadata?.contentId !== undefined && !graph.metadata.contentId.trim()) issues.push({ severity: 'error', message: 'metadata.contentIdは空文字列にできません' })
   const entries = Object.entries(graph.nodes)
   const starts = entries.filter(([, node]) => node.start)
   if (starts.length !== 1) issues.push({ severity: 'error', message: `開始ノードは1件必要です（現在${starts.length}件）` })
@@ -217,6 +231,10 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: Sc
     issues.push({ severity: 'warning', message: `ファイルが見つかりません: ${thumbnail}` })
   }
   if (graph.globalPlayerControl && !playerControlIds.has(graph.globalPlayerControl)) issues.push({ severity: 'error', message: `グローバル再生設定「${graph.globalPlayerControl}」がありません` })
+  if (graph.playbackStats) {
+    if (!graph.playbackStats.path.toLowerCase().endsWith('.star')) issues.push({ severity: 'error', scriptPath: graph.playbackStats.path, message: 'playbackStats.pathは.starファイルを指定してください' })
+    else if (!scriptPaths.has(graph.playbackStats.path)) issues.push({ severity: 'error', scriptPath: graph.playbackStats.path, message: `再生統計スクリプトが見つかりません: ${graph.playbackStats.path}` })
+  }
 
   for (const [nodeId, node] of entries) {
     if (!nodeId.trim()) issues.push({ severity: 'error', nodeId, message: '空のノードIDは使用できません' })
@@ -274,14 +292,22 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: Sc
     else if (path && assets.length && !assetPaths.has(path)) issues.push({ severity: 'warning', buttonId, message: `ファイルが見つかりません: ${path}` })
   }
 
-  for (const [playerControlId] of playerControlEntries) {
+  for (const [playerControlId, control] of playerControlEntries) {
     if (!playerControlId.trim()) issues.push({ severity: 'error', playerControlId, message: '空の再生設定IDは使用できません' })
     const usedGlobally = graph.globalPlayerControl === playerControlId
     const usedByNode = entries.some(([, node]) => node.playerControl === playerControlId)
     if (!usedGlobally && !usedByNode) issues.push({ severity: 'warning', playerControlId, message: 'どこにも接続されていない再生設定です' })
+    if (control.accentColor && !isSafeAccentColor(control.accentColor)) issues.push({ severity: 'error', playerControlId, message: 'accentColorは白・黒に近すぎない#RRGGBB形式で指定してください' })
   }
 
   return issues
+}
+
+export const isSafeAccentColor = (color: string) => {
+  if (!/^#[0-9a-f]{6}$/i.test(color)) return false
+  const channels = [1, 3, 5].map((index) => Number.parseInt(color.slice(index, index + 2), 16) / 255).map((value) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
+  const luminance = .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2]
+  return luminance >= .08 && luminance <= .90
 }
 
 export const defaultMedia = (index: number): MediaCandidate => ({

@@ -78,11 +78,15 @@ struct Graph {
     player_controls: BTreeMap<String, PlayerControlSettings>,
     #[serde(default)]
     global_player_control: Option<String>,
+    #[serde(default)]
+    playback_stats: Option<ScriptCall>,
 }
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Metadata {
+    #[serde(default)]
+    content_id: Option<String>,
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
@@ -459,6 +463,8 @@ struct ButtonAppearance {
 #[serde(rename_all = "camelCase")]
 struct PlayerControlSettings {
     #[serde(default)]
+    accent_color: Option<String>,
+    #[serde(default)]
     allow_stop: Option<bool>,
     #[serde(default)]
     show_seek_bar: Option<bool>,
@@ -511,6 +517,15 @@ fn validate_graph(graph: &Graph) -> Vec<ValidationIssue> {
     }
 
     if let Some(metadata) = &graph.metadata {
+        if metadata
+            .content_id
+            .as_ref()
+            .is_some_and(|id| id.trim().is_empty())
+        {
+            issues.push(ValidationIssue::error(
+                "metadata.contentId は空文字列にできません",
+            ));
+        }
         for (index, link) in metadata.social_links.iter().enumerate() {
             if link.label.trim().is_empty() {
                 issues.push(ValidationIssue::error(format!(
@@ -523,6 +538,25 @@ fn validate_graph(graph: &Graph) -> Vec<ValidationIssue> {
                     "socialLinks[{index}]: http(s) URL を指定してください"
                 )));
             }
+        }
+    }
+
+    if let Some(stats) = &graph.playback_stats {
+        if stats.path.trim().is_empty() {
+            issues.push(ValidationIssue::error("playbackStats.path は必須です"));
+        } else if !stats.path.to_ascii_lowercase().ends_with(".star") {
+            issues.push(ValidationIssue::error(
+                "playbackStats.path は .star ファイルを指定してください",
+            ));
+        }
+        if stats
+            .function
+            .as_ref()
+            .is_some_and(|function| function.trim().is_empty())
+        {
+            issues.push(ValidationIssue::error(
+                "playbackStats.function は空文字列にできません",
+            ));
         }
     }
 
@@ -696,7 +730,7 @@ fn validate_graph(graph: &Graph) -> Vec<ValidationIssue> {
         }
     }
 
-    for id in graph.player_controls.keys() {
+    for (id, control) in &graph.player_controls {
         if id.trim().is_empty() {
             issues.push(ValidationIssue::error("空の再生設定 ID は使用できません"));
         }
@@ -709,6 +743,13 @@ fn validate_graph(graph: &Graph) -> Vec<ValidationIssue> {
             issues.push(ValidationIssue::warning(format!(
                 "{id}: どこにも接続されていない再生設定です"
             )));
+        }
+        if let Some(color) = &control.accent_color {
+            if !is_safe_accent_color(color) {
+                issues.push(ValidationIssue::error(format!(
+                    "{id}: accentColor は白・黒に近すぎない #RRGGBB 形式で指定してください"
+                )));
+            }
         }
     }
 
@@ -754,6 +795,9 @@ fn all_asset_paths(graph: &Graph) -> BTreeSet<String> {
     if let Some(metadata) = &graph.metadata {
         insert_optional(&mut paths, &metadata.thumbnail);
     }
+    if let Some(stats) = &graph.playback_stats {
+        paths.insert(stats.path.clone());
+    }
     for node in graph.nodes.values() {
         if let Some(script) = &node.script {
             paths.insert(script.path.clone());
@@ -774,6 +818,25 @@ fn all_asset_paths(graph: &Graph) -> BTreeSet<String> {
         }
     }
     paths
+}
+
+fn is_safe_accent_color(color: &str) -> bool {
+    let bytes = color.as_bytes();
+    if bytes.len() != 7 || bytes[0] != b'#' || !bytes[1..].iter().all(u8::is_ascii_hexdigit) {
+        return false;
+    }
+    let channel =
+        |index: usize| u8::from_str_radix(&color[index..index + 2], 16).unwrap() as f64 / 255.0;
+    let linear = |value: f64| {
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance =
+        0.2126 * linear(channel(1)) + 0.7152 * linear(channel(3)) + 0.0722 * linear(channel(5));
+    (0.08..=0.90).contains(&luminance)
 }
 
 fn insert_optional(paths: &mut BTreeSet<String>, path: &Option<String>) {
@@ -941,6 +1004,36 @@ mod tests {
         }"#,
         );
         assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn validates_playback_stats_and_safe_accent_colors() {
+        let valid = validate_json(
+            r##"{
+            "version":1,
+            "metadata":{"contentId":"com.example.rain"},
+            "playbackStats":{"path":"scripts/stats.star"},
+            "nodes":{"start":{"type":"media","start":true,"terminal":true}},
+            "buttons":{},
+            "playerControls":{"default":{"accentColor":"#8065C4"}},
+            "globalPlayerControl":"default"
+        }"##,
+        );
+        assert!(valid.is_empty(), "{valid:?}");
+
+        let invalid = messages(
+            r##"{
+            "version":1,
+            "playbackStats":{"path":"stats.py"},
+            "nodes":{"start":{"type":"media","start":true,"terminal":true}},
+            "buttons":{},
+            "playerControls":{"white":{"accentColor":"#FFFFFF"}}
+        }"##,
+        );
+        assert!(invalid.iter().any(|message| message.contains(".star")));
+        assert!(invalid
+            .iter()
+            .any(|message| message.contains("accentColor")));
     }
 
     #[test]

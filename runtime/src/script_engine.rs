@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use starlark::environment::{FrozenModule, Globals, GlobalsBuilder, LibraryExtension, Module};
 use starlark::eval::{Evaluator, ReturnFileLoader};
+use starlark::starlark_module;
 use starlark::syntax::{AstModule, Dialect};
+use starlark::values::list_or_tuple::UnpackListOrTuple;
+use starlark::values::Value;
 use starlark::PrintHandler;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -49,6 +52,37 @@ impl StarlarkRunResponse {
 
 fn default_timeout_ms() -> u64 {
     DEFAULT_TIMEOUT_MS
+}
+
+#[starlark_module]
+fn random_globals(builder: &mut GlobalsBuilder) {
+    /// Return a uniformly distributed float in the half-open interval [0, 1).
+    fn random() -> anyhow::Result<f64> {
+        Ok(fastrand::f64())
+    }
+
+    /// Return a uniformly distributed integer including both endpoints.
+    fn randint(start: i64, end: i64) -> anyhow::Result<i64> {
+        if start > end {
+            return Err(anyhow!("randint(): start は end 以下にしてください"));
+        }
+        Ok(fastrand::i64(start..=end))
+    }
+
+    /// Select one item from a non-empty list or tuple.
+    fn choice<'v>(items: UnpackListOrTuple<Value<'v>>) -> anyhow::Result<Value<'v>> {
+        if items.items.is_empty() {
+            return Err(anyhow!("choice(): 空の配列からは選択できません"));
+        }
+        Ok(items.items[fastrand::usize(..items.items.len())])
+    }
+
+    /// Return a newly shuffled list without mutating the input list or tuple.
+    fn shuffled<'v>(items: UnpackListOrTuple<Value<'v>>) -> anyhow::Result<Vec<Value<'v>>> {
+        let mut values = items.items;
+        fastrand::shuffle(&mut values);
+        Ok(values)
+    }
 }
 
 struct CollectedPrints<'a>(&'a RefCell<Vec<String>>);
@@ -210,7 +244,9 @@ fn execute(request: &StarlarkRunRequest, prints: &RefCell<Vec<String>>) -> Resul
     let timeout_ms = request.timeout_ms.clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
     let deadline = Deadline::after(timeout_ms);
     let print_handler = CollectedPrints(prints);
-    let globals = GlobalsBuilder::extended_by(&[LibraryExtension::Print]).build();
+    let globals = GlobalsBuilder::extended_by(&[LibraryExtension::Print])
+        .with(random_globals)
+        .build();
     let path = normalize_path(&request.path);
     let scripts = request
         .scripts
@@ -374,5 +410,36 @@ mod tests {
         assert!(response.value.is_none());
         let error = response.error.unwrap();
         assert!(error.contains("100ms") || error.contains("tick"), "{error}");
+    }
+
+    #[test]
+    fn provides_random_helpers() {
+        let response = run_starlark(&request(
+            "def jump(ctx):\n    return {'random': random(), 'int': randint(2, 2), 'choice': choice(['a']), 'shuffled': shuffled([1, 2, 3])}\n",
+            vec![json!({})],
+        ));
+        let value = response.value.expect("random helpers should execute");
+        let random = value["random"].as_f64().unwrap();
+        assert!((0.0..1.0).contains(&random));
+        assert_eq!(value["int"], json!(2));
+        assert_eq!(value["choice"], json!("a"));
+        let mut shuffled = value["shuffled"].as_array().unwrap().clone();
+        shuffled.sort_by_key(|value| value.as_i64());
+        assert_eq!(shuffled, vec![json!(1), json!(2), json!(3)]);
+    }
+
+    #[test]
+    fn random_helpers_reject_invalid_ranges_and_empty_choices() {
+        let range = run_starlark(&request(
+            "def jump(ctx):\n    return randint(3, 2)\n",
+            vec![json!({})],
+        ));
+        assert!(range.error.unwrap().contains("start"));
+
+        let empty = run_starlark(&request(
+            "def jump(ctx):\n    return choice([])\n",
+            vec![json!({})],
+        ));
+        assert!(empty.error.unwrap().contains("空"));
     }
 }

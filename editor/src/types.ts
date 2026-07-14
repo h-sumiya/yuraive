@@ -86,6 +86,7 @@ export type WmgNode = {
 }
 
 export type WmgMetadata = {
+  contentId?: string
   displayName?: string
   description?: string
   author?: string
@@ -100,6 +101,7 @@ export type WmgMetadata = {
 }
 
 export type PlayerControlSettings = {
+  accentColor?: string
   allowStop: boolean
   showSeekBar: boolean
   showPlaybackTime: boolean
@@ -122,6 +124,7 @@ export type WmgGraph = {
   buttons: Record<string, WmgButton>
   playerControls: Record<string, PlayerControlSettings>
   globalPlayerControl?: string
+  playbackStats?: ScriptCall
 }
 
 export type AssetEntry = {
@@ -155,6 +158,7 @@ export type PlaybackHistoryEntry = {
   id: string
   runId: string
   graphId: string
+  contentId?: string
   nodeId: string
   mediaId: string
   source: string | null
@@ -190,6 +194,26 @@ export type StarlarkContext = {
   history: PlaybackHistoryEntry[]
   current: StarlarkCurrent | null
   trigger: Record<string, unknown>
+  session?: PlaybackStatsSession
+  aggregate?: PlaybackStatsAggregate
+}
+
+export type PlaybackStatsSession = {
+  runId: string
+  startedAt: string
+  endedAt: string | null
+  isActive: boolean
+  entryCount: number
+  activePlayMs: number
+  entries: PlaybackHistoryEntry[]
+}
+
+export type PlaybackStatsAggregate = {
+  sessionCount: number
+  entryCount: number
+  activePlayMs: number
+  firstStartedAt: string | null
+  lastEndedAt: string | null
 }
 
 export type PreviewTraceEntry = {

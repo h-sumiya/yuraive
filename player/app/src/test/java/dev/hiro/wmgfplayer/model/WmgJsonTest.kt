@@ -22,14 +22,15 @@ class WmgJsonTest {
         val graph = WmgJson.format.decodeFromString<WmgGraph>(
             """{
               "version": 1,
-              "metadata": {"socialLinks":[{"label":"Web","url":"https://example.com"}]},
+              "metadata": {"contentId":"com.example.rain","socialLinks":[{"label":"Web","url":"https://example.com"}]},
               "nodes": {"start":{"type":"media","start":true,"terminal":true,"playerControl":"locked"}},
               "buttons": {},
               "globalPlayerControl": "default",
               "playerControls": {
                 "default": {},
-                "locked": {"allowStop":false,"showPlaybackTime":false,"allowSeek":false,"showFileName":true,"allowNext":true,"allowPrevious":true}
-              }
+                "locked": {"accentColor":"#8065C4","allowStop":false,"showPlaybackTime":false,"allowSeek":false,"showFileName":true,"allowNext":true,"allowPrevious":true}
+              },
+              "playbackStats": {"path":"scripts/stats.star","function":"render_stats"}
             }""",
         )
         val control = graph.playerControls.getValue("locked")
@@ -40,6 +41,9 @@ class WmgJsonTest {
         assertTrue(control.showFileName)
         assertTrue(control.allowNext)
         assertTrue(control.allowPrevious)
+        assertEquals("#8065C4", control.accentColor)
+        assertEquals("com.example.rain", graph.metadata?.contentId)
+        assertEquals("scripts/stats.star", graph.playbackStats?.path)
         assertEquals("Web", graph.metadata?.socialLinks?.single()?.label)
     }
 

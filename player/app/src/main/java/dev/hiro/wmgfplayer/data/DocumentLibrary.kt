@@ -218,6 +218,7 @@ class DocumentLibrary(private val context: Context) {
             ?: WmgJson.format.encodeToString(WmgGraph.serializer(), graph)
         val issues = GraphValidator.validateJson(sourceJson).toMutableList()
         val required = buildSet {
+            graph.playbackStats?.path?.let(::add)
             graph.nodes.values.forEach { node ->
                 node.script?.path?.let(::add)
                 node.media.forEach { media ->

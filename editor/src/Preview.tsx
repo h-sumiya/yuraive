@@ -54,12 +54,12 @@ const safeRenderResult = (value: unknown): ButtonRenderResult => {
   return result
 }
 
-export function Preview({ graph, graphId, assets, scripts, onClose }: { graph: WmgGraph; graphId: string; assets: AssetEntry[]; scripts: ScriptDocument[]; onClose: () => void }) {
+export function Preview({ graph, graphId, assets, scripts, initialHistory = [], onHistoryChange, onClose }: { graph: WmgGraph; graphId: string; assets: AssetEntry[]; scripts: ScriptDocument[]; initialHistory?: PlaybackHistoryEntry[]; onHistoryChange?: (history: PlaybackHistoryEntry[]) => void; onClose: () => void }) {
   const start = Object.entries(graph.nodes).find(([, node]) => node.start)?.[0] ?? Object.keys(graph.nodes)[0]
   const [current, setCurrent] = useState<CurrentMedia | null>(null)
   const currentRef = useRef<CurrentMedia | null>(null)
-  const [history, setHistory] = useState<PlaybackHistoryEntry[]>([])
-  const historyRef = useRef<PlaybackHistoryEntry[]>([])
+  const [history, setHistory] = useState<PlaybackHistoryEntry[]>(initialHistory)
+  const historyRef = useRef<PlaybackHistoryEntry[]>(initialHistory)
   const [trace, setTrace] = useState<PreviewTraceEntry[]>([])
   const [positionMs, setPositionMs] = useState(0)
   const [buttonResults, setButtonResults] = useState<Record<string, ButtonRenderResult>>({})
@@ -86,10 +86,11 @@ export function Preview({ graph, graphId, assets, scripts, onClose }: { graph: W
     setTrace((items) => [...items.slice(-499), { id: crypto.randomUUID(), at: new Date().toISOString(), kind, title, detail, data }])
   }, [])
 
-  const setHistoryValue = (next: PlaybackHistoryEntry[]) => {
+  const setHistoryValue = useCallback((next: PlaybackHistoryEntry[]) => {
     historyRef.current = next.slice(-1000)
     if (mounted.current) setHistory(historyRef.current)
-  }
+    onHistoryChange?.(historyRef.current)
+  }, [onHistoryChange])
 
   const currentContext = useCallback((snapshot: PlaybackHistoryEntry[]): StarlarkCurrent | null => {
     const selected = currentRef.current
@@ -139,6 +140,7 @@ export function Preview({ graph, graphId, assets, scripts, onClose }: { graph: W
       id: active.id,
       runId: active.runId,
       graphId,
+      contentId: graph.metadata?.contentId,
       nodeId: active.nodeId,
       mediaId: active.candidate.id,
       source: active.candidate.source.video ?? active.candidate.source.audio ?? null,
@@ -156,7 +158,7 @@ export function Preview({ graph, graphId, assets, scripts, onClose }: { graph: W
     setHistoryValue(next)
     addTrace('history', `${entry.mediaId} を履歴へ追加`, `${entry.activePlayMs}ms · ${reason}`, entry)
     return next
-  }, [addTrace, graphId])
+  }, [addTrace, graph.metadata?.contentId, graphId, setHistoryValue])
 
   const enterMedia = useCallback((nodeId: string) => {
     const target = graph.nodes[nodeId]

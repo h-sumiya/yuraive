@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { createGraph, DEFAULT_PLAYER_CONTROLS, defaultMedia, fileKind, nextButtonColor, nextNodeColor, nextPlayerControlColor, normalizeGraph, probability, validateGraph } from './graph'
+import { createGraph, DEFAULT_PLAYER_CONTROLS, defaultMedia, fileKind, nextButtonColor, nextNodeColor, nextPlayerControlColor, normalizeGraph, probability, validateGraph, type PlayerControlBooleanKey } from './graph'
 import { Preview } from './Preview'
 import { createStarlarkContext } from './scriptContext'
 import ScriptInspector from './ScriptInspector'
@@ -49,7 +49,7 @@ const TAB_DRAG_TYPE = 'application/x-wmgf-editor-tab'
 let activeTreeDrag: { label: string; kind: 'folder' | 'media' } | null = null
 const draftKey = (workspace: string, path: string) => `wmgf-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
 const scriptDraftKey = (workspace: string, path: string) => `wmgf-script-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
-const defaultScriptSource = (name = 'script') => `# ${name}\n# ctx["history"]: 確定済み再生履歴（最大1000件）\n# ctx["current"]: 現在の再生状態 / ctx["totalActivePlayMs"]: 実再生時間の合計\n\ndef jump(ctx):\n    """Script Nodeから遷移するNode IDを返します。"""\n    return None\n\ndef render(ctx):\n    """Buttonの表示内容を上書きします。"""\n    return {\n        "visible": True,\n        "text": "Continue",\n        "style": {},\n    }\n`
+const defaultScriptSource = (name = 'script') => `# ${name}\n# ctx["history"]: 確定済み再生履歴（最大1000件）\n# ctx["current"]: 現在の再生状態 / ctx["totalActivePlayMs"]: 実再生時間の合計\n# random(), randint(start, end), choice(items), shuffled(items) が利用できます。\n\ndef jump(ctx):\n    """Script Nodeから遷移するNode IDを返します。"""\n    return None\n\ndef render(ctx):\n    """Buttonの表示内容を上書きします。"""\n    return {\n        "visible": True,\n        "text": "Continue",\n        "style": {},\n    }\n\ndef render_stats(ctx):\n    """1セッション分の再生統計を返します。"""\n    minutes = ctx["session"]["activePlayMs"] // 60000\n    return {\n        "sortValue": minutes,\n        "display": {\n            "schemaVersion": 1,\n            "fallbackText": "%s分再生" % minutes,\n            "root": {"type": "text", "text": "%s分再生" % minutes},\n        },\n    }\n`
 const scriptStem = (value: string) => value.trim().replace(/(?:\.star)+$/i, '')
 const scriptFileName = (value: string) => {
   const stem = scriptStem(value)
@@ -366,7 +366,7 @@ function SocialLinksEditor({ links, onChange }: { links: NonNullable<WmgMetadata
   </div>
 }
 
-function GraphMetadataInspector({ graph, graphName, assets, onChange }: { graph: WmgGraph; graphName: string; assets: AssetEntry[]; onChange: (graph: WmgGraph) => void }) {
+function GraphMetadataInspector({ graph, graphName, assets, scripts, onChange }: { graph: WmgGraph; graphName: string; assets: AssetEntry[]; scripts: ScriptDocument[]; onChange: (graph: WmgGraph) => void }) {
   const metadata = graph.metadata ?? {}
   const commit = (next: WmgMetadata) => {
     const compact = Object.fromEntries(Object.entries(next).filter(([, value]) => Array.isArray(value) ? value.length > 0 : typeof value === 'string' ? value.trim().length > 0 : value !== undefined)) as WmgMetadata
@@ -375,13 +375,14 @@ function GraphMetadataInspector({ graph, graphName, assets, onChange }: { graph:
     if (Object.keys(compact).length) nextGraph.metadata = compact
     onChange(nextGraph)
   }
-  const text = (key: keyof Pick<WmgMetadata, 'displayName' | 'description' | 'author' | 'createdAt' | 'updatedAt'>, value: string) => commit({ ...metadata, [key]: value })
+  const text = (key: keyof Pick<WmgMetadata, 'contentId' | 'displayName' | 'description' | 'author' | 'createdAt' | 'updatedAt'>, value: string) => commit({ ...metadata, [key]: value })
   const dateField = (key: 'createdAt' | 'updatedAt', label: string) => <Field label={label} hint="RFC 3339 / ISO 8601"><div className="metadata-date-field"><input value={metadata[key] ?? ''} placeholder="2026-07-13T12:00:00+09:00" onChange={(event) => text(key, event.target.value)}/><button type="button" className="mini-button" onClick={() => text(key, new Date().toISOString())}>現在</button></div></Field>
   return <aside className="inspector graph-metadata-inspector" data-testid="graph-metadata-inspector">
     <div className="panel-title"><span>グラフ情報</span><small>WMGF v1</small></div>
     <div className="inspector-scroll">
       <div className="graph-file-card"><span><Icon name="code" size={15}/></span><div><strong>{metadata.displayName || graphName}</strong><small>{graphName}</small></div></div>
       <Section title="一般情報">
+        <Field label="コンテンツID" hint="同じIDのWMGFは同じ作品の統計として集計されます。com.example.groupId形式を推奨します"><div className="metadata-date-field"><input aria-label="コンテンツID" value={metadata.contentId ?? ''} placeholder="com.example.work" onChange={(event) => text('contentId', event.target.value)}/><button type="button" className="mini-button" onClick={() => text('contentId', crypto.randomUUID?.() ?? uid())}>新規ID</button></div></Field>
         <Field label="表示名"><input aria-label="グラフの表示名" value={metadata.displayName ?? ''} placeholder={graphName.replace(/\.wmg\.json$/i, '')} onChange={(event) => text('displayName', event.target.value)}/></Field>
         <Field label="説明"><textarea aria-label="グラフの説明" rows={5} value={metadata.description ?? ''} placeholder="このグラフの用途や内容" onChange={(event) => text('description', event.target.value)}/></Field>
         <Field label="作者"><input aria-label="グラフの作者" value={metadata.author ?? ''} placeholder="作者名" onChange={(event) => text('author', event.target.value)}/></Field>
@@ -393,11 +394,18 @@ function GraphMetadataInspector({ graph, graphName, assets, onChange }: { graph:
         {dateField('createdAt', '作成日時')}
         {dateField('updatedAt', '更新日時')}
       </Section>
+      <Section title="再生統計">
+        <label className="check-row"><input type="checkbox" checked={Boolean(graph.playbackStats)} onChange={(event) => { const next = { ...graph }; if (event.target.checked) next.playbackStats = { path: scripts[0]?.path ?? '', function: 'render_stats' }; else delete next.playbackStats; onChange(next) }}/><span><strong>作者定義の再生統計を有効にする</strong><small>セッションごとにStarlarkを1回実行します</small></span></label>
+        {graph.playbackStats && <>
+          <Field label="スクリプト"><select aria-label="再生統計スクリプト" value={graph.playbackStats.path} onChange={(event) => onChange({ ...graph, playbackStats: { ...graph.playbackStats!, path: event.target.value } })}><option value="">選択してください</option>{scripts.map((script) => <option value={script.path} key={script.uid}>{script.path}</option>)}</select></Field>
+          <Field label="関数" hint="省略時 render_stats"><input aria-label="再生統計関数" value={graph.playbackStats.function ?? ''} placeholder="render_stats" onChange={(event) => onChange({ ...graph, playbackStats: { ...graph.playbackStats!, function: event.target.value || undefined } })}/></Field>
+        </>}
+      </Section>
     </div>
   </aside>
 }
 
-const playerControlLabels: Array<[keyof typeof DEFAULT_PLAYER_CONTROLS, string, 'visibility' | 'action']> = [
+const playerControlLabels: Array<[PlayerControlBooleanKey, string, 'visibility' | 'action']> = [
   ['showSeekBar', 'シークバーを表示', 'visibility'],
   ['showPlaybackTime', '再生時間を表示', 'visibility'],
   ['showSceneName', 'シーン名を表示', 'visibility'],
@@ -419,6 +427,8 @@ function PlayerControlInspector({ controlId, control, issues, global, usedBy, on
         <Field label="設定ID"><input aria-label="再生設定ID" key={controlId} defaultValue={controlId} onBlur={(event) => onRename(event.target.value.trim())} onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}/></Field>
         <Field label="グラフカラー"><div className="color-field"><DebouncedColorInput value={control.editor?.color ?? '#4f8c78'} onCommit={(color) => onChange({ ...control, editor: { ...control.editor, color } })}/><input value={control.editor?.color ?? '#4f8c78'} onChange={(event) => onChange({ ...control, editor: { ...control.editor, color: event.target.value } })}/></div></Field>
         <label className="check-row global-control-check"><input type="checkbox" checked={global} onChange={(event) => onGlobal(event.target.checked)}/><span><strong>グローバル設定</strong><small>個別設定がない全Media Nodeへ適用</small></span></label>
+        <label className="check-row"><input type="checkbox" checked={Boolean(control.accentColor)} onChange={(event) => onChange({ ...control, accentColor: event.target.checked ? '#8065c4' : undefined })}/><span><strong>プレイヤーのアクセント色</strong><small>白・黒に近すぎない#RRGGBBのみ使用できます</small></span></label>
+        {control.accentColor && <Field label="アクセントカラー"><div className="color-field"><DebouncedColorInput value={control.accentColor} onCommit={(accentColor) => onChange({ ...control, accentColor })}/><input aria-label="アクセントカラー" value={control.accentColor} onChange={(event) => onChange({ ...control, accentColor: event.target.value })}/></div></Field>}
       </Section>
       <Section title="表示">{section('visibility')}</Section>
       <Section title="操作">{section('action')}</Section>
@@ -444,7 +454,7 @@ function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probab
       </div>
     </aside>
   }
-  if (!node || !nodeId) return <GraphMetadataInspector graph={graph} graphName={graphName} assets={assets} onChange={onChangeGraph}/>
+  if (!node || !nodeId) return <GraphMetadataInspector graph={graph} graphName={graphName} assets={assets} scripts={scripts} onChange={onChangeGraph}/>
   const updateMedia = (index: number, media: MediaCandidate) => onChange({ ...node, media: (node.media ?? []).map((item, itemIndex) => itemIndex === index ? media : item) })
   const nodeIssues = issues.filter((issue) => issue.nodeId === nodeId)
   if (node.type === 'script') return <aside className="inspector script-node-inspector">
@@ -861,15 +871,23 @@ function App() {
   const [treeMenu, setTreeMenu] = useState<{ target: TreeContextTarget; x: number; y: number } | null>(null)
   const [treeInlineEdit, setTreeInlineEdit] = useState<TreeInlineEdit | null>(null)
   const [scriptTests, setScriptTests] = useState<Record<string, ScriptTestState>>({})
+  const [previewHistories, setPreviewHistories] = useState<Record<string, PlaybackHistoryEntry[]>>({})
   const [leftWidth, setLeftWidth] = useState(() => Number(localStorage.getItem('wmgf-left-width')) || 220)
   const [rightWidth, setRightWidth] = useState(() => Number(localStorage.getItem('wmgf-right-width')) || 330)
   const active = documents.find((document) => document.uid === activeUid)
   const activeScriptUid = activeTab?.startsWith('script:') ? activeTab.slice(7) : null
   const activeScript = scripts.find((script) => script.uid === activeScriptUid)
   const probabilityMode = weightDisplayMode === 'probability'
-  const docAssets = active ? relativeAssets(active, assets) : assets
-  const docScripts = active ? relativeScripts(active, scripts) : scripts
+  const docAssets = useMemo(() => active ? relativeAssets(active, assets) : assets, [active, assets])
+  const docScripts = useMemo(() => active ? relativeScripts(active, scripts) : scripts, [active, scripts])
   const issues = useMemo(() => active ? validateGraph(active.graph, docAssets, docScripts) : [], [active, docAssets, docScripts])
+  const statsSessions = useMemo(() => {
+    const history = active ? previewHistories[active.uid] ?? [] : []
+    return [...new Set(history.map((entry) => entry.runId))].map((runId) => {
+      const entries = history.filter((entry) => entry.runId === runId)
+      return { runId, label: `${new Date(entries[0]?.startedAt ?? 0).toLocaleString('ja-JP')} · ${entries.length}件` }
+    }).reverse()
+  }, [active, previewHistories])
   useEffect(() => { if (selectedNode || selectedButton) setSelectedPlayerControl(null) }, [selectedButton, selectedNode])
 
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(null), 3200) }
@@ -1452,7 +1470,12 @@ function App() {
       let changed = false
       const nodes = Object.fromEntries(Object.entries(document.graph.nodes).map(([id, node]) => { if (node.script?.path !== oldReference) return [id, node]; changed = true; return [id, { ...node, script: { ...node.script, path: newReference } }] }))
       const buttons = Object.fromEntries(Object.entries(document.graph.buttons).map(([id, button]) => { if (button.render?.path !== oldReference) return [id, button]; changed = true; return [id, { ...button, render: { ...button.render, path: newReference } }] }))
-      return changed ? { ...document, graph: { ...document.graph, nodes, buttons }, dirty: true } : document
+      let playbackStats = document.graph.playbackStats
+      if (playbackStats?.path === oldReference) {
+        changed = true
+        playbackStats = { ...playbackStats, path: newReference }
+      }
+      return changed ? { ...document, graph: { ...document.graph, nodes, buttons, playbackStats }, dirty: true } : document
     }))
   }
   const relocateScript = async (target: ScriptDocument, destinationParent: string, requestedName: string, action: 'rename' | 'move') => {
@@ -1616,12 +1639,12 @@ function App() {
     else await save()
   }, [activeScript, activeTab, save, saveScript])
   const updateScriptContent = (script: ScriptDocument, content: string) => setScripts((items) => items.map((item) => item.uid === script.uid ? { ...item, content, dirty: true } : item))
-  const testScript = async (script: ScriptDocument, functionName: string) => {
+  const testScript = async (script: ScriptDocument, functionName: string, sessionRunId?: string) => {
     setScriptTests((items) => ({ ...items, [script.uid]: { status: 'running', functionName } }))
     try {
       const now = new Date()
-      const runStartedAt = new Date(now.getTime() - 15_000).toISOString()
-      const sampleHistory: PlaybackHistoryEntry[] = [{
+      const fallbackRunStartedAt = new Date(now.getTime() - 15_000).toISOString()
+      const fallbackHistory: PlaybackHistoryEntry[] = [{
         schemaVersion: 1,
         id: 'sample-history-1',
         runId: 'test-run',
@@ -1637,15 +1660,33 @@ function App() {
         endPositionMs: 12_000,
         endReason: 'completed',
       }]
-      const context = createStarlarkContext({
+      const previewHistory = active ? previewHistories[active.uid] ?? [] : []
+      const selectedHistory = functionName === 'render_stats' && sessionRunId ? previewHistory.filter((entry) => entry.runId === sessionRunId) : []
+      const sampleHistory = selectedHistory.length ? selectedHistory : fallbackHistory
+      const contextHistory = selectedHistory.length ? previewHistory : sampleHistory
+      const runStartedAt = sampleHistory[0]?.startedAt ?? fallbackRunStartedAt
+      const baseContext = createStarlarkContext({
         graphId: active?.path ?? 'preview.wmg.json',
-        runId: 'test-run',
+        runId: sampleHistory[0]?.runId ?? 'test-run',
         runStartedAt,
-        history: sampleHistory,
-        current: { nodeId: 'preview-node', mediaId: 'preview-media', source: 'audio/preview.mp3', startedAt: new Date(now.getTime() - 1_500).toISOString(), positionMs: 1_250, mediaDurationMs: 60_000, activePlayMs: 1_000 },
-        trigger: { type: 'test' },
+        history: contextHistory,
+        current: selectedHistory.length ? null : { nodeId: 'preview-node', mediaId: 'preview-media', source: 'audio/preview.mp3', startedAt: new Date(now.getTime() - 1_500).toISOString(), positionMs: 1_250, mediaDurationMs: 60_000, activePlayMs: 1_000 },
+        trigger: { type: functionName === 'render_stats' ? 'stats' : 'test', ...(functionName === 'render_stats' ? { runId: sampleHistory[0]?.runId ?? 'test-run' } : {}) },
         now,
       })
+      const context = functionName === 'render_stats' ? {
+        ...baseContext,
+        session: {
+          runId: sampleHistory[0]?.runId ?? 'test-run', startedAt: runStartedAt,
+          endedAt: selectedHistory.length ? sampleHistory.at(-1)?.endedAt ?? null : null, isActive: !selectedHistory.length,
+          entryCount: sampleHistory.length, activePlayMs: sampleHistory.reduce((sum, entry) => sum + entry.activePlayMs, selectedHistory.length ? 0 : 1_000), entries: sampleHistory,
+        },
+        aggregate: {
+          sessionCount: new Set(contextHistory.map((entry) => entry.runId)).size, entryCount: contextHistory.length,
+          activePlayMs: contextHistory.reduce((sum, entry) => sum + entry.activePlayMs, selectedHistory.length ? 0 : 1_000),
+          firstStartedAt: contextHistory[0]?.startedAt ?? null, lastEndedAt: contextHistory.at(-1)?.endedAt ?? null,
+        },
+      } : baseContext
       const result = await runStarlark({ scripts, path: script.path, functionName, args: [context], timeoutMs: 1200 })
       setScriptTests((items) => ({ ...items, [script.uid]: { status: 'success', functionName, result: result.value, prints: result.prints, durationMs: result.durationMs } }))
     } catch (error) {
@@ -1740,7 +1781,7 @@ function App() {
           const dropSide = tabDropTarget?.key === key ? tabDropTarget.side : null
           return [<div className={`tab ${key === activeTab ? 'active' : ''} ${tab.kind} ${renaming ? 'renaming' : ''} ${draggedTab === key ? 'dragging' : ''} ${dropSide ? `drop-${dropSide}` : ''}`} key={key} data-tab-key={key} draggable={!renaming} onDragStart={(event) => { event.dataTransfer.setData(TAB_DRAG_TYPE, key); event.dataTransfer.setData('text/plain', item.name); event.dataTransfer.effectAllowed = 'move'; setDraggedTab(key) }} onDragEnd={() => { setDraggedTab(null); setTabDropTarget(null) }} onDragOver={(event) => { if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE) || draggedTab === key) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; const rect = event.currentTarget.getBoundingClientRect(); setTabDropTarget({ key, side: event.clientX < rect.left + rect.width / 2 ? 'before' : 'after' }) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && tabDropTarget?.key === key) setTabDropTarget(null) }} onDrop={(event) => { if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return; event.preventDefault(); event.stopPropagation(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '', key, tabDropTarget?.key === key ? tabDropTarget.side : 'before') }} onClick={() => { if (!renaming) activateTab(tab) }} onContextMenu={(event) => { event.preventDefault(); if (!renaming) setTabMenu({ kind: tab.kind, uid: tab.uid, x: Math.min(event.clientX, window.innerWidth - 260), y: Math.min(event.clientY, window.innerHeight - 180) }) }}><Icon name={tab.kind === 'script' ? 'script' : 'code'} size={13}/>{renaming && treeInlineEdit ? <InlineNameInput edit={treeInlineEdit} testId="tab-rename-input" onChange={(name) => setTreeInlineEdit((edit) => edit ? { ...edit, name } : edit)} onCommit={commitTreeInlineEdit} onCancel={() => { treeInlineCommit.current = null; setTreeInlineEdit(null) }}/> : <><span>{item.name}</span>{item.dirty && <i/>}<button draggable={false} aria-label={`${item.name}を閉じる`} title="閉じる（ファイルは削除しません）" onDragStart={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); closeTab(tab) }}><Icon name="close" size={11}/></button></>}</div>]
         })}<button className={`new-tab ${draggedTab && !tabDropTarget ? 'drop-end' : ''}`} title="新規グラフ" onDragOver={(event) => { if (event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); setTabDropTarget(null) } }} onDrop={(event) => { if (event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '') } }} onClick={newDocument}><Icon name="plus" size={14}/></button></div>
-        {activeScript ? <ScriptEditor key={activeScript.uid} script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }} onChange={(content) => updateScriptContent(activeScript, content)} onSave={() => void saveScript(activeScript)} onTest={(functionName) => void testScript(activeScript, functionName)}/> : active && activeTab?.startsWith('graph:') ? <><div className="graph-toolbar"><div><button className="tool-button" onClick={addNodeAtGraphCenter}><Icon name="plus" size={14}/>メディアNode</button><button className="tool-button" onClick={addButtonAtGraphCenter}><span className="button-glyph">B</span>ボタン</button><button className="tool-button script-tool" onClick={addScriptNodeAtGraphCenter}><Icon name="script" size={14}/>Script Node</button><button className="tool-button control-tool" onClick={addPlayerControlAtGraphCenter}><Icon name="controls" size={14}/>再生設定</button><span className="toolbar-separator"/><button className={`segmented ${weightDisplayMode === 'weight' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('weight')}>重み</button><button className={`segmented ${weightDisplayMode === 'probability' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('probability')}>確率</button><button className={`segmented ${weightDisplayMode === 'hidden' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('hidden')}>非表示</button></div><div><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.max(.5, view.zoom - .1) })}>−</button><button className="zoom-value" onClick={() => setView({ zoom: 1, x: 80, y: 65 })}>{Math.round(view.zoom * 100)}%</button><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.min(1.6, view.zoom + .1) })}>＋</button><span className="toolbar-separator"/><button className="tool-button icon-only" title="JSONをエクスポート" onClick={exportJson}><Icon name="code" size={14}/></button></div></div>
+        {activeScript ? <ScriptEditor key={activeScript.uid} script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }} statsSessions={statsSessions} onChange={(content) => updateScriptContent(activeScript, content)} onSave={() => void saveScript(activeScript)} onTest={(functionName, sessionRunId) => void testScript(activeScript, functionName, sessionRunId)}/> : active && activeTab?.startsWith('graph:') ? <><div className="graph-toolbar"><div><button className="tool-button" onClick={addNodeAtGraphCenter}><Icon name="plus" size={14}/>メディアNode</button><button className="tool-button" onClick={addButtonAtGraphCenter}><span className="button-glyph">B</span>ボタン</button><button className="tool-button script-tool" onClick={addScriptNodeAtGraphCenter}><Icon name="script" size={14}/>Script Node</button><button className="tool-button control-tool" onClick={addPlayerControlAtGraphCenter}><Icon name="controls" size={14}/>再生設定</button><span className="toolbar-separator"/><button className={`segmented ${weightDisplayMode === 'weight' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('weight')}>重み</button><button className={`segmented ${weightDisplayMode === 'probability' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('probability')}>確率</button><button className={`segmented ${weightDisplayMode === 'hidden' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('hidden')}>非表示</button></div><div><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.max(.5, view.zoom - .1) })}>−</button><button className="zoom-value" onClick={() => setView({ zoom: 1, x: 80, y: 65 })}>{Math.round(view.zoom * 100)}%</button><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.min(1.6, view.zoom + .1) })}>＋</button><span className="toolbar-separator"/><button className="tool-button icon-only" title="JSONをエクスポート" onClick={exportJson}><Icon name="code" size={14}/></button></div></div>
           <GraphCanvas
             graph={active.graph}
             selectedNode={selectedNode}
@@ -1778,7 +1819,7 @@ function App() {
         </> : <div className="no-document"><Icon name="code" size={42}/><strong>開いているタブがありません</strong><span>ファイルツリーからグラフまたはスクリプトを開いてください</span><button className="primary-button" onClick={newDocument}><Icon name="plus" size={14}/>新規グラフ</button></div>}
       </main>
       <div className="resize-handle right" title="インスペクターの幅を変更" onPointerDown={(event) => beginResize('right', event)}/>
-      {activeScript ? <ScriptInspector script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }}/> : active && activeTab?.startsWith('graph:') ? selectedPlayerControl && active.graph.playerControls[selectedPlayerControl] ? <PlayerControlInspector
+      {activeScript ? <ScriptInspector script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }} assets={docAssets}/> : active && activeTab?.startsWith('graph:') ? selectedPlayerControl && active.graph.playerControls[selectedPlayerControl] ? <PlayerControlInspector
         controlId={selectedPlayerControl}
         control={active.graph.playerControls[selectedPlayerControl]}
         issues={issues.filter((issue) => issue.playerControlId === selectedPlayerControl)}
@@ -1792,7 +1833,7 @@ function App() {
     </Suspense></div>
     <footer className="statusbar"><button className={issues.some((issue) => issue.severity === 'error') ? 'has-error' : ''} onClick={() => setShowProblems(!showProblems)}>{issues.length ? <Icon name="warning" size={12}/> : <Icon name="check" size={12}/>} {issues.filter((issue) => issue.severity === 'error').length} エラー　{issues.filter((issue) => issue.severity === 'warning').length} 警告</button><div><span>WMGF v1</span><span>{active ? `${Object.keys(active.graph.nodes).length} Node · ${Object.keys(active.graph.buttons).length} Button · ${Object.keys(active.graph.playerControls).length} Controls` : 'グラフなし'}</span><span>{scripts.length} Script · {assets.length} Assets</span></div></footer>
     {showProblems && <div className="problems-panel" style={{ left: leftWidth + 4, right: rightWidth + 4 }}><header><strong>問題</strong><button className="icon-button" onClick={() => setShowProblems(false)}><Icon name="close" size={13}/></button></header>{issues.length ? issues.map((issue, index) => <button key={index} onClick={() => { const script = issue.scriptPath ? docScripts.find((item) => item.path === issue.scriptPath) : undefined; if (script) openScriptTab(script); else { if (active) openGraphTab(active); if (issue.nodeId) { setSelectedNode(issue.nodeId); setSelectedButton(null); setSelectedPlayerControl(null) } else if (issue.buttonId) { setSelectedButton(issue.buttonId); setSelectedNode(null); setSelectedPlayerControl(null) } else if (issue.playerControlId) { setSelectedPlayerControl(issue.playerControlId); setSelectedNode(null); setSelectedButton(null) } } setShowProblems(false) }}><Icon name="warning" size={13}/><span>{issue.message}</span><small>{issue.scriptPath ?? issue.nodeId ?? issue.buttonId ?? issue.playerControlId ?? 'グラフ'}</small></button>) : <div className="problems-empty"><Icon name="check" size={15}/>問題は見つかりませんでした</div>}</div>}
-    {showPreview && active && <Preview graph={active.graph} graphId={active.path} assets={docAssets} scripts={docScripts} onClose={() => setShowPreview(false)}/>}
+    {showPreview && active && <Preview graph={active.graph} graphId={active.path} assets={docAssets} scripts={docScripts} initialHistory={previewHistories[active.uid] ?? []} onHistoryChange={(history) => setPreviewHistories((current) => ({ ...current, [active.uid]: history }))} onClose={() => setShowPreview(false)}/>}
     {previewAsset && <AssetPreview asset={previewAsset} onClose={() => setPreviewAsset(null)}/>}
     {tabMenu && <div className="tab-context-menu" style={{ left: tabMenu.x, top: tabMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { closeTab({ kind: tabMenu.kind, uid: tabMenu.uid }); setTabMenu(null) }}><Icon name="close" size={13}/>タブを閉じる</button>{tabMenu.kind === 'graph' && <button onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) duplicateDocument(target); setTabMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => { const target = tabMenu.kind === 'graph' ? documents.find((item) => item.uid === tabMenu.uid) : scripts.find((item) => item.uid === tabMenu.uid); if (target) beginTreeRename({ kind: tabMenu.kind, uid: target.uid, path: target.path }, 'tab') }}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (tabMenu.kind === 'graph') { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) void deleteDocument(target) } else { const target = scripts.find((script) => script.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'script', uid: target.uid, path: target.path }) } setTabMenu(null) }}><Icon name="trash" size={13}/>ファイルを削除</button></div>}
     {treeMenu && <div className="tab-context-menu tree-context-menu" style={{ left: treeMenu.x, top: treeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{treeMenu.target.kind === 'root' || treeMenu.target.kind === 'folder' ? <><label>{treeMenu.target.path || rootName}</label><button onClick={() => beginTreeCreate(treeMenu.target, 'file')}><Icon name="file" size={13}/>ファイルを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'folder')}><Icon name="folder" size={13}/>フォルダを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'script')}><Icon name="script" size={13}/>Starlarkスクリプトを作成</button>{treeMenu.target.kind === 'folder' && <button className="danger" onClick={() => { void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>フォルダを削除</button>}</> : <>{treeMenu.target.kind === 'graph' && <button onClick={() => { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) duplicateDocument(target); setTreeMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => beginTreeRename(treeMenu.target, 'tree')}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (treeMenu.target.kind === 'graph') { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) void deleteDocument(target) } else void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>削除</button></>}</div>}

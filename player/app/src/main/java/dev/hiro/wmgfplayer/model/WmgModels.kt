@@ -13,10 +13,12 @@ data class WmgGraph(
     val buttons: Map<String, WmgButton>,
     val playerControls: Map<String, PlayerControlSettings> = emptyMap(),
     val globalPlayerControl: String? = null,
+    val playbackStats: ScriptCall? = null,
 )
 
 @Serializable
 data class WmgMetadata(
+    val contentId: String? = null,
     val displayName: String? = null,
     val description: String? = null,
     val author: String? = null,
@@ -35,6 +37,7 @@ data class SocialLink(
 
 @Serializable
 data class PlayerControlSettings(
+    val accentColor: String? = null,
     val allowStop: Boolean = true,
     val showSeekBar: Boolean = true,
     val showPlaybackTime: Boolean = true,
@@ -179,6 +182,7 @@ data class PlaybackHistoryEntry(
     val id: String,
     val runId: String,
     val graphId: String,
+    val contentId: String? = null,
     val nodeId: String,
     val mediaId: String,
     val source: String? = null,
@@ -288,6 +292,7 @@ object GraphValidator {
 
     fun allAssetPaths(graph: WmgGraph): Set<String> = buildSet {
         graph.metadata?.thumbnail?.let(::add)
+        graph.playbackStats?.path?.let(::add)
         graph.nodes.values.forEach { node ->
             node.script?.path?.let(::add)
             node.media.forEach { media ->

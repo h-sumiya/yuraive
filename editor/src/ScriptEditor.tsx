@@ -24,6 +24,11 @@ const completions = [
   { label: 'def', type: 'keyword', apply: 'def ${name}(ctx):\n    return None', detail: '関数を定義' },
   { label: 'jump', type: 'function', apply: 'def jump(ctx):\n    return "node-id"', detail: 'Script Node entrypoint' },
   { label: 'render', type: 'function', apply: 'def render(ctx):\n    return {\n        "visible": True,\n        "text": "Button",\n        "style": {},\n    }', detail: 'Button render entrypoint' },
+  { label: 'render_stats', type: 'function', apply: 'def render_stats(ctx):\n    return {\n        "sortValue": ctx["session"]["activePlayMs"],\n        "display": {"schemaVersion": 1, "fallbackText": "Stats", "root": {"type": "text", "text": "Stats"}},\n    }', detail: 'Playback stats entrypoint' },
+  { label: 'random()', type: 'function', detail: '0以上1未満の乱数' },
+  { label: 'randint', type: 'function', apply: 'randint(1, 10)', detail: '両端を含む整数乱数' },
+  { label: 'choice', type: 'function', apply: 'choice(["a", "b"])', detail: '配列から1件を抽選' },
+  { label: 'shuffled', type: 'function', apply: 'shuffled([1, 2, 3])', detail: 'シャッフルした新しい配列' },
   { label: 'ctx["history"]', type: 'property', detail: '再生履歴の全件配列' },
   { label: 'ctx["current"]', type: 'property', detail: '現在のノードと再生位置' },
   { label: 'ctx["trigger"]', type: 'property', detail: 'start / restart / end / button / empty / render / test / debug' },
@@ -36,6 +41,10 @@ const completions = [
   { label: 'ctx["historyCount"]', type: 'property', detail: '確定済み履歴の件数' },
   { label: 'ctx["historyActivePlayMs"]', type: 'property', detail: '確定済み履歴の実再生時間合計 (ms)' },
   { label: 'ctx["totalActivePlayMs"]', type: 'property', detail: '履歴と現在の実再生時間合計 (ms)' },
+  { label: 'ctx["session"]', type: 'property', detail: '再生統計で評価中のセッション' },
+  { label: 'ctx["aggregate"]', type: 'property', detail: '再生統計の作品全体集計' },
+  { label: 'ctx["session"]["activePlayMs"]', type: 'property', detail: '対象セッションの実再生時間 (ms)' },
+  { label: 'ctx["aggregate"]["sessionCount"]', type: 'property', detail: '保持中のセッション数' },
   { label: 'ctx["current"]["nodeId"]', type: 'property', detail: '現在のノードID' },
   { label: 'ctx["current"]["mediaId"]', type: 'property', detail: '現在のメディアID' },
   { label: 'ctx["current"]["source"]', type: 'property', detail: '現在のメディアソース' },
@@ -87,12 +96,13 @@ const editorTheme = EditorView.theme({
 
 const findFunctions = (content: string) => [...content.matchAll(/^\s*def\s+([A-Za-z_]\w*)\s*\(/gm)].map((match) => match[1])
 
-export function ScriptEditor({ script, test, onChange, onSave, onTest }: {
+export function ScriptEditor({ script, test, onChange, onSave, onTest, statsSessions = [] }: {
   script: ScriptDocument
   test: ScriptTestState
   onChange: (content: string) => void
   onSave: () => void
-  onTest: (functionName: string) => void
+  onTest: (functionName: string, sessionRunId?: string) => void
+  statsSessions?: Array<{ runId: string; label: string }>
 }) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
@@ -103,11 +113,14 @@ export function ScriptEditor({ script, test, onChange, onSave, onTest }: {
   const [cursor, setCursor] = useState({ line: 1, column: 1 })
   const functions = useMemo(() => findFunctions(script.content), [script.content])
   const [functionName, setFunctionName] = useState(() => functions.includes('jump') ? 'jump' : functions.includes('render') ? 'render' : functions[0] ?? 'main')
+  const [sessionRunId, setSessionRunId] = useState(statsSessions[0]?.runId ?? '')
+  const sessionRunIdRef = useRef(sessionRunId)
   const functionNameRef = useRef(functionName)
   onChangeRef.current = onChange
   onSaveRef.current = onSave
   onTestRef.current = onTest
   functionNameRef.current = functionName
+  sessionRunIdRef.current = sessionRunId
 
   useEffect(() => {
     if (!host.current) return
@@ -131,7 +144,7 @@ export function ScriptEditor({ script, test, onChange, onSave, onTest }: {
         EditorView.domEventHandlers({
           keydown: (event) => {
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); onSaveRef.current(); return true }
-            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); onTestRef.current(functionNameRef.current); return true }
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); onTestRef.current(functionNameRef.current, sessionRunIdRef.current || undefined); return true }
             return false
           },
         }),
@@ -157,12 +170,15 @@ export function ScriptEditor({ script, test, onChange, onSave, onTest }: {
     if (!functions.includes(functionName) && functions.length) setFunctionName(functions.includes('jump') ? 'jump' : functions.includes('render') ? 'render' : functions[0])
   }, [functionName, functions])
 
+  useEffect(() => { if (statsSessions.length && !statsSessions.some((session) => session.runId === sessionRunId)) setSessionRunId(statsSessions[0].runId) }, [sessionRunId, statsSessions])
+
   return <section className="script-editor-pane">
     <header className="script-toolbar">
       <div className="script-breadcrumb"><span>workspace</span><b>/</b><strong>{script.path}</strong>{script.dirty && <i>未保存</i>}</div>
       <div className="script-actions">
         <select aria-label="テストする関数" value={functionName} onChange={(event) => setFunctionName(event.target.value)}>{functions.length ? functions.map((name) => <option value={name} key={name}>{name}()</option>) : <option value="main">main()</option>}</select>
-        <button className="tool-button" disabled={test.status === 'running'} onClick={() => onTest(functionName)} title="サンプルコンテキストで実行 (Ctrl+Enter)">{test.status === 'running' ? '実行中…' : '▶ テスト実行'}</button>
+        {functionName === 'render_stats' && statsSessions.length > 0 && <select aria-label="統計テスト対象セッション" value={sessionRunId} onChange={(event) => setSessionRunId(event.target.value)}>{statsSessions.map((session) => <option value={session.runId} key={session.runId}>{session.label}</option>)}</select>}
+        <button className="tool-button" disabled={test.status === 'running'} onClick={() => onTest(functionName, sessionRunId || undefined)} title="サンプルコンテキストで実行 (Ctrl+Enter)">{test.status === 'running' ? '実行中…' : '▶ テスト実行'}</button>
         <button className="toolbar-button" disabled={!script.dirty} onClick={onSave}>保存</button>
       </div>
     </header>

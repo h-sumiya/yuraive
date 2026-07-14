@@ -42,6 +42,19 @@ class HistoryStore(context: Context) {
         }
     }
 
+    suspend fun readForContent(contentId: String?, graphId: String): List<PlaybackHistoryEntry> = withContext(Dispatchers.IO) {
+        synchronized(lock) {
+            directory.listFiles().orEmpty()
+                .flatMap(::readFile)
+                .filter { entry ->
+                    if (contentId == null) entry.graphId == graphId
+                    else entry.contentId == contentId || (entry.contentId == null && entry.graphId == graphId)
+                }
+                .sortedBy { it.startedAt }
+                .takeLast(MAX_ENTRIES)
+        }
+    }
+
     suspend fun clear() = withContext(Dispatchers.IO) {
         synchronized(lock) { directory.listFiles().orEmpty().forEach(File::delete) }
     }

@@ -18,8 +18,9 @@ class StarlarkRuntime(private val library: DocumentLibrary) {
         defaultFunction: String,
         context: JsonObject,
         timeoutMs: Long,
+        loadedScripts: Map<String, String>? = null,
     ): JsonElement {
-        val scripts = library.readScriptSources(ref, call.path)
+        val scripts = loadedScripts ?: library.readScriptSources(ref, call.path)
         val request = NativeStarlarkRequest(
             path = call.path,
             functionName = call.function?.takeIf(String::isNotBlank) ?: defaultFunction,
