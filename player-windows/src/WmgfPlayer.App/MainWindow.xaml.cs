@@ -202,7 +202,7 @@ public sealed partial class MainWindow : Window
                 Graph = graph,
             });
             ReplaceLibraryItems(folders.Concat(graphs));
-            SetEmptyState(_libraryItems.Count == 0, "このフォルダは空です", "サブフォルダまたは .wmg.json ファイルがありません。", showAdd: false);
+            SetEmptyState(_libraryItems.Count == 0, "このフォルダは空です", "サブフォルダまたは .wmg / .wmg.json ファイルがありません。", showAdd: false);
         }
         catch (Exception error)
         {
@@ -1501,7 +1501,14 @@ public sealed partial class MainWindow : Window
     private static string FormatDate(string value) => DateTimeOffset.TryParse(value, out var date)
         ? date.ToLocalTime().ToString("yyyy/MM/dd HH:mm", CultureInfo.CurrentCulture)
         : value;
-    private static string HistoryGraphName(string graphId) => graphId.Split("::").LastOrDefault()?.Split('/').LastOrDefault()?.Replace(".wmg.json", "", StringComparison.OrdinalIgnoreCase) ?? graphId;
+    private static string HistoryGraphName(string graphId)
+    {
+        var name = graphId.Split("::").LastOrDefault()?.Split('/').LastOrDefault();
+        if (name is null) return graphId;
+        return name.EndsWith(".wmg.json", StringComparison.OrdinalIgnoreCase) ? name[..^".wmg.json".Length]
+            : name.EndsWith(".wmg", StringComparison.OrdinalIgnoreCase) ? name[..^".wmg".Length]
+            : name;
+    }
     private static string DisplayIcon(string? value) => value switch { "play" => "\uE768", "history" => "\uE81C", "timer" => "\uE823", "star" or "favorite" => "\uE735", "sleep" => "\uE708", "trophy" => "\uE7C1", "stats" => "\uE9D9", _ => "\uE946" };
     private static SolidColorBrush Brush(string color) => new(ColorFromHex(color));
     private static Windows.UI.Color ColorFromHex(string value)

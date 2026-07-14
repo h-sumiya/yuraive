@@ -33,6 +33,14 @@ public static class NativeRuntime
     public static string RunStarlarkJson(string requestJson) =>
         Call(requestJson, NativeMethods.RunStarlarkJson);
 
+    public static DecodedBundle DecodeBundle(byte[] input)
+    {
+        var result = WmgJson.Deserialize<BundleDecodeResult>(Call(input, NativeMethods.DecodeBundle));
+        if (!string.IsNullOrWhiteSpace(result.Error)) throw new InvalidDataException(result.Error);
+        if (result.BundleVersion != 1 || result.GraphJson is null) throw new InvalidDataException("WMGFバンドルの内容が不正です");
+        return new DecodedBundle(result.BundleVersion, result.GraphJson, result.TextAssets);
+    }
+
     public static NativeLayoutResponse ResolveButtonLayout(
         string source,
         IReadOnlyList<RenderedButton> buttons,
@@ -58,6 +66,22 @@ public static class NativeRuntime
         }
     }
 
+    private static string Call(byte[] input, Func<byte[], nuint, nint> operation)
+    {
+        nint pointer = 0;
+        try
+        {
+            pointer = operation(input, (nuint)input.Length);
+            if (pointer == 0) throw new InvalidOperationException("Rustランタイムから結果を取得できません");
+            return Marshal.PtrToStringUTF8(pointer)
+                ?? throw new InvalidOperationException("Rustランタイムの結果がUTF-8ではありません");
+        }
+        finally
+        {
+            if (pointer != 0) NativeMethods.StringFree(pointer);
+        }
+    }
+
     private static class NativeMethods
     {
         [DllImport(LibraryName, EntryPoint = "wmgf_validate_json", CallingConvention = CallingConvention.Cdecl)]
@@ -72,6 +96,9 @@ public static class NativeRuntime
         [DllImport(LibraryName, EntryPoint = "wmgf_resolve_button_layout_json", CallingConvention = CallingConvention.Cdecl)]
         internal static extern nint ResolveButtonLayoutJson([MarshalAs(UnmanagedType.LPUTF8Str)] string input);
 
+        [DllImport(LibraryName, EntryPoint = "wmgf_decode_bundle", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern nint DecodeBundle([In] byte[] input, nuint length);
+
         [DllImport(LibraryName, EntryPoint = "wmgf_string_free", CallingConvention = CallingConvention.Cdecl)]
         internal static extern void StringFree(nint value);
     }
@@ -82,6 +109,22 @@ public static class NativeRuntime
         public required string Message { get; init; }
         public string? Path { get; init; }
     }
+
+    private sealed record BundleDecodeResult
+    {
+        public int BundleVersion { get; init; }
+        public string? GraphJson { get; init; }
+        public Dictionary<string, BundledTextAsset> TextAssets { get; init; } = new(StringComparer.Ordinal);
+        public string? Error { get; init; }
+    }
+}
+
+public sealed record DecodedBundle(int BundleVersion, string GraphJson, IReadOnlyDictionary<string, BundledTextAsset> TextAssets);
+
+public sealed record BundledTextAsset
+{
+    public required string Kind { get; init; }
+    public required string Content { get; init; }
 }
 
 public sealed record GraphMetadataPreview

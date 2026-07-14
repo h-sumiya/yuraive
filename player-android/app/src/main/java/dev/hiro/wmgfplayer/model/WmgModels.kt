@@ -154,7 +154,7 @@ data class GraphRef(
     val fileName: String get() = relativePath.substringAfterLast('/')
     val parentPath: String get() = relativePath.substringBeforeLast('/', "")
     val contentFolderName: String get() = parentPath.substringAfterLast('/').ifBlank { rootName }
-    val graphId: String get() = "$rootUri::$relativePath"
+    val graphId: String get() = "$rootUri::${if (relativePath.endsWith(".wmg", ignoreCase = true) && !relativePath.endsWith(".wmg.json", ignoreCase = true)) relativePath.dropLast(".wmg".length) + ".wmg.json" else relativePath}"
 }
 
 @Serializable
@@ -230,6 +230,38 @@ data class GraphMetadataPreview(
     val author: String? = null,
     val thumbnail: String? = null,
 )
+
+@Serializable
+data class BundledTextAsset(
+    val kind: String,
+    val content: String,
+)
+
+@Serializable
+private data class BundleDecodeResult(
+    val bundleVersion: Int = 0,
+    val graphJson: String? = null,
+    val textAssets: Map<String, BundledTextAsset> = emptyMap(),
+    val error: String? = null,
+)
+
+data class DecodedBundle(
+    val graphJson: String,
+    val textAssets: Map<String, BundledTextAsset>,
+)
+
+internal object NativeBundleDecoder {
+    init { System.loadLibrary("wmgf_runtime") }
+
+    external fun decodeNative(input: ByteArray): String
+
+    fun decode(input: ByteArray): DecodedBundle {
+        val result = WmgJson.format.decodeFromString(BundleDecodeResult.serializer(), decodeNative(input))
+        require(result.error == null) { result.error ?: "WMGFバンドルを読み込めません" }
+        require(result.bundleVersion == 1 && result.graphJson != null) { "WMGFバンドルの内容が不正です" }
+        return DecodedBundle(result.graphJson, result.textAssets)
+    }
+}
 
 @Serializable
 private data class MetadataPrefixResult(

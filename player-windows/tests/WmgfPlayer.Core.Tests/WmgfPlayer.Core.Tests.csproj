@@ -22,7 +22,7 @@
   </PropertyGroup>
 
   <Target Name="BuildRustRuntime" BeforeTargets="CoreCompile"
-          Inputs="$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.toml;$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.lock;$(MSBuildProjectDirectory)\..\..\..\runtime\src\lib.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\layout_engine.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\script_engine.rs"
+          Inputs="$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.toml;$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.lock;$(MSBuildProjectDirectory)\..\..\..\runtime\src\lib.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\bundle.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\layout_engine.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\script_engine.rs"
           Outputs="$(RustDll)">
     <Exec WorkingDirectory="$(MSBuildProjectDirectory)\..\..\..\runtime"
           Command="cargo build --release --locked" />

@@ -164,15 +164,31 @@ public sealed class DocumentLibrary
 
     public async Task<WmgGraph> ReadGraphAsync(GraphRef reference, CancellationToken cancellationToken = default)
     {
-        var file = ResolveFromRoot(reference.RootUri, reference.RelativePath, expectFile: true)
+        var preferredBundle = BundleRelativePath(reference.RelativePath) is { } bundlePath
+            ? ResolveFromRoot(reference.RootUri, bundlePath, expectFile: true)
+            : null;
+        var file = preferredBundle ?? ResolveFromRoot(reference.RootUri, reference.RelativePath, expectFile: true)
             ?? throw new FileNotFoundException("WMGFファイルが見つかりません", reference.RelativePath);
+        var isBundle = IsBundlePath(file);
         var info = new FileInfo(file);
         if (_graphCache.TryGetValue(reference.GraphId, out var cached)
-            && cached.Length == info.Length && cached.ModifiedAt == info.LastWriteTimeUtc.Ticks)
+            && cached.IsBundle == isBundle && cached.Length == info.Length && cached.ModifiedAt == info.LastWriteTimeUtc.Ticks)
             return cached.Graph;
-        var text = await ReadTextAsync(file, 8 * 1024 * 1024, cancellationToken);
+        string text;
+        IReadOnlyDictionary<string, BundledTextAsset> textAssets;
+        if (isBundle)
+        {
+            var decoded = NativeRuntime.DecodeBundle(await ReadBytesAsync(file, 16 * 1024 * 1024, cancellationToken));
+            text = decoded.GraphJson;
+            textAssets = decoded.TextAssets;
+        }
+        else
+        {
+            text = await ReadTextAsync(file, 8 * 1024 * 1024, cancellationToken);
+            textAssets = new Dictionary<string, BundledTextAsset>(StringComparer.Ordinal);
+        }
         var graph = WmgJson.Deserialize<WmgGraph>(text);
-        _graphCache[reference.GraphId] = new(graph, text, info.Length, info.LastWriteTimeUtc.Ticks);
+        _graphCache[reference.GraphId] = new(graph, text, textAssets, isBundle, info.Length, info.LastWriteTimeUtc.Ticks);
         return graph;
     }
 
@@ -182,6 +198,16 @@ public sealed class DocumentLibrary
         int maxBytes = 2 * 1024 * 1024,
         CancellationToken cancellationToken = default)
     {
+        if (!_graphCache.TryGetValue(reference.GraphId, out var bundle))
+        {
+            await ReadGraphAsync(reference, cancellationToken);
+            bundle = _graphCache.GetValueOrDefault(reference.GraphId);
+        }
+        if (bundle?.IsBundle == true && bundle.TextAssets.GetValueOrDefault(relativeAssetPath) is { } embedded)
+        {
+            if (Encoding.UTF8.GetByteCount(embedded.Content) > maxBytes) throw new InvalidDataException($"ファイルが大きすぎます: {relativeAssetPath}");
+            return embedded.Content;
+        }
         var file = GetAssetPath(reference, relativeAssetPath)
             ?? throw new FileNotFoundException($"ファイルが見つかりません: {relativeAssetPath}");
         return await ReadTextAsync(file, maxBytes, cancellationToken);
@@ -194,6 +220,21 @@ public sealed class DocumentLibrary
     {
         if (_scriptCache.TryGetValue(reference.GraphId, out var cached) && cached.ContainsKey(entryPath)) return cached;
         if (!GraphValidator.IsSafeRelativePath(entryPath)) throw new ArgumentException("安全でないスクリプトパスです", nameof(entryPath));
+        if (!_graphCache.TryGetValue(reference.GraphId, out var bundle))
+        {
+            await ReadGraphAsync(reference, cancellationToken);
+            bundle = _graphCache.GetValueOrDefault(reference.GraphId);
+        }
+        if (bundle?.IsBundle == true)
+        {
+            var embedded = bundle?.TextAssets
+                .Where(item => string.Equals(item.Value.Kind, "starlark", StringComparison.Ordinal))
+                .ToDictionary(item => item.Key, item => item.Value.Content, StringComparer.Ordinal)
+                ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            if (!embedded.ContainsKey(entryPath)) throw new FileNotFoundException($"バンドル内にスクリプトが見つかりません: {entryPath}");
+            _scriptCache[reference.GraphId] = embedded;
+            return embedded;
+        }
         var contentRoot = ResolveFromRoot(reference.RootUri, reference.ParentPath, expectFile: false)
             ?? throw new DirectoryNotFoundException("コンテンツフォルダが見つかりません");
         var sources = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -259,14 +300,14 @@ public sealed class DocumentLibrary
 
         foreach (var path in GraphValidator.AllAssetPaths(graph).Where(GraphValidator.IsSafeRelativePath))
         {
-            if (GetAssetPath(reference, path) is null)
+            if (!AssetExists(reference, path))
                 issues.Add(new(required.Contains(path) ? ValidationSeverity.Error : ValidationSeverity.Warning, $"ファイルが見つかりません: {path}", path));
         }
 
         var layouts = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var path in graph.PlayerControls.Values.Select(control => control.Layout).OfType<string>().Distinct(StringComparer.Ordinal).Where(GraphValidator.IsSafeRelativePath))
         {
-            if (GetAssetPath(reference, path) is null) continue;
+            if (!AssetExists(reference, path)) continue;
             try
             {
                 var layout = await ReadAssetTextAsync(reference, path, 512 * 1024, cancellationToken);
@@ -305,12 +346,18 @@ public sealed class DocumentLibrary
             try { return (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0; }
             catch { return false; }
         }).ToList();
-        var jsonFiles = entries.Where(File.Exists).Where(path => path.EndsWith(".wmg.json", StringComparison.OrdinalIgnoreCase)).ToList();
+        var files = entries.Where(File.Exists).ToList();
+        var bundleFiles = files.Where(path => IsBundlePath(path)).ToList();
+        var bundleNames = bundleFiles.Select(GraphBaseName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var graphFiles = bundleFiles.Concat(files
+            .Where(path => path.EndsWith(".wmg.json", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !bundleNames.Contains(GraphBaseName(path))))
+            .ToList();
         var name = relativePath.Split('/').LastOrDefault() is { Length: > 0 } value ? value : grant.Name;
         LibraryDirectory result;
-        if (jsonFiles.Count > 0)
+        if (graphFiles.Count > 0)
         {
-            result = new(grant, name, relativePath, [], jsonFiles
+            result = new(grant, name, relativePath, [], graphFiles
                 .Select(path => ScanGraphPreview(grant, relativePath, path, cancellationToken))
                 .OrderBy(graph => graph.DisplayName, StringComparer.CurrentCultureIgnoreCase)
                 .ToList());
@@ -332,17 +379,31 @@ public sealed class DocumentLibrary
         var reference = new GraphRef { RootUri = grant.Uri, RootName = grant.Name, RelativePath = JoinRelative(parentPath, fileName) };
         try
         {
-            var metadata = ReadMetadataPrefix(file, cancellationToken);
+            var metadata = IsBundlePath(file) ? ReadBundleMetadata(file, cancellationToken) : ReadMetadataPrefix(file, cancellationToken);
+            var baseName = GraphBaseName(fileName);
             return new(reference,
-                string.IsNullOrWhiteSpace(metadata.DisplayName) ? fileName[..^".wmg.json".Length] : metadata.DisplayName,
+                string.IsNullOrWhiteSpace(metadata.DisplayName) ? baseName : metadata.DisplayName,
                 string.IsNullOrWhiteSpace(metadata.Author) ? null : metadata.Author,
                 string.IsNullOrWhiteSpace(metadata.Thumbnail) ? null : metadata.Thumbnail,
                 ModifiedAt: new FileInfo(file).LastWriteTimeUtc.Ticks);
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException)
         {
-            return new(reference, fileName[..^".wmg.json".Length], ParseError: error.Message, ModifiedAt: new FileInfo(file).LastWriteTimeUtc.Ticks);
+            return new(reference, GraphBaseName(fileName), ParseError: error.Message, ModifiedAt: new FileInfo(file).LastWriteTimeUtc.Ticks);
         }
+    }
+
+    private static GraphMetadataPreview ReadBundleMetadata(string file, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var decoded = NativeRuntime.DecodeBundle(ReadBytes(file, 16 * 1024 * 1024));
+        var graph = WmgJson.Deserialize<WmgGraph>(decoded.GraphJson);
+        return new GraphMetadataPreview
+        {
+            DisplayName = graph.Metadata?.DisplayName,
+            Author = graph.Metadata?.Author,
+            Thumbnail = graph.Metadata?.Thumbnail,
+        };
     }
 
     private static GraphMetadataPreview ReadMetadataPrefix(string file, CancellationToken cancellationToken)
@@ -379,6 +440,20 @@ public sealed class DocumentLibrary
         var text = await reader.ReadToEndAsync(cancellationToken);
         if (Encoding.UTF8.GetByteCount(text) > maxBytes) throw new InvalidDataException($"ファイルが大きすぎます: {info.Name}");
         return text;
+    }
+
+    private static byte[] ReadBytes(string file, int maxBytes)
+    {
+        var info = new FileInfo(file);
+        if (info.Length > maxBytes) throw new InvalidDataException($"ファイルが大きすぎます: {info.Name}");
+        return File.ReadAllBytes(file);
+    }
+
+    private static async Task<byte[]> ReadBytesAsync(string file, int maxBytes, CancellationToken cancellationToken)
+    {
+        var info = new FileInfo(file);
+        if (info.Length > maxBytes) throw new InvalidDataException($"ファイルが大きすぎます: {info.Name}");
+        return await File.ReadAllBytesAsync(file, cancellationToken);
     }
 
     private static string? ResolveFromRoot(string rootPath, string relativePath, bool expectFile)
@@ -433,6 +508,21 @@ public sealed class DocumentLibrary
 
     private static string JoinRelative(string parent, string child) => parent.Length == 0 ? child : $"{parent}/{child}";
     private static string ParentPath(string path) => path.Contains('/') ? path[..path.LastIndexOf('/')] : "";
+    private static bool IsBundlePath(string path) => path.EndsWith(".wmg", StringComparison.OrdinalIgnoreCase) && !path.EndsWith(".wmg.json", StringComparison.OrdinalIgnoreCase);
+    private static string? BundleRelativePath(string path) => path.EndsWith(".wmg.json", StringComparison.OrdinalIgnoreCase)
+        ? path[..^".wmg.json".Length] + ".wmg"
+        : IsBundlePath(path) ? path : null;
+    private static string GraphBaseName(string path)
+    {
+        var name = Path.GetFileName(path);
+        return name.EndsWith(".wmg.json", StringComparison.OrdinalIgnoreCase) ? name[..^".wmg.json".Length]
+            : name.EndsWith(".wmg", StringComparison.OrdinalIgnoreCase) ? name[..^".wmg".Length]
+            : name;
+    }
+
+    private bool AssetExists(GraphRef reference, string relativeAssetPath) =>
+        (_graphCache.TryGetValue(reference.GraphId, out var bundle) && bundle.TextAssets.ContainsKey(relativeAssetPath))
+        || GetAssetPath(reference, relativeAssetPath) is not null;
 
     private sealed record LibraryState
     {
@@ -440,5 +530,5 @@ public sealed class DocumentLibrary
         public Dictionary<string, long> FavoriteAt { get; init; } = new(StringComparer.Ordinal);
     }
 
-    private sealed record CachedGraph(WmgGraph Graph, string SourceJson, long Length, long ModifiedAt);
+    private sealed record CachedGraph(WmgGraph Graph, string SourceJson, IReadOnlyDictionary<string, BundledTextAsset> TextAssets, bool IsBundle, long Length, long ModifiedAt);
 }

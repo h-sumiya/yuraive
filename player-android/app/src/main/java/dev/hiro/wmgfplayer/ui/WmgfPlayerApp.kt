@@ -2182,6 +2182,7 @@ private fun historyGraphName(graphId: String): String = graphId
     .substringAfter("::", graphId)
     .substringAfterLast('/')
     .removeSuffix(".wmg.json")
+    .removeSuffix(".wmg")
 
 @Composable
 private fun SettingsScreen(

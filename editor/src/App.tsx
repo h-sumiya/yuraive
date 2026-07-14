@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import { createPlayerBundle, playerBundleName } from './bundle'
 import { createGraph, DEFAULT_PLAYER_CONTROLS, defaultMedia, fileKind, nextButtonColor, nextLayoutColor, nextNodeColor, nextPlayerControlColor, normalizeGraph, probability, validateGraph, type PlayerControlBooleanKey } from './graph'
 import { Preview } from './Preview'
 import { LayoutEditor, LayoutInspector } from './LayoutEditor'
@@ -37,6 +38,7 @@ const Icon = ({ name, size = 16 }: { name: string; size?: number }) => {
     fit: <><path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5"/></>,
     expandAll: <><path d="m7 5 5 5 5-5M7 14l5 5 5-5"/><path d="M4 1h16M4 23h16"/></>,
     collapseAll: <><path d="m7 10 5-5 5 5M7 14l5 5 5-5"/><path d="M4 12h16"/></>,
+    refresh: <><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.4-2.2L20 8M4 16l2.5 2.2A7 7 0 0 0 17.9 16"/></>,
     controls: <><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></>,
     globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></>,
   }
@@ -54,6 +56,7 @@ let activeTreeDrag: { label: string; kind: 'folder' | 'media' | 'layout' } | nul
 const draftKey = (workspace: string, path: string) => `wmgf-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
 const scriptDraftKey = (workspace: string, path: string) => `wmgf-script-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
 const layoutDraftKey = (workspace: string, path: string) => `wmgf-layout-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
+const BUNDLE_NOTICE_HIDDEN_KEY = 'wmgf-bundle-distribution-notice-hidden'
 const defaultScriptSource = (name = 'script') => `# ${name}\n# ctx["history"]: 確定済み再生履歴（最大1000件）\n# ctx["current"]: 現在の再生状態 / ctx["totalActivePlayMs"]: 実再生時間の合計\n# random(), randint(start, end), choice(items), shuffled(items) が利用できます。\n\ndef jump(ctx):\n    """Script Nodeから遷移するNode IDを返します。"""\n    return None\n\ndef render(ctx):\n    """Buttonの表示内容を上書きします。"""\n    return {\n        "visible": True,\n        "text": "Continue",\n        "style": {},\n    }\n\ndef render_stats(ctx):\n    """1セッション分の再生統計を返します。"""\n    minutes = ctx["session"]["activePlayMs"] // 60000\n    return {\n        "sortValue": minutes,\n        "display": {\n            "schemaVersion": 1,\n            "fallbackText": "%s分再生" % minutes,\n            "root": {"type": "text", "text": "%s分再生" % minutes},\n        },\n    }\n`
 const scriptStem = (value: string) => value.trim().replace(/(?:\.star)+$/i, '')
 const scriptFileName = (value: string) => {
@@ -403,7 +406,7 @@ function SocialLinksEditor({ links, onChange }: { links: NonNullable<WmgMetadata
   </div>
 }
 
-function GraphMetadataInspector({ graph, graphName, assets, scripts, onChange }: { graph: WmgGraph; graphName: string; assets: AssetEntry[]; scripts: ScriptDocument[]; onChange: (graph: WmgGraph) => void }) {
+function GraphMetadataInspector({ graph, graphName, assets, scripts, onChange, onExportBundle }: { graph: WmgGraph; graphName: string; assets: AssetEntry[]; scripts: ScriptDocument[]; onChange: (graph: WmgGraph) => void; onExportBundle: () => void }) {
   const metadata = graph.metadata ?? {}
   const commit = (next: WmgMetadata) => {
     const compact = Object.fromEntries(Object.entries(next).filter(([, value]) => Array.isArray(value) ? value.length > 0 : typeof value === 'string' ? value.trim().length > 0 : value !== undefined)) as WmgMetadata
@@ -437,6 +440,9 @@ function GraphMetadataInspector({ graph, graphName, assets, scripts, onChange }:
           <Field label="スクリプト"><select aria-label="再生統計スクリプト" value={graph.playbackStats.path} onChange={(event) => onChange({ ...graph, playbackStats: { ...graph.playbackStats!, path: event.target.value } })}><option value="">選択してください</option>{scripts.map((script) => <option value={script.path} key={script.uid}>{script.path}</option>)}</select></Field>
           <Field label="関数" hint="省略時 render_stats"><input aria-label="再生統計関数" value={graph.playbackStats.function ?? ''} placeholder="render_stats" onChange={(event) => onChange({ ...graph, playbackStats: { ...graph.playbackStats!, function: event.target.value || undefined } })}/></Field>
         </>}
+      </Section>
+      <Section title="配布">
+        <button className="bundle-export-button" onClick={onExportBundle}><Icon name="save" size={14}/><span><strong>プレイヤー用バイナリを出力</strong><small>{playerBundleName(graphName)} · スクリプトとレイアウトを同梱</small></span></button>
       </Section>
     </div>
   </aside>
@@ -493,7 +499,7 @@ function GraphLayoutInspector({ path, placement, layout, connectedControls, onCh
   </aside>
 }
 
-function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probabilityMode, issues, onChangeGraph, onChange, onChangeButton, onSetStart, onSetTerminal, onRename, onRenameButton, onDelete, onDeleteButton, onPick, onPickButton, onAddButton, onDetachButton, onAssetDrop, onFolderDrop, onOpenScript }: { nodeId: string | null; buttonId: string | null; graph: WmgGraph; graphName: string; assets: AssetEntry[]; scripts: ScriptDocument[]; probabilityMode: boolean; issues: ValidationIssue[]; onChangeGraph: (graph: WmgGraph) => void; onChange: (node: WmgNode) => void; onChangeButton: (button: WmgButton) => void; onSetStart: (enabled: boolean) => void; onSetTerminal: (enabled: boolean) => void; onRename: (next: string) => void; onRenameButton: (next: string) => void; onDelete: () => void; onDeleteButton: () => void; onPick: (id: string) => void; onPickButton: (id: string) => void; onAddButton: (nodeId: string) => void; onDetachButton: (nodeId: string, buttonId: string) => void; onAssetDrop: (path: string) => void; onFolderDrop: (path: string) => void; onOpenScript: (script: ScriptDocument) => void }) {
+function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probabilityMode, issues, onChangeGraph, onChange, onChangeButton, onSetStart, onSetTerminal, onRename, onRenameButton, onDelete, onDeleteButton, onPick, onPickButton, onAddButton, onDetachButton, onAssetDrop, onFolderDrop, onOpenScript, onExportBundle }: { nodeId: string | null; buttonId: string | null; graph: WmgGraph; graphName: string; assets: AssetEntry[]; scripts: ScriptDocument[]; probabilityMode: boolean; issues: ValidationIssue[]; onChangeGraph: (graph: WmgGraph) => void; onChange: (node: WmgNode) => void; onChangeButton: (button: WmgButton) => void; onSetStart: (enabled: boolean) => void; onSetTerminal: (enabled: boolean) => void; onRename: (next: string) => void; onRenameButton: (next: string) => void; onDelete: () => void; onDeleteButton: () => void; onPick: (id: string) => void; onPickButton: (id: string) => void; onAddButton: (nodeId: string) => void; onDetachButton: (nodeId: string, buttonId: string) => void; onAssetDrop: (path: string) => void; onFolderDrop: (path: string) => void; onOpenScript: (script: ScriptDocument) => void; onExportBundle: () => void }) {
   const node = nodeId ? graph.nodes[nodeId] : undefined
   const button = buttonId ? graph.buttons[buttonId] : undefined
   const nodeIds = Object.keys(graph.nodes)
@@ -510,7 +516,7 @@ function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probab
       </div>
     </aside>
   }
-  if (!node || !nodeId) return <GraphMetadataInspector graph={graph} graphName={graphName} assets={assets} scripts={scripts} onChange={onChangeGraph}/>
+  if (!node || !nodeId) return <GraphMetadataInspector graph={graph} graphName={graphName} assets={assets} scripts={scripts} onChange={onChangeGraph} onExportBundle={onExportBundle}/>
   const updateMedia = (index: number, media: MediaCandidate) => onChange({ ...node, media: (node.media ?? []).map((item, itemIndex) => itemIndex === index ? media : item) })
   const nodeIssues = issues.filter((issue) => issue.nodeId === nodeId)
   if (node.type === 'script') return <aside className="inspector script-node-inspector">
@@ -975,6 +981,17 @@ function AssetPreview({ asset, onClose }: { asset: AssetEntry; onClose: () => vo
   </div>
 }
 
+function BundleExportNotice({ onClose }: { onClose: (hidePermanently: boolean) => void }) {
+  const [hidePermanently, setHidePermanently] = useState(false)
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose(hidePermanently)}>
+    <section className="bundle-export-notice" role="dialog" aria-modal="true" aria-labelledby="bundle-export-title">
+      <header><div><Icon name="check" size={15}/><strong id="bundle-export-title">プレイヤー用バイナリを出力しました</strong></div><button className="icon-button" aria-label="閉じる" onClick={() => onClose(hidePermanently)}><Icon name="close" size={13}/></button></header>
+      <div><p><code>.wmg</code> にはグラフ、Starlarkスクリプト、ボタンレイアウトが含まれています。配布時に元の <code>.wmg.json</code>、<code>.star</code>、<code>.wmg-layout.html</code> を添える必要はありません。</p><p>音声・動画・画像・字幕はバンドルに含まれません。相対パスを保ったまま一緒に配布してください。</p></div>
+      <footer><label className="check-row"><input type="checkbox" checked={hidePermanently} onChange={(event) => setHidePermanently(event.target.checked)}/>今後この案内を表示しない</label><button className="primary-button compact" onClick={() => onClose(hidePermanently)}>閉じる</button></footer>
+    </section>
+  </div>
+}
+
 function App() {
   const folderInput = useRef<HTMLInputElement>(null)
   const treeInlineCommit = useRef<TreeInlineEdit | null>(null)
@@ -1003,6 +1020,8 @@ function App() {
   const [previewAsset, setPreviewAsset] = useState<AssetEntry | null>(null)
   const [showProblems, setShowProblems] = useState(false)
   const [showFileMenu, setShowFileMenu] = useState(false)
+  const [showBundleNotice, setShowBundleNotice] = useState(false)
+  const bundleNoticeShown = useRef(false)
   const [tabMenu, setTabMenu] = useState<{ kind: 'graph' | 'script' | 'layout'; uid: string; x: number; y: number } | null>(null)
   const [treeMenu, setTreeMenu] = useState<{ target: TreeContextTarget; x: number; y: number } | null>(null)
   const [treeInlineEdit, setTreeInlineEdit] = useState<TreeInlineEdit | null>(null)
@@ -1100,6 +1119,42 @@ function App() {
       if (error instanceof DOMException && error.name === 'AbortError') return
       notify(error instanceof Error ? error.message : 'フォルダを開けませんでした')
     } finally { setBusy(false) }
+  }
+  const reloadDirectory = async () => {
+    if (!root || busy) return
+    const dirty = documents.some((document) => document.dirty) || scripts.some((script) => script.dirty) || layouts.some((layout) => layout.dirty)
+    if (dirty && !window.confirm('未保存の変更があります。破棄してファイルツリーを再読み込みしますか？')) return
+    const describeTab = (tab: EditorTab) => {
+      const item = tab.kind === 'graph' ? documents.find((document) => document.uid === tab.uid) : tab.kind === 'script' ? scripts.find((script) => script.uid === tab.uid) : layouts.find((layout) => layout.uid === tab.uid)
+      return item ? { kind: tab.kind, path: item.path } : null
+    }
+    const tabDescriptors = openTabs.map(describeTab).filter((item): item is { kind: EditorTab['kind']; path: string } => Boolean(item))
+    const activeDescriptor = activeTab ? describeTab({ kind: activeTab.startsWith('graph:') ? 'graph' : activeTab.startsWith('script:') ? 'script' : 'layout', uid: activeTab.slice(activeTab.indexOf(':') + 1) }) : null
+    const activeGraphPath = active?.path
+    setBusy(true)
+    try {
+      const result = await readDirectory(root)
+      if (dirty) {
+        documents.forEach((document) => localStorage.removeItem(draftKey(rootName, document.path)))
+        scripts.forEach((script) => localStorage.removeItem(scriptDraftKey(rootName, script.path)))
+        layouts.forEach((layout) => localStorage.removeItem(layoutDraftKey(rootName, layout.path)))
+      }
+      const findTab = ({ kind, path }: { kind: EditorTab['kind']; path: string }): EditorTab | undefined => {
+        const item = kind === 'graph' ? result.documents.find((document) => document.path === path) : kind === 'script' ? result.scripts.find((script) => script.path === path) : result.layouts.find((layout) => layout.path === path)
+        return item ? { kind, uid: item.uid } : undefined
+      }
+      const refreshedTabs = tabDescriptors.map(findTab).filter((tab): tab is EditorTab => Boolean(tab))
+      const activeMatch = activeDescriptor ? findTab(activeDescriptor) : undefined
+      const fallback = refreshedTabs[0] ?? (result.documents[0] ? { kind: 'graph' as const, uid: result.documents[0].uid } : undefined)
+      const nextActive = activeMatch ?? fallback
+      const graphContext = nextActive?.kind === 'graph' ? result.documents.find((document) => document.uid === nextActive.uid) : result.documents.find((document) => document.path === activeGraphPath) ?? result.documents[0]
+      setDocuments(result.documents); setScripts(result.scripts); setLayouts(result.layouts); setFolders(result.folders); setAssets(result.assets)
+      setOpenTabs(refreshedTabs.length ? refreshedTabs : fallback ? [fallback] : [])
+      setActiveTab(nextActive ? `${nextActive.kind}:${nextActive.uid}` : null); setActiveUid(graphContext?.uid ?? null)
+      setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null); setPreviewAsset(null)
+      notify(result.errors.length ? `${result.errors.length}件のファイルを読み込めませんでした` : 'ファイルツリーを再読み込みしました')
+    } catch (error) { notify(error instanceof Error ? error.message : 'ファイルツリーを再読み込みできませんでした') }
+    finally { setBusy(false) }
   }
   const requestOpenDirectory = () => {
     if ((documents.some((document) => document.dirty) || scripts.some((script) => script.dirty) || layouts.some((layout) => layout.dirty)) && !window.confirm('未保存の変更があります。保存せずに新しいフォルダを開きますか？')) return
@@ -2013,6 +2068,38 @@ function App() {
     if (!active) return
     const blob = new Blob([serialize(active.graph)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = active.name; link.click(); URL.revokeObjectURL(url)
   }
+  const exportBundle = async () => {
+    if (!active) return
+    const errors = issues.filter((issue) => issue.severity === 'error')
+    if (errors.length) { notify(`${errors.length}件のエラーを解消してから出力してください`); setShowProblems(true); return }
+    try {
+      const bytes = createPlayerBundle(active.path, active.graph, scripts, layouts)
+      const name = playerBundleName(active.name)
+      const parent = active.path.includes('/') ? active.path.slice(0, active.path.lastIndexOf('/')) : ''
+      if (root) {
+        const directory = await resolveDirectory(parent)
+        if (!directory) throw new Error('出力先フォルダを開けません')
+        const handle = await directory.getFileHandle(name, { create: true })
+        const writable = await handle.createWritable()
+        await writable.write(bytes)
+        await writable.close()
+        const file = await handle.getFile()
+        const path = parent ? `${parent}/${name}` : name
+        setAssets((items) => [...items.filter((item) => item.path !== path), { name, path, kind: fileKind(path), file }])
+        notify(`${name} を出力しました`)
+      } else {
+        const blob = new Blob([bytes], { type: 'application/vnd.wmgf.bundle' })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url)
+        notify(`${name} をダウンロードしました`)
+      }
+      if (!bundleNoticeShown.current && localStorage.getItem(BUNDLE_NOTICE_HIDDEN_KEY) !== 'true') {
+        bundleNoticeShown.current = true
+        setShowBundleNotice(true)
+      }
+    } catch (error) { notify(error instanceof Error ? error.message : 'バンドルを出力できませんでした') }
+  }
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void saveCurrent() }
@@ -2076,7 +2163,7 @@ function App() {
   return <div className="app-shell" onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' } }} onDrop={(event) => { if (!event.dataTransfer.types.includes('Files')) return; event.preventDefault(); const promises = Array.from(event.dataTransfer.items).map((item) => (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> }).getAsFileSystemHandle?.() ?? Promise.resolve(null)); void importDroppedHandles(promises) }}>
     <header className="titlebar"><div className="brand"><div className="brand-mark"><span/><span/><span/></div><strong>WMGF</strong><span>Editor</span></div><nav><div className="menu-anchor"><button onPointerDown={(event) => event.stopPropagation()} onClick={() => setShowFileMenu(!showFileMenu)}>ファイル</button>{showFileMenu && <div className="app-menu" onPointerDown={(event) => event.stopPropagation()}><button disabled={!activeTab} onClick={() => { void saveCurrent(); setShowFileMenu(false) }}><Icon name="save" size={13}/><span>保存</span><kbd>Ctrl+S</kbd></button><div className="menu-separator"/><button onClick={() => { setShowFileMenu(false); requestOpenDirectory() }}><Icon name="folder" size={13}/><span>新しいフォルダを開く</span></button></div>}</div></nav><div className="title-actions"><span className="workspace-name"><Icon name="folder" size={13}/>{rootName}</span><button className="toolbar-button" disabled={!activeTab} onClick={() => void saveCurrent()}><Icon name="save" size={14}/>保存</button><button className="primary-button compact" disabled={!active} onClick={() => setShowPreview(true)}><Icon name="play" size={13}/>プレビュー</button></div></header>
     <div className="workspace" style={{ gridTemplateColumns: `${leftWidth}px 4px minmax(360px, 1fr) 4px ${rightWidth}px` }}><Suspense fallback={<div className="workspace-loading">エディタを読み込み中…</div>}>
-      <aside className="explorer"><div className="panel-title"><span>ファイル</span><div><button className="icon-button" data-testid="tree-expand-all" title="すべて展開" onClick={() => setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))}><Icon name="expandAll" size={13}/></button><button className="icon-button" data-testid="tree-collapse-all" title="すべて折りたたむ" onClick={() => setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: false }))}><Icon name="collapseAll" size={13}/></button><button className="icon-button" title="新規グラフ" onClick={newDocument}><Icon name="plus" size={14}/></button><button className="icon-button" title="新しいフォルダを開く" onClick={requestOpenDirectory}><Icon name="folder" size={14}/></button></div></div><div className="explorer-scroll">
+      <aside className="explorer"><div className="panel-title"><span>ファイル</span><div><button className="icon-button" data-testid="tree-reload" title="ファイルツリーを再読み込み" disabled={!root || busy} onClick={() => void reloadDirectory()}><Icon name="refresh" size={13}/></button><button className="icon-button" data-testid="tree-expand-all" title="すべて展開" onClick={() => setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))}><Icon name="expandAll" size={13}/></button><button className="icon-button" data-testid="tree-collapse-all" title="すべて折りたたむ" onClick={() => setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: false }))}><Icon name="collapseAll" size={13}/></button><button className="icon-button" title="新規グラフ" onClick={newDocument}><Icon name="plus" size={14}/></button><button className="icon-button" title="新しいフォルダを開く" onClick={requestOpenDirectory}><Icon name="folder" size={14}/></button></div></div><div className="explorer-scroll">
         <FileTree documents={documents} scripts={scripts} layouts={layouts} folders={folders} assets={assets} activeTab={activeTab} inlineEdit={treeInlineEdit} expansionCommand={treeExpansionCommand} getAssetPath={(asset) => docAssets.find((item) => item.file === asset.file)?.path ?? asset.path} getLayoutPath={(layout) => docLayouts.find((item) => item.uid === layout.uid)?.path ?? layout.path} getFolderPath={(path) => { const parent = active?.path.includes('/') ? active.path.slice(0, active.path.lastIndexOf('/') + 1) : ''; return parent && path.startsWith(parent) ? path.slice(parent.length) : path }} onOpenGraph={openGraphTab} onOpenScript={openScriptTab} onOpenLayout={openLayoutTab} onPreview={setPreviewAsset} onContextMenu={(target, event) => { event.preventDefault(); event.stopPropagation(); setTreeMenu({ target, x: Math.min(event.clientX, window.innerWidth - 250), y: Math.min(event.clientY, window.innerHeight - 210) }) }} onInlineChange={(name) => setTreeInlineEdit((edit) => edit ? { ...edit, name } : edit)} onInlineCommit={commitTreeInlineEdit} onInlineCancel={() => { treeInlineCommit.current = null; setTreeInlineEdit(null) }} onMoveScript={moveScript} onMoveLayout={moveLayout}/>
       </div><button className="add-file" onClick={(event) => setTreeMenu({ target: { kind: 'root', path: '' }, x: event.clientX, y: event.clientY - 120 })}><Icon name="plus" size={13}/>新規作成</button></aside>
       <div className="resize-handle left" title="ファイルペインの幅を変更" onPointerDown={(event) => beginResize('left', event)}/>
@@ -2156,12 +2243,13 @@ function App() {
         onGlobal={(enabled) => updateGraph({ ...active.graph, globalPlayerControl: enabled ? selectedPlayerControl : active.graph.globalPlayerControl === selectedPlayerControl ? undefined : active.graph.globalPlayerControl })}
         onDelete={() => deletePlayerControlById(selectedPlayerControl)}
         onOpenLayout={(layout) => { const original = layouts.find((item) => item.uid === layout.uid); if (original) openLayoutTab(original) }}
-      /> : <Inspector nodeId={selectedNode} buttonId={selectedButton} graph={active.graph} graphName={active.name} assets={docAssets} scripts={docScripts} probabilityMode={probabilityMode} issues={issues} onChangeGraph={updateGraph} onChange={updateNode} onChangeButton={updateSelectedButton} onSetStart={setSelectedNodeStart} onSetTerminal={setSelectedNodeTerminal} onRename={renameNode} onRenameButton={renameButton} onDelete={deleteNode} onDeleteButton={() => selectedButton && deleteButtonById(selectedButton)} onPick={(id) => { setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }} onPickButton={(id) => { setSelectedButton(id); setSelectedNode(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }} onAddButton={(nodeId) => { const node = active.graph.nodes[nodeId]; addButton((node.editor?.x ?? 0) + 17, (node.editor?.y ?? 0) + 110, nodeId) }} onDetachButton={detachButton} onAssetDrop={(path) => selectedNode && bindAssetToNode(selectedNode, path)} onFolderDrop={(path) => selectedNode && appendFolderToNode(selectedNode, path)} onOpenScript={openScriptTab}/> : <aside className="inspector"><div className="panel-title"><span>インスペクター</span></div><div className="blank-panel"><Icon name="target" size={30}/></div></aside>}
+      /> : <Inspector nodeId={selectedNode} buttonId={selectedButton} graph={active.graph} graphName={active.name} assets={docAssets} scripts={docScripts} probabilityMode={probabilityMode} issues={issues} onChangeGraph={updateGraph} onChange={updateNode} onChangeButton={updateSelectedButton} onSetStart={setSelectedNodeStart} onSetTerminal={setSelectedNodeTerminal} onRename={renameNode} onRenameButton={renameButton} onDelete={deleteNode} onDeleteButton={() => selectedButton && deleteButtonById(selectedButton)} onPick={(id) => { setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }} onPickButton={(id) => { setSelectedButton(id); setSelectedNode(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }} onAddButton={(nodeId) => { const node = active.graph.nodes[nodeId]; addButton((node.editor?.x ?? 0) + 17, (node.editor?.y ?? 0) + 110, nodeId) }} onDetachButton={detachButton} onAssetDrop={(path) => selectedNode && bindAssetToNode(selectedNode, path)} onFolderDrop={(path) => selectedNode && appendFolderToNode(selectedNode, path)} onOpenScript={openScriptTab} onExportBundle={() => void exportBundle()}/> : <aside className="inspector"><div className="panel-title"><span>インスペクター</span></div><div className="blank-panel"><Icon name="target" size={30}/></div></aside>}
     </Suspense></div>
     <footer className="statusbar"><button className={issues.some((issue) => issue.severity === 'error') ? 'has-error' : ''} onClick={() => setShowProblems(!showProblems)}>{issues.length ? <Icon name="warning" size={12}/> : <Icon name="check" size={12}/>} {issues.filter((issue) => issue.severity === 'error').length} エラー　{issues.filter((issue) => issue.severity === 'warning').length} 警告</button><div><span>WMGF v1</span><span>{active ? `${Object.keys(active.graph.nodes).length} Node · ${Object.keys(active.graph.buttons).length} Button · ${Object.keys(active.graph.playerControls).length} Controls` : 'グラフなし'}</span><span>{scripts.length} Script · {layouts.length} Layout · {assets.length} Assets</span></div></footer>
     {showProblems && <div className="problems-panel" style={{ left: leftWidth + 4, right: rightWidth + 4 }}><header><strong>問題</strong><button className="icon-button" onClick={() => setShowProblems(false)}><Icon name="close" size={13}/></button></header>{issues.length ? issues.map((issue, index) => <button key={index} onClick={() => { const script = issue.scriptPath ? docScripts.find((item) => item.path === issue.scriptPath) : undefined; const layout = issue.layoutPath ? docLayouts.find((item) => item.path === issue.layoutPath) : undefined; if (script) openScriptTab(script); else if (layout) { const original = layouts.find((item) => item.uid === layout.uid); if (original) openLayoutTab(original) } else { if (active) openGraphTab(active); if (issue.nodeId) { setSelectedNode(issue.nodeId); setSelectedButton(null); setSelectedPlayerControl(null) } else if (issue.buttonId) { setSelectedButton(issue.buttonId); setSelectedNode(null); setSelectedPlayerControl(null) } else if (issue.playerControlId) { setSelectedPlayerControl(issue.playerControlId); setSelectedNode(null); setSelectedButton(null) } } setShowProblems(false) }}><Icon name="warning" size={13}/><span>{issue.message}</span><small>{issue.scriptPath ?? issue.layoutPath ?? issue.nodeId ?? issue.buttonId ?? issue.playerControlId ?? 'グラフ'}</small></button>) : <div className="problems-empty"><Icon name="check" size={15}/>問題は見つかりませんでした</div>}</div>}
     {showPreview && active && <Preview graph={active.graph} graphId={active.path} assets={docAssets} scripts={docScripts} layouts={docLayouts} initialHistory={previewHistories[active.uid] ?? []} onHistoryChange={(history) => setPreviewHistories((current) => ({ ...current, [active.uid]: history }))} onClose={() => setShowPreview(false)}/>}
     {previewAsset && <AssetPreview asset={previewAsset} onClose={() => setPreviewAsset(null)}/>}
+    {showBundleNotice && <BundleExportNotice onClose={(hidePermanently) => { if (hidePermanently) localStorage.setItem(BUNDLE_NOTICE_HIDDEN_KEY, 'true'); setShowBundleNotice(false) }}/>}
     {tabMenu && <div className="tab-context-menu" style={{ left: tabMenu.x, top: tabMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { closeTab({ kind: tabMenu.kind, uid: tabMenu.uid }); setTabMenu(null) }}><Icon name="close" size={13}/>タブを閉じる</button>{tabMenu.kind === 'graph' && <button onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) duplicateDocument(target); setTabMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => { const target = tabMenu.kind === 'graph' ? documents.find((item) => item.uid === tabMenu.uid) : tabMenu.kind === 'script' ? scripts.find((item) => item.uid === tabMenu.uid) : layouts.find((item) => item.uid === tabMenu.uid); if (target) beginTreeRename({ kind: tabMenu.kind, uid: target.uid, path: target.path }, 'tab') }}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (tabMenu.kind === 'graph') { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) void deleteDocument(target) } else if (tabMenu.kind === 'script') { const target = scripts.find((script) => script.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'script', uid: target.uid, path: target.path }) } else { const target = layouts.find((layout) => layout.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'layout', uid: target.uid, path: target.path }) } setTabMenu(null) }}><Icon name="trash" size={13}/>ファイルを削除</button></div>}
     {treeMenu && <div className="tab-context-menu tree-context-menu" style={{ left: treeMenu.x, top: treeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{treeMenu.target.kind === 'root' || treeMenu.target.kind === 'folder' ? <><label>{treeMenu.target.path || rootName}</label><button onClick={() => beginTreeCreate(treeMenu.target, 'file')}><Icon name="file" size={13}/>ファイルを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'folder')}><Icon name="folder" size={13}/>フォルダを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'script')}><Icon name="script" size={13}/>Starlarkスクリプトを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'layout')}><Icon name="fit" size={13}/>レイアウトファイルを作成</button>{treeMenu.target.kind === 'folder' && <button className="danger" onClick={() => { void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>フォルダを削除</button>}</> : <>{treeMenu.target.kind === 'graph' && <button onClick={() => { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) duplicateDocument(target); setTreeMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => beginTreeRename(treeMenu.target, 'tree')}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (treeMenu.target.kind === 'graph') { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) void deleteDocument(target) } else void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>削除</button></>}</div>}
     <input ref={folderInput} type="file" multiple hidden onChange={(event) => event.target.files && void openFallback(event.target.files)}/>

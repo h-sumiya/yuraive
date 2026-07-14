@@ -196,7 +196,7 @@ public sealed record GraphRef
     [JsonIgnore] public string FileName => RelativePath.Split('/').LastOrDefault() ?? RelativePath;
     [JsonIgnore] public string ParentPath => RelativePath.Contains('/') ? RelativePath[..RelativePath.LastIndexOf('/')] : "";
     [JsonIgnore] public string ContentFolderName => ParentPath.Split('/').LastOrDefault() is { Length: > 0 } name ? name : RootName;
-    [JsonIgnore] public string GraphId => $"{RootUri}::{RelativePath}";
+    [JsonIgnore] public string GraphId => $"{RootUri}::{(RelativePath.EndsWith(".wmg", StringComparison.OrdinalIgnoreCase) && !RelativePath.EndsWith(".wmg.json", StringComparison.OrdinalIgnoreCase) ? RelativePath[..^".wmg".Length] + ".wmg.json" : RelativePath)}";
 }
 
 public sealed record PlaybackHistoryEntry

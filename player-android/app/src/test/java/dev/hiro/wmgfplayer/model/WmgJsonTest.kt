@@ -51,5 +51,9 @@ class WmgJsonTest {
     fun graphTitleFallbackUsesContentFolderThenRootName() {
         assertEquals("sleep", GraphRef("content://root", "Library", "asmr/sleep/rain.wmg.json").contentFolderName)
         assertEquals("Library", GraphRef("content://root", "Library", "rain.wmg.json").contentFolderName)
+        assertEquals(
+            GraphRef("content://root", "Library", "rain.wmg.json").graphId,
+            GraphRef("content://root", "Library", "rain.wmg").graphId,
+        )
     }
 }

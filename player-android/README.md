@@ -37,3 +37,6 @@ cd player-android
 アプリ内の「＋」から WMGF コンテンツを含むフォルダを追加します。選択したフォルダの読み取り権限は Android の Storage Access Framework により再起動後も保持されます。
 
 設定の「すべての再生コントロールを表示・許可」を有効にすると、コンテンツ側の`playerControls`を一時的に上書きできます。JSON仕様は[WMGF_v1_SPEC.md](../notes/WMGF_v1_SPEC.md)を参照してください。
+
+編集用の`*.wmg.json`に加えて、スクリプトとレイアウトを内包した配布用`*.wmg`も読み込めます。
+同じ名前の両形式がある場合、ライブラリには`*.wmg`だけを表示します。

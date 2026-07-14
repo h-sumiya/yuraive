@@ -172,6 +172,19 @@ button:disabled { opacity: .45; cursor: default; }
 .social-links-editor { display: flex; flex-direction: column; gap: 5px; }
 .social-link-row { display: grid; grid-template-columns: minmax(74px, .7fr) minmax(0, 1.3fr) 24px; gap: 4px; }
 .social-link-row input { min-width: 0; height: 27px; border: 1px solid #363f48; border-radius: 2px; background: #20262c; color: #d0d6dc; padding: 0 7px; font-size: 9px; }
+.bundle-export-button { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid #466c5e; border-radius: 4px; background: #1a2b25; color: #8fd2b9; text-align: left; }
+.bundle-export-button:hover { border-color: #609480; background: #20372f; }
+.bundle-export-button > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.bundle-export-button strong { color: #c7e1d7; font-size: 10px; }
+.bundle-export-button small { overflow: hidden; text-overflow: ellipsis; color: #74988b; font: 8px ui-monospace, monospace; white-space: nowrap; }
+.bundle-export-notice { width: min(520px, calc(100vw - 40px)); border: 1px solid #465a53; border-radius: 6px; background: #181f1c; box-shadow: 0 20px 70px #000; overflow: hidden; }
+.bundle-export-notice > header { height: 43px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px 0 14px; border-bottom: 1px solid #314139; }
+.bundle-export-notice > header > div { display: flex; align-items: center; gap: 8px; color: #82ceb1; }
+.bundle-export-notice > header strong { color: #d0ddd8; font-size: 11px; }
+.bundle-export-notice > div { display: grid; gap: 10px; padding: 16px 17px; color: #aebbb6; font-size: 10px; line-height: 1.7; }
+.bundle-export-notice p { margin: 0; }
+.bundle-export-notice code { padding: 1px 3px; border-radius: 2px; background: #101713; color: #91c8b3; font: 9px ui-monospace, monospace; }
+.bundle-export-notice > footer { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 13px 0 17px; border-top: 1px solid #314139; background: #151b18; }
 .stats-script-preview { padding: 14px; border-top: 1px solid #28323b; }
 .stats-script-preview h3 { margin: 0 0 10px; font-size: 12px; color: #aebdca; }
 .stats-preview-errors { display: grid; gap: 6px; color: #ff9b9b; font-size: 11px; }

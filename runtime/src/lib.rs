@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 
+mod bundle;
 mod layout_engine;
 mod script_engine;
 
 #[cfg(not(target_arch = "wasm32"))]
-use jni::objects::{JObject, JString};
+use jni::objects::{JByteArray, JObject, JString};
 #[cfg(not(target_arch = "wasm32"))]
 use jni::sys::jstring;
 #[cfg(not(target_arch = "wasm32"))]
@@ -18,6 +19,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 pub use script_engine::{run_starlark, run_starlark_json, StarlarkRunRequest, StarlarkRunResponse};
 pub use layout_engine::{resolve_button_layout, resolve_button_layout_json, LayoutRequest, LayoutResponse};
+pub use bundle::{decode_bundle, decode_bundle_json, BundleTextAsset, BundleTextAssetKind, DecodedBundle};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -1009,6 +1011,24 @@ pub extern "C" fn wmgf_resolve_button_layout_json(input: *const c_char) -> *mut 
     ffi_output(output)
 }
 
+/// Decode a WMGF binary player bundle and return its graph and embedded text
+/// files as JSON. The input buffer only needs to remain valid for this call.
+#[no_mangle]
+#[cfg(not(target_arch = "wasm32"))]
+pub extern "C" fn wmgf_decode_bundle(input: *const u8, length: usize) -> *mut c_char {
+    let output = catch_unwind(AssertUnwindSafe(|| {
+        if input.is_null() {
+            return serde_json::json!({ "error": "バンドル入力がnullです" }).to_string();
+        }
+        // SAFETY: The caller guarantees a readable buffer of `length` bytes
+        // for the duration of this call. decode_bundle_json never retains it.
+        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+        decode_bundle_json(bytes)
+    }))
+    .unwrap_or_else(|_| serde_json::json!({ "error": "Rustバンドル解析器で内部エラーが発生しました" }).to_string());
+    ffi_output(output)
+}
+
 /// Release a string returned by one of the native desktop entry points.
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
@@ -1065,6 +1085,24 @@ pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeGraphMetadataExtract
         r#"{"status":"invalid","error":"Rustメタデータ解析器で内部エラーが発生しました"}"#
             .to_owned()
     });
+
+    env.new_string(output)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+#[cfg(not(target_arch = "wasm32"))]
+pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeBundleDecoder_decodeNative<'local>(
+    env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    input: JByteArray<'local>,
+) -> jstring {
+    let output = catch_unwind(AssertUnwindSafe(|| match env.convert_byte_array(&input) {
+        Ok(value) => decode_bundle_json(&value),
+        Err(error) => serde_json::json!({ "error": format!("バンドルを受け取れません: {error}") }).to_string(),
+    }))
+    .unwrap_or_else(|_| serde_json::json!({ "error": "Rustバンドル解析器で内部エラーが発生しました" }).to_string());
 
     env.new_string(output)
         .map(|value| value.into_raw())

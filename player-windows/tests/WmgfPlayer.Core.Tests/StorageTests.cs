@@ -98,6 +98,80 @@ public sealed class StorageTests
         await Assert.ThrowsAsync<ArgumentException>(() => library.InspectDirectoryAsync(granted, "../outside"));
     }
 
+    [Fact]
+    public async Task LibraryPrefersBundleAndReadsEmbeddedTextAssets()
+    {
+        using var temporary = new TemporaryDirectory();
+        var state = new AppDataPaths(temporary.Combine("state"));
+        var root = temporary.Combine("library");
+        Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(System.IO.Path.Combine(root, "story.wmg.json"),
+            """{"version":1,"metadata":{"displayName":"JSON"},"nodes":{"start":{"type":"media","start":true,"terminal":true}},"buttons":{},"playerControls":{}}""");
+        var bundledJson = """{"version":1,"metadata":{"displayName":"Bundle"},"playbackStats":{"path":"route.star"},"nodes":{"start":{"type":"media","start":true,"terminal":true}},"buttons":{},"playerControls":{"default":{"layout":"default.wmg-layout.html"}},"globalPlayerControl":"default"}""";
+        await File.WriteAllBytesAsync(System.IO.Path.Combine(root, "story.wmg"), EncodeBundle(bundledJson,
+            ("route.star", "def render_stats(ctx):\n    return None\n", 1),
+            ("default.wmg-layout.html", "<style></style><slot></slot>", 2)));
+        var library = new DocumentLibrary(state);
+        await library.AddRootAsync(root, "Works");
+
+        var scanned = Assert.Single(await library.ScanAllAsync());
+        var preview = Assert.Single(scanned.Directory!.Graphs);
+        Assert.Equal("story.wmg", preview.Ref.FileName);
+        Assert.Equal($"{root}::story.wmg.json", preview.Ref.GraphId);
+        Assert.Equal("Bundle", preview.DisplayName);
+        var graph = await library.ReadGraphAsync(preview.Ref);
+        Assert.Equal("Bundle", graph.Metadata?.DisplayName);
+        Assert.Contains("route.star", await library.ReadScriptSourcesAsync(preview.Ref, "route.star"));
+        Assert.Equal("<style></style><slot></slot>", await library.ReadAssetTextAsync(preview.Ref, "default.wmg-layout.html"));
+        Assert.DoesNotContain(await library.ValidateAsync(preview.Ref, graph), issue => issue.Severity == ValidationSeverity.Error);
+    }
+
+    private static byte[] EncodeBundle(string graphJson, params (string Path, string Content, byte Kind)[] assets)
+    {
+        using var payload = new MemoryStream();
+        WriteVarintField(payload, 1, 1);
+        WriteBytesField(payload, 2, Encoding.UTF8.GetBytes(graphJson));
+        foreach (var asset in assets)
+        {
+            using var message = new MemoryStream();
+            WriteBytesField(message, 1, Encoding.UTF8.GetBytes(asset.Path));
+            WriteBytesField(message, 2, Encoding.UTF8.GetBytes(asset.Content));
+            WriteVarintField(message, 3, asset.Kind);
+            WriteBytesField(payload, 3, message.ToArray());
+        }
+        using var output = new MemoryStream();
+        output.Write("WMGFBNDL"u8);
+        output.Write(BitConverter.GetBytes((ushort)1));
+        output.Write(BitConverter.GetBytes((ushort)16));
+        output.Write(BitConverter.GetBytes((uint)payload.Length));
+        payload.Position = 0;
+        payload.CopyTo(output);
+        return output.ToArray();
+
+        static void WriteVarintField(Stream stream, int field, ulong value)
+        {
+            WriteVarint(stream, (ulong)(field << 3));
+            WriteVarint(stream, value);
+        }
+
+        static void WriteBytesField(Stream stream, int field, byte[] value)
+        {
+            WriteVarint(stream, (ulong)((field << 3) | 2));
+            WriteVarint(stream, (ulong)value.Length);
+            stream.Write(value);
+        }
+
+        static void WriteVarint(Stream stream, ulong value)
+        {
+            do
+            {
+                var next = (byte)(value & 0x7f);
+                value >>= 7;
+                stream.WriteByte(value == 0 ? next : (byte)(next | 0x80));
+            } while (value != 0);
+        }
+    }
+
     private static PlaybackHistoryEntry Entry(string id, string graphId, string startedAt) => new()
     {
         Id = id,

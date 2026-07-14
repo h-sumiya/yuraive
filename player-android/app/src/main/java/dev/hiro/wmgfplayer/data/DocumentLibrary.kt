@@ -4,9 +4,11 @@ import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import dev.hiro.wmgfplayer.model.GraphMetadataExtractor
+import dev.hiro.wmgfplayer.model.BundledTextAsset
 import dev.hiro.wmgfplayer.model.GraphRef
 import dev.hiro.wmgfplayer.model.GraphValidator
 import dev.hiro.wmgfplayer.model.MetadataPrefixRead
+import dev.hiro.wmgfplayer.model.NativeBundleDecoder
 import dev.hiro.wmgfplayer.model.ValidationIssue
 import dev.hiro.wmgfplayer.model.WmgGraph
 import dev.hiro.wmgfplayer.model.WmgJson
@@ -19,6 +21,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 @Serializable
@@ -165,13 +168,24 @@ class DocumentLibrary(private val context: Context) {
 
     suspend fun readGraph(ref: GraphRef): WmgGraph = withContext(Dispatchers.IO) {
         graphCache[ref.graphId]?.let { return@withContext it.graph }
-        val file = resolveFromRoot(ref, ref.relativePath) ?: error("WMGF ファイルが見つかりません")
-        val text = readText(file, 8 * 1024 * 1024)
-        WmgJson.format.decodeFromString<WmgGraph>(text).also { graphCache[ref.graphId] = CachedGraph(it, text) }
+        val file = bundleRelativePath(ref.relativePath)?.let { resolveFromRoot(ref, it) }
+            ?: resolveFromRoot(ref, ref.relativePath)
+            ?: error("WMGF ファイルが見つかりません")
+        val isBundle = isBundlePath(file.name.orEmpty())
+        val decoded = if (isBundle) NativeBundleDecoder.decode(readBytes(file, 16 * 1024 * 1024)) else null
+        val text = decoded?.graphJson ?: readText(file, 8 * 1024 * 1024)
+        WmgJson.format.decodeFromString<WmgGraph>(text).also {
+            graphCache[ref.graphId] = CachedGraph(it, text, decoded?.textAssets.orEmpty(), isBundle)
+        }
     }
 
     suspend fun readAssetText(ref: GraphRef, relativeAssetPath: String, maxBytes: Int = 2 * 1024 * 1024): String = withContext(Dispatchers.IO) {
         require(GraphValidator.isSafeRelativePath(relativeAssetPath)) { "安全でないアセットパスです" }
+        if (!graphCache.containsKey(ref.graphId)) readGraph(ref)
+        graphCache[ref.graphId]?.takeIf(CachedGraph::isBundle)?.textAssets?.get(relativeAssetPath)?.let { embedded ->
+            require(embedded.content.toByteArray(Charsets.UTF_8).size <= maxBytes) { "ファイルが大きすぎます: $relativeAssetPath" }
+            return@withContext embedded.content
+        }
         val file = resolveAsset(ref, relativeAssetPath) ?: error("ファイルが見つかりません: $relativeAssetPath")
         readText(file, maxBytes)
     }
@@ -179,6 +193,15 @@ class DocumentLibrary(private val context: Context) {
     suspend fun readScriptSources(ref: GraphRef, entryPath: String): Map<String, String> = withContext(Dispatchers.IO) {
         scriptCache[ref.graphId]?.takeIf { entryPath in it }?.let { return@withContext it }
         require(GraphValidator.isSafeRelativePath(entryPath)) { "安全でないスクリプトパスです" }
+        if (!graphCache.containsKey(ref.graphId)) readGraph(ref)
+        if (graphCache[ref.graphId]?.isBundle == true) {
+            val sources = graphCache[ref.graphId]?.textAssets
+                ?.filterValues { it.kind == "starlark" }
+                ?.mapValues { it.value.content }
+                .orEmpty()
+            require(entryPath in sources) { "バンドル内にスクリプトが見つかりません: $entryPath" }
+            return@withContext sources.also { scriptCache[ref.graphId] = it }
+        }
         val contentRoot = resolveFromRoot(ref, ref.parentPath)
             ?.takeIf(DocumentFile::isDirectory)
             ?: error("コンテンツフォルダが見つかりません")
@@ -233,7 +256,7 @@ class DocumentLibrary(private val context: Context) {
         GraphValidator.allAssetPaths(graph)
             .filter(GraphValidator::isSafeRelativePath)
             .forEach { path ->
-                if (resolveAsset(ref, path) == null) {
+                if (!assetExists(ref, path)) {
                     issues += ValidationIssue(
                         if (path in required) ValidationIssue.Severity.ERROR else ValidationIssue.Severity.WARNING,
                         "ファイルが見つかりません: $path",
@@ -243,7 +266,7 @@ class DocumentLibrary(private val context: Context) {
             }
         val layoutSources = mutableMapOf<String, String>()
         graph.playerControls.values.mapNotNull { it.layout }.distinct().filter(GraphValidator::isSafeRelativePath).forEach { path ->
-            if (resolveAsset(ref, path) != null) {
+            if (assetExists(ref, path)) {
                 val source = runCatching { readAssetText(ref, path, 512 * 1024) }.getOrElse { error ->
                     issues += ValidationIssue(ValidationIssue.Severity.ERROR, "レイアウトを読み込めません: ${error.message}", path)
                     return@forEach
@@ -274,16 +297,19 @@ class DocumentLibrary(private val context: Context) {
         childrenCache[directory.uri.toString()] = files.mapNotNull { file ->
             file.name?.let { it to file }
         }.toMap()
-        val jsonFiles = files.filter { file ->
+        val bundleFiles = files.filter { file -> file.isFile && isBundlePath(file.name.orEmpty()) }
+        val bundleNames = bundleFiles.mapNotNull { it.name?.let(::graphBaseName)?.lowercase(Locale.ROOT) }.toSet()
+        val graphFiles = bundleFiles + files.filter { file ->
             file.isFile && file.name?.endsWith(".wmg.json", ignoreCase = true) == true
+                && graphBaseName(file.name.orEmpty()).lowercase(Locale.ROOT) !in bundleNames
         }
         val name = relativePath.substringAfterLast('/').ifBlank { grant.name }
-        if (jsonFiles.isNotEmpty()) {
+        if (graphFiles.isNotEmpty()) {
             return LibraryDirectory(
                 grant = grant,
                 name = name,
                 relativePath = relativePath,
-                graphs = jsonFiles.map { scanGraphPreview(grant, relativePath, it) },
+                graphs = graphFiles.map { scanGraphPreview(grant, relativePath, it) },
             ).also { directoryCache[directoryKey(grant.uri, relativePath)] = it }
         }
 
@@ -307,10 +333,10 @@ class DocumentLibrary(private val context: Context) {
         val relativePath = listOf(parentPath, fileName).filter(String::isNotEmpty).joinToString("/")
         val ref = GraphRef(grant.uri, grant.name, relativePath)
         return runCatching {
-            val metadata = readMetadataPrefix(file)
+            val metadata = if (isBundlePath(fileName)) readBundleMetadata(file) else readMetadataPrefix(file)
             LibraryGraph(
                 ref = ref,
-                displayName = metadata.displayName?.takeIf(String::isNotBlank) ?: fileName.removeSuffix(".wmg.json"),
+                displayName = metadata.displayName?.takeIf(String::isNotBlank) ?: graphBaseName(fileName),
                 author = metadata.author?.takeIf(String::isNotBlank),
                 thumbnailPath = metadata.thumbnail?.takeIf(String::isNotBlank),
                 modifiedAt = file.lastModified(),
@@ -318,11 +344,17 @@ class DocumentLibrary(private val context: Context) {
         }.getOrElse {
             LibraryGraph(
                 ref = ref,
-                displayName = fileName.removeSuffix(".wmg.json"),
+                displayName = graphBaseName(fileName),
                 parseError = it.message ?: "JSON メタデータを解析できません",
                 modifiedAt = file.lastModified(),
             )
         }
+    }
+
+    private fun readBundleMetadata(file: DocumentFile): PreviewMetadata {
+        val decoded = NativeBundleDecoder.decode(readBytes(file, 16 * 1024 * 1024))
+        val metadata = WmgJson.format.decodeFromString<WmgGraph>(decoded.graphJson).metadata
+        return PreviewMetadata(metadata?.displayName, metadata?.author, metadata?.thumbnail)
     }
 
     private fun readMetadataPrefix(file: DocumentFile): PreviewMetadata {
@@ -409,6 +441,40 @@ class DocumentLibrary(private val context: Context) {
         } ?: error("ファイルを開けません: ${file.name}")
     }
 
+    private fun readBytes(file: DocumentFile, maxBytes: Int): ByteArray {
+        require(file.length() <= maxBytes || file.length() == 0L) { "ファイルが大きすぎます: ${file.name}" }
+        return context.contentResolver.openInputStream(file.uri)?.use { input ->
+            val result = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8_192)
+            var total = 0
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                total += count
+                require(total <= maxBytes) { "ファイルが大きすぎます: ${file.name}" }
+                result.write(buffer, 0, count)
+            }
+            result.toByteArray()
+        } ?: error("ファイルを開けません: ${file.name}")
+    }
+
+    private fun assetExists(ref: GraphRef, path: String): Boolean =
+        graphCache[ref.graphId]?.textAssets?.containsKey(path) == true || resolveAsset(ref, path) != null
+
+    private fun isBundlePath(path: String): Boolean = path.endsWith(".wmg", ignoreCase = true) && !path.endsWith(".wmg.json", ignoreCase = true)
+
+    private fun bundleRelativePath(path: String): String? = when {
+        path.endsWith(".wmg.json", ignoreCase = true) -> path.dropLast(".wmg.json".length) + ".wmg"
+        isBundlePath(path) -> path
+        else -> null
+    }
+
+    private fun graphBaseName(path: String): String = when {
+        path.endsWith(".wmg.json", ignoreCase = true) -> path.dropLast(".wmg.json".length)
+        path.endsWith(".wmg", ignoreCase = true) -> path.dropLast(".wmg".length)
+        else -> path
+    }
+
     private fun readRoots(): List<RootGrant> = runCatching {
         WmgJson.format.decodeFromString(ListSerializer(RootGrant.serializer()), preferences.getString("roots", "[]") ?: "[]")
     }.getOrDefault(emptyList())
@@ -418,6 +484,6 @@ class DocumentLibrary(private val context: Context) {
         rootsMutable.value = value
     }
 
-    private data class CachedGraph(val graph: WmgGraph, val sourceJson: String)
+    private data class CachedGraph(val graph: WmgGraph, val sourceJson: String, val textAssets: Map<String, BundledTextAsset>, val isBundle: Boolean)
     private data class CachedValidation(val graph: WmgGraph, val issues: List<ValidationIssue>)
 }
