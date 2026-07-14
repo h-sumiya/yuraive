@@ -40,24 +40,25 @@ export type ButtonRenderStyle = {
   borderColor?: string
   borderWidth?: number
   borderRadius?: number
+  fontSize?: number
+  fontWeight?: number
+  paddingHorizontal?: number
+  paddingVertical?: number
 }
 
 export type ButtonRenderResult = {
   visible?: boolean
   text?: string
   style?: ButtonRenderStyle
-  layout?: Partial<{ x: number; y: number; width: number; height: number; z: number }>
 }
 
 export type WmgButton = {
   visibility?: Array<{ fromMs: number; toMs: number | null }>
-  layout?: { x: number; y: number; width: number; height: number; z?: number }
-  appearance?: {
-    backgroundColor?: string
-    backgroundImage?: string
-    text?: string
-    textColor?: string
-  }
+  targetSlot?: string
+  order?: number
+  zIndex?: number
+  text?: string
+  style?: ButtonRenderStyle
   render?: ScriptCall
   onPress?: Transition[]
   editor?: {
@@ -102,6 +103,7 @@ export type WmgMetadata = {
 
 export type PlayerControlSettings = {
   accentColor?: string
+  layout?: string
   allowStop: boolean
   showSeekBar: boolean
   showPlaybackTime: boolean
@@ -117,6 +119,12 @@ export type PlayerControlSettings = {
   }
 }
 
+export type GraphLayoutPlacement = {
+  x?: number
+  y?: number
+  color?: string
+}
+
 export type WmgGraph = {
   version: 1
   metadata?: WmgMetadata
@@ -125,6 +133,9 @@ export type WmgGraph = {
   playerControls: Record<string, PlayerControlSettings>
   globalPlayerControl?: string
   playbackStats?: ScriptCall
+  editor?: {
+    layouts?: Record<string, GraphLayoutPlacement>
+  }
 }
 
 export type AssetEntry = {
@@ -143,13 +154,22 @@ export type ScriptDocument = {
   handle?: FileSystemFileHandle
 }
 
+export type LayoutDocument = {
+  uid: string
+  name: string
+  path: string
+  content: string
+  dirty: boolean
+  handle?: FileSystemFileHandle
+}
+
 export type WorkspaceFolder = {
   path: string
   handle?: FileSystemDirectoryHandle
 }
 
 export type EditorTab = {
-  kind: 'graph' | 'script'
+  kind: 'graph' | 'script' | 'layout'
   uid: string
 }
 
@@ -241,6 +261,7 @@ export type ValidationIssue = {
   buttonId?: string
   playerControlId?: string
   scriptPath?: string
+  layoutPath?: string
 }
 
 declare global {

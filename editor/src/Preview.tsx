@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { chooseWeighted } from './graph'
+import { LayoutFrame } from './LayoutFrame'
 import { createStarlarkContext } from './scriptContext'
 import { resetStarlarkRuntime, runStarlark } from './starlark'
-import type { AssetEntry, ButtonRenderResult, MediaCandidate, PlaybackHistoryEntry, PreviewTraceEntry, ScriptDocument, StarlarkCurrent, WmgButton, WmgGraph } from './types'
+import type { AssetEntry, ButtonRenderResult, LayoutDocument, MediaCandidate, PlaybackHistoryEntry, PreviewTraceEntry, ScriptDocument, StarlarkCurrent, WmgButton, WmgGraph } from './types'
 
 const PreviewIcon = ({ name }: { name: 'play' | 'close' | 'debug' | 'trash' | 'export' }) => {
   const path = name === 'play' ? 'm7 4 13 8-13 8z' : name === 'close' ? 'm6 6 12 12M18 6 6 18' : name === 'trash' ? 'M4 7h16M9 3h6l1 4H8zM6 7l1 14h10l1-14' : name === 'export' ? 'M12 3v12m-4-4 4 4 4-4M4 17v4h16v-4' : 'M8 9h8M9 4h6l1 3H8zM7 7l-2 3v8l3 3h8l3-3v-8l-2-3M3 13h4m10 0h4'
@@ -44,17 +45,12 @@ const safeRenderResult = (value: unknown): ButtonRenderResult => {
     const style = raw.style as Record<string, unknown>
     result.style = {}
     for (const key of ['backgroundColor', 'backgroundImage', 'textColor', 'borderColor'] as const) if (typeof style[key] === 'string') result.style[key] = String(style[key]).slice(0, 500)
-    for (const key of ['opacity', 'borderWidth', 'borderRadius'] as const) if (typeof style[key] === 'number' && Number.isFinite(style[key])) result.style[key] = style[key]
-  }
-  if (raw.layout && typeof raw.layout === 'object' && !Array.isArray(raw.layout)) {
-    const layout = raw.layout as Record<string, unknown>
-    result.layout = {}
-    for (const key of ['x', 'y', 'width', 'height', 'z'] as const) if (typeof layout[key] === 'number' && Number.isFinite(layout[key])) result.layout[key] = layout[key]
+    for (const key of ['opacity', 'borderWidth', 'borderRadius', 'fontSize', 'fontWeight', 'paddingHorizontal', 'paddingVertical'] as const) if (typeof style[key] === 'number' && Number.isFinite(style[key])) result.style[key] = style[key]
   }
   return result
 }
 
-export function Preview({ graph, graphId, assets, scripts, initialHistory = [], onHistoryChange, onClose }: { graph: WmgGraph; graphId: string; assets: AssetEntry[]; scripts: ScriptDocument[]; initialHistory?: PlaybackHistoryEntry[]; onHistoryChange?: (history: PlaybackHistoryEntry[]) => void; onClose: () => void }) {
+export function Preview({ graph, graphId, assets, scripts, layouts, initialHistory = [], onHistoryChange, onClose }: { graph: WmgGraph; graphId: string; assets: AssetEntry[]; scripts: ScriptDocument[]; layouts: LayoutDocument[]; initialHistory?: PlaybackHistoryEntry[]; onHistoryChange?: (history: PlaybackHistoryEntry[]) => void; onClose: () => void }) {
   const start = Object.entries(graph.nodes).find(([, node]) => node.start)?.[0] ?? Object.keys(graph.nodes)[0]
   const [current, setCurrent] = useState<CurrentMedia | null>(null)
   const currentRef = useRef<CurrentMedia | null>(null)
@@ -223,7 +219,7 @@ export function Preview({ graph, graphId, assets, scripts, initialHistory = [], 
   }, [resolveToMedia, start])
 
   useEffect(() => {
-    const paths = new Set(Object.values(graph.buttons).flatMap((button) => [button.appearance?.backgroundImage, buttonResults[Object.keys(graph.buttons).find((id) => graph.buttons[id] === button) ?? '']?.style?.backgroundImage]).filter(Boolean) as string[])
+    const paths = new Set(Object.entries(graph.buttons).flatMap(([id, button]) => [button.style?.backgroundImage, buttonResults[id]?.style?.backgroundImage]).filter(Boolean) as string[])
     const next = Object.fromEntries([...paths].flatMap((path) => { const file = assets.find((item) => item.path === path)?.file; return file ? [[path, URL.createObjectURL(file)]] : [] }))
     setButtonImageUrls(next)
     return () => Object.values(next).forEach((url) => URL.revokeObjectURL(url))
@@ -264,6 +260,27 @@ export function Preview({ graph, graphId, assets, scripts, initialHistory = [], 
   }
 
   const contextPreview = scriptContext(history, { type: 'debug' })
+  const controlId = node?.playerControl ?? graph.globalPlayerControl
+  const layoutPath = controlId ? graph.playerControls[controlId]?.layout : undefined
+  const layoutSource = layouts.find((layout) => layout.path === layoutPath)?.content
+  const layoutButtons = !resolving && node?.type === 'media' ? (node.buttons ?? []).flatMap((buttonId) => {
+    const button = graph.buttons[buttonId]
+    if (!button) return []
+    const rendered = buttonResults[buttonId] ?? {}
+    const withinTime = !button.visibility?.length || button.visibility.some((interval) => positionMs >= interval.fromMs && (interval.toMs === null || positionMs <= interval.toMs))
+    const style = { ...button.style, ...rendered.style }
+    const backgroundImage = rendered.style?.backgroundImage ?? button.style?.backgroundImage
+    return [{
+      id: buttonId,
+      visible: rendered.visible !== false && withinTime,
+      targetSlot: button.targetSlot,
+      order: button.order,
+      zIndex: button.zIndex,
+      text: rendered.text ?? button.text ?? buttonId,
+      style,
+      backgroundImageUrl: backgroundImage ? buttonImageUrls[backgroundImage] : undefined,
+    }]
+  }) : []
 
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && close()}>
     <div className={`preview-modal ${debugOpen ? 'debug-open' : ''}`}>
@@ -274,7 +291,13 @@ export function Preview({ graph, graphId, assets, scripts, initialHistory = [], 
           {candidate?.source.type === 'video' && mediaUrl && <video key={`${current?.nodeId}-${candidate.id}`} src={mediaUrl} autoPlay controls style={{ objectFit: candidate.source.fit === 'stretch' ? 'fill' : candidate.source.fit ?? 'contain' }} onLoadedMetadata={(event) => { if (tracker.current) tracker.current.durationMs = event.currentTarget.duration * 1000 }} onPlay={() => { if (tracker.current && tracker.current.playingSince === undefined) tracker.current.playingSince = performance.now() }} onPause={() => { const item = tracker.current; if (item?.playingSince !== undefined) { item.activePlayMs += performance.now() - item.playingSince; item.playingSince = undefined } }} onTimeUpdate={(event) => { const value = event.currentTarget.currentTime * 1000; if (tracker.current) tracker.current.positionMs = value; setPositionMs(value) }} onEnded={() => void transitionFromCurrent('completed', { type: 'end' })}/>} 
           {candidate?.source.type !== 'video' && mediaUrl && <audio key={`${current?.nodeId}-${candidate?.id}`} src={mediaUrl} autoPlay controls onLoadedMetadata={(event) => { if (tracker.current) tracker.current.durationMs = event.currentTarget.duration * 1000 }} onPlay={() => { if (tracker.current && tracker.current.playingSince === undefined) tracker.current.playingSince = performance.now() }} onPause={() => { const item = tracker.current; if (item?.playingSince !== undefined) { item.activePlayMs += performance.now() - item.playingSince; item.playingSince = undefined } }} onTimeUpdate={(event) => { const value = event.currentTarget.currentTime * 1000; if (tracker.current) tracker.current.positionMs = value; setPositionMs(value) }} onEnded={() => void transitionFromCurrent('completed', { type: 'end' })}/>} 
           {!candidate && <div className="preview-empty"><PreviewIcon name="play"/><strong>{resolving ? '遷移を解決中…' : node?.terminal ? 'グラフが終了しました' : 'メディアなし'}</strong>{!resolving && node && !node.terminal && node.onEnd?.length ? <button className="primary-button" onClick={() => void transitionFromCurrent('completed', { type: 'empty' })}>即時遷移を実行</button> : null}</div>}
-          {!resolving && node?.type === 'media' && (node.buttons ?? []).flatMap((buttonId) => { const button = graph.buttons[buttonId]; if (!button) return []; const rendered = buttonResults[buttonId] ?? {}; const withinTime = !button.visibility?.length || button.visibility.some((interval) => positionMs >= interval.fromMs && (interval.toMs === null || positionMs <= interval.toMs)); if (rendered.visible === false || !withinTime) return []; const layout = { ...(button.layout ?? { x: .7, y: .8, width: .2, height: .1, z: 10 }), ...(rendered.layout ?? {}) }; const style = rendered.style ?? {}; const backgroundImage = style.backgroundImage ?? button.appearance?.backgroundImage; return [<button key={buttonId} className="preview-button" style={{ left: `${layout.x * 100}%`, top: `${layout.y * 100}%`, width: `${layout.width * 100}%`, height: `${layout.height * 100}%`, zIndex: layout.z, backgroundColor: style.backgroundColor ?? button.appearance?.backgroundColor ?? 'transparent', color: style.textColor ?? button.appearance?.textColor ?? '#fff', opacity: style.opacity, borderColor: style.borderColor, borderWidth: style.borderWidth, borderRadius: style.borderRadius, backgroundImage: backgroundImage && buttonImageUrls[backgroundImage] ? `url(${buttonImageUrls[backgroundImage]})` : undefined }} onClick={() => void onButton(buttonId, button)}>{rendered.text ?? button.appearance?.text ?? buttonId}</button>] })}
+          {layoutSource && <LayoutFrame
+            source={layoutSource}
+            buttons={layoutButtons}
+            className="preview-layout-frame"
+            onPress={(buttonId) => { const button = graph.buttons[buttonId]; if (button) void onButton(buttonId, button) }}
+          />}
+          {!layoutSource && Boolean(node?.buttons?.length) && <div className="preview-layout-missing">レイアウトファイルが接続されていません</div>}
         </div>
         {debugOpen && <aside className="preview-debug">
           <header><div><button className={debugTab === 'trace' ? 'active' : ''} onClick={() => setDebugTab('trace')}>Trace <i>{trace.length}</i></button><button className={debugTab === 'history' ? 'active' : ''} onClick={() => setDebugTab('history')}>History <i>{history.length}</i></button><button className={debugTab === 'context' ? 'active' : ''} onClick={() => setDebugTab('context')}>Context</button></div><div><button title="JSONLをエクスポート" disabled={!history.length} onClick={exportHistory}><PreviewIcon name="export"/></button><button title="履歴とログをクリア" onClick={() => { setHistoryValue([]); setTrace([]) }}><PreviewIcon name="trash"/></button></div></header>

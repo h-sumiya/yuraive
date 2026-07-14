@@ -12,7 +12,6 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import dev.hiro.wmgfplayer.WmgfApplication
-import dev.hiro.wmgfplayer.model.ButtonLayout
 import dev.hiro.wmgfplayer.model.ButtonRenderResult
 import dev.hiro.wmgfplayer.model.ButtonRenderStyle
 import dev.hiro.wmgfplayer.model.GraphRef
@@ -70,6 +69,7 @@ class GraphPlaybackEngine(
     private var currentFinalized = true
     private var visualPath: String? = null
     private var visualUri: String? = null
+    private var layoutSource: String? = null
     private var baseButtons = emptyList<RenderedButton>()
     private var nodeElapsedBaseMs = 0L
     private var nodeEnteredRealtime = SystemClock.elapsedRealtime()
@@ -119,6 +119,7 @@ class GraphPlaybackEngine(
             nodeClockRunning = !snapshot.completed
             currentFinalized = snapshot.mediaId == null || snapshot.completed
             val node = restoredGraph.nodes[snapshot.nodeId] ?: error("保存されたノードが見つかりません")
+            loadLayout(node)
             val media = node.media.firstOrNull { it.id == snapshot.mediaId }
             currentMedia = media
             transitionClaimed = snapshot.completed
@@ -163,6 +164,7 @@ class GraphPlaybackEngine(
             activePlayBaseMs = 0
             visualPath = null
             visualUri = null
+            layoutSource = null
             nonFatalError = null
             val start = loaded.nodes.entries.singleOrNull { it.value.start }?.key ?: error("開始ノードが 1 件ではありません")
             enterNode(start, trigger("start"), mutableSetOf())
@@ -266,6 +268,7 @@ class GraphPlaybackEngine(
         currentNodeId = null
         currentMedia = null
         baseButtons = emptyList()
+        layoutSource = null
         snapshotStore.clear()
         PlaybackRuntime.publish(PlaybackUiState())
         return true
@@ -327,6 +330,7 @@ class GraphPlaybackEngine(
         nodeEnteredRealtime = SystemClock.elapsedRealtime()
         nodeClockRunning = true
         baseButtons = emptyList()
+        layoutSource = null
         publish(PlaybackStatus.LOADING)
 
         if (node.type == "script") {
@@ -351,6 +355,7 @@ class GraphPlaybackEngine(
         activePlayBaseMs = 0
         activePlayStartedRealtime = null
         currentFinalized = true
+        loadLayout(node)
         val validButtons = node.buttons.filter(loadedGraph.buttons::containsKey)
         val media = forcedMediaId?.let { id -> node.media.firstOrNull { it.id == id } }
             ?: chooseWeighted(node.media, MediaCandidate::weight)
@@ -451,16 +456,9 @@ class GraphPlaybackEngine(
 
     private suspend fun renderButtons(node: WmgNode): List<RenderedButton> {
         val loadedGraph = graph ?: return emptyList()
-        return node.buttons.mapIndexedNotNull { index, id ->
-            val button = loadedGraph.buttons[id] ?: return@mapIndexedNotNull null
-            val fallbackLayout = button.layout ?: defaultLayout(index, node.buttons.size)
-            val fallbackStyle = ButtonRenderStyle(
-                backgroundColor = button.appearance?.backgroundColor ?: "#702BC4",
-                backgroundImage = button.appearance?.backgroundImage,
-                textColor = button.appearance?.textColor ?: "#FFFFFF",
-                opacity = 0.94f,
-                borderRadius = 18f,
-            )
+        return node.buttons.mapNotNull { id ->
+            val button = loadedGraph.buttons[id] ?: return@mapNotNull null
+            val baseStyle = button.style
             val result = button.render?.let { call ->
                 runCatching {
                     val value = runScript(call, "render", contextJson(trigger("render", "buttonId" to JsonPrimitive(id))))
@@ -470,29 +468,28 @@ class GraphPlaybackEngine(
                     ButtonRenderResult(visible = false)
                 }
             }
-            val layoutOverride = result?.layout
             val styleOverride = result?.style
-            val backgroundPath = styleOverride?.backgroundImage ?: fallbackStyle.backgroundImage
+            val backgroundPath = styleOverride?.backgroundImage ?: baseStyle.backgroundImage
             val backgroundUri = backgroundPath?.let { library.assetUri(graphRef!!, it)?.toString() }
             RenderedButton(
                 id = id,
                 visible = result?.visible ?: true,
-                layout = fallbackLayout.copy(
-                    x = layoutOverride?.x ?: fallbackLayout.x,
-                    y = layoutOverride?.y ?: fallbackLayout.y,
-                    width = layoutOverride?.width ?: fallbackLayout.width,
-                    height = layoutOverride?.height ?: fallbackLayout.height,
-                    z = layoutOverride?.z ?: fallbackLayout.z,
-                ),
-                text = result?.text ?: button.appearance?.text ?: id,
-                style = fallbackStyle.copy(
-                    backgroundColor = styleOverride?.backgroundColor ?: fallbackStyle.backgroundColor,
+                targetSlot = button.targetSlot,
+                order = button.order,
+                zIndex = button.zIndex,
+                text = result?.text ?: button.text ?: id,
+                style = baseStyle.copy(
+                    backgroundColor = styleOverride?.backgroundColor ?: baseStyle.backgroundColor,
                     backgroundImage = backgroundUri,
-                    textColor = styleOverride?.textColor ?: fallbackStyle.textColor,
-                    opacity = styleOverride?.opacity ?: fallbackStyle.opacity,
-                    borderColor = styleOverride?.borderColor,
-                    borderWidth = styleOverride?.borderWidth,
-                    borderRadius = styleOverride?.borderRadius ?: fallbackStyle.borderRadius,
+                    textColor = styleOverride?.textColor ?: baseStyle.textColor,
+                    opacity = styleOverride?.opacity ?: baseStyle.opacity,
+                    borderColor = styleOverride?.borderColor ?: baseStyle.borderColor,
+                    borderWidth = styleOverride?.borderWidth ?: baseStyle.borderWidth,
+                    borderRadius = styleOverride?.borderRadius ?: baseStyle.borderRadius,
+                    fontSize = styleOverride?.fontSize ?: baseStyle.fontSize,
+                    fontWeight = styleOverride?.fontWeight ?: baseStyle.fontWeight,
+                    paddingHorizontal = styleOverride?.paddingHorizontal ?: baseStyle.paddingHorizontal,
+                    paddingVertical = styleOverride?.paddingVertical ?: baseStyle.paddingVertical,
                 ),
             )
         }
@@ -505,7 +502,7 @@ class GraphPlaybackEngine(
             val ranges = loadedGraph.buttons[rendered.id]?.visibility.orEmpty()
             val inRange = ranges.isEmpty() || ranges.any { elapsed >= it.fromMs && (it.toMs == null || elapsed < it.toMs) }
             rendered.copy(visible = rendered.visible && inRange)
-        }.sortedBy { it.layout.z }
+        }.sortedBy(RenderedButton::order)
     }
 
     private suspend fun finalizeCurrent(reason: String) {
@@ -608,6 +605,7 @@ class GraphPlaybackEngine(
                 visualUri = if (currentMedia?.source?.type == "video") null else visualUri,
                 fit = currentMedia?.source?.fit ?: "contain",
                 imageTransitionMs = currentMedia?.source?.imageTransition?.durationMs?.coerceIn(0, 10_000)?.toInt() ?: 300,
+                layoutSource = layoutSource,
                 buttons = visibleButtons(),
                 controls = controls,
                 contentId = metadata?.contentId?.takeIf(String::isNotBlank),
@@ -696,7 +694,7 @@ class GraphPlaybackEngine(
         val controlId = node?.playerControl ?: loadedGraph.globalPlayerControl
         val defined = controlId?.let(loadedGraph.playerControls::get) ?: PlayerControlSettings.Default
         return if (app.settings.state.value.forceShowPlayerControls) {
-            PlayerControlSettings.AllEnabled.copy(accentColor = defined.accentColor)
+            PlayerControlSettings.AllEnabled.copy(accentColor = defined.accentColor, layout = defined.layout)
         } else defined
     }
 
@@ -716,13 +714,9 @@ class GraphPlaybackEngine(
         nodeClockRunning = false
     }
 
-    private fun defaultLayout(index: Int, count: Int): ButtonLayout {
-        val columns = minOf(count.coerceAtLeast(1), 2)
-        val width = if (columns == 1) .72f else .4f
-        val column = index % columns
-        val row = index / columns
-        val x = if (columns == 1) .14f else .07f + column * .46f
-        return ButtonLayout(x, .68f + row * .11f, width, .085f, index)
+    private suspend fun loadLayout(node: WmgNode) {
+        val ref = graphRef ?: error("グラフ参照がありません")
+        layoutSource = resolvedControls(node).layout?.let { library.readAssetText(ref, it, MAX_LAYOUT_BYTES) }
     }
 
     private fun applyVisualForEmptyNode() = Unit
@@ -737,5 +731,6 @@ class GraphPlaybackEngine(
     private companion object {
         const val TAG = "GraphPlaybackEngine"
         const val SYSTEM_UI_PACKAGE = "com.android.systemui"
+        const val MAX_LAYOUT_BYTES = 512 * 1024
     }
 }

@@ -58,7 +58,7 @@ export default function ScriptInspector({ script, test, assets = [] }: { script:
         <code>ctx["current"]["activePlayMs"]</code><span>現在の実再生時間（ms）</span>
         <h3>戻り値</h3>
         <code>jump(ctx) → "node-id"</code>
-        <code>render(ctx) → {'{ visible, text, style, layout }'}</code>
+        <code>render(ctx) → {'{ visible, text, style }'}</code>
         <code>render_stats(ctx) → {'{ sortValue, display, share? }'}</code>
         <h3>乱数</h3>
         <code>random()</code><span>0以上1未満の浮動小数点数</span>

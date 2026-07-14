@@ -1098,29 +1098,8 @@ private fun PlayerScreen(
                             Artwork(uri, Modifier.fillMaxSize(), fallback = true, blurredCover = true)
                         }
                     }
-                    BoxWithConstraints(Modifier.fillMaxSize()) {
-                        state.buttons.filter { it.visible }.forEach { button ->
-                            val color = parseColor(button.style.backgroundColor, MaterialTheme.colorScheme.primary)
-                            val textColor = parseColor(button.style.textColor, Color.White)
-                            val borderColor = parseColor(button.style.borderColor, Color.Transparent)
-                            val shape = RoundedCornerShape((button.style.borderRadius ?: 18f).dp)
-                            Surface(
-                                onClick = { onButton(button.id) },
-                                shape = shape,
-                                color = color.copy(alpha = button.style.opacity ?: .94f),
-                                contentColor = textColor,
-                                border = androidx.compose.foundation.BorderStroke((button.style.borderWidth ?: 0f).dp, borderColor),
-                                modifier = Modifier
-                                    .offset(maxWidth * button.layout.x, maxHeight * button.layout.y)
-                                    .size(maxWidth * button.layout.width, maxHeight * button.layout.height),
-                            ) {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    button.style.backgroundImage?.let { Artwork(it, Modifier.fillMaxSize(), fallback = false) }
-                                    Box(Modifier.fillMaxSize().background(color.copy(alpha = if (button.style.backgroundImage == null) 0f else .38f)))
-                                    Text(button.text, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 10.dp), color = textColor)
-                                }
-                            }
-                        }
+                    state.layoutSource?.let { source ->
+                        ButtonLayoutView(source, state.buttons, onButton, Modifier.fillMaxSize())
                     }
                 }
 

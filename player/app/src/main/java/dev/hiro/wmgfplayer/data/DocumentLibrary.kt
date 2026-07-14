@@ -10,6 +10,7 @@ import dev.hiro.wmgfplayer.model.MetadataPrefixRead
 import dev.hiro.wmgfplayer.model.ValidationIssue
 import dev.hiro.wmgfplayer.model.WmgGraph
 import dev.hiro.wmgfplayer.model.WmgJson
+import dev.hiro.wmgfplayer.model.WmgLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -227,6 +228,7 @@ class DocumentLibrary(private val context: Context) {
                 }
             }
             graph.buttons.values.forEach { it.render?.path?.let(::add) }
+            graph.playerControls.values.forEach { it.layout?.let(::add) }
         }
         GraphValidator.allAssetPaths(graph)
             .filter(GraphValidator::isSafeRelativePath)
@@ -239,6 +241,31 @@ class DocumentLibrary(private val context: Context) {
                     )
                 }
             }
+        val layoutSources = mutableMapOf<String, String>()
+        graph.playerControls.values.mapNotNull { it.layout }.distinct().filter(GraphValidator::isSafeRelativePath).forEach { path ->
+            if (resolveAsset(ref, path) != null) {
+                val source = runCatching { readAssetText(ref, path, 512 * 1024) }.getOrElse { error ->
+                    issues += ValidationIssue(ValidationIssue.Severity.ERROR, "レイアウトを読み込めません: ${error.message}", path)
+                    return@forEach
+                }
+                layoutSources[path] = source
+                WmgLayout.validate(source).forEach { issue ->
+                    issues += ValidationIssue(issue.severity, "$path: ${issue.message}", path)
+                }
+            }
+        }
+        graph.nodes.forEach { (nodeId, node) ->
+            if (node.buttons.isEmpty()) return@forEach
+            val controlId = node.playerControl ?: graph.globalPlayerControl
+            val layoutPath = controlId?.let(graph.playerControls::get)?.layout ?: return@forEach
+            val slots = layoutSources[layoutPath]?.let(WmgLayout::slotIdentifiers)?.toSet() ?: return@forEach
+            node.buttons.forEach { buttonId ->
+                val target = graph.buttons[buttonId]?.targetSlot?.trim().orEmpty()
+                if (target !in slots) {
+                    issues += ValidationIssue(ValidationIssue.Severity.ERROR, "$nodeId/$buttonId: レイアウトにslot「${target.ifEmpty { "(default)" }}」がありません", layoutPath)
+                }
+            }
+        }
         issues.toList().also { validationCache[ref.graphId] = CachedValidation(graph, it) }
     }
 

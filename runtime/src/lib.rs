@@ -416,9 +416,15 @@ struct Button {
     #[serde(default)]
     visibility: Vec<VisibilityRange>,
     #[serde(default)]
-    layout: Option<ButtonLayout>,
+    target_slot: Option<String>,
     #[serde(default)]
-    appearance: Option<ButtonAppearance>,
+    order: i64,
+    #[serde(default)]
+    z_index: i64,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    style: ButtonStyle,
     #[serde(default)]
     render: Option<ScriptCall>,
     #[serde(default)]
@@ -435,27 +441,31 @@ struct VisibilityRange {
     to_ms: Option<i64>,
 }
 
-#[derive(Deserialize)]
-struct ButtonLayout {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    #[serde(default)]
-    z: i64,
-}
-
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ButtonAppearance {
+struct ButtonStyle {
     #[serde(default)]
     background_color: Option<String>,
     #[serde(default)]
     background_image: Option<String>,
     #[serde(default)]
-    text: Option<String>,
-    #[serde(default)]
     text_color: Option<String>,
+    #[serde(default)]
+    opacity: Option<f64>,
+    #[serde(default)]
+    border_color: Option<String>,
+    #[serde(default)]
+    border_width: Option<f64>,
+    #[serde(default)]
+    border_radius: Option<f64>,
+    #[serde(default)]
+    font_size: Option<f64>,
+    #[serde(default)]
+    font_weight: Option<i64>,
+    #[serde(default)]
+    padding_horizontal: Option<f64>,
+    #[serde(default)]
+    padding_vertical: Option<f64>,
 }
 
 #[allow(dead_code)]
@@ -464,6 +474,8 @@ struct ButtonAppearance {
 struct PlayerControlSettings {
     #[serde(default)]
     accent_color: Option<String>,
+    #[serde(default)]
+    layout: Option<String>,
     #[serde(default)]
     allow_stop: Option<bool>,
     #[serde(default)]
@@ -652,6 +664,20 @@ fn validate_graph(graph: &Graph) -> Vec<ValidationIssue> {
                 "{node_id}: ボタン {id} がありません"
             )));
         }
+        if node.node_type == "media" && !node.buttons.is_empty() {
+            let control_id = node
+                .player_control
+                .as_ref()
+                .or(graph.global_player_control.as_ref());
+            let layout = control_id
+                .and_then(|id| graph.player_controls.get(id))
+                .and_then(|control| control.layout.as_ref());
+            if layout.is_none() {
+                issues.push(ValidationIssue::error(format!(
+                    "{node_id}: ボタンを表示する再生設定にレイアウトが接続されていません"
+                )));
+            }
+        }
         if has_duplicates(node.media.iter().map(|media| media.id.as_str())) {
             issues.push(ValidationIssue::error(format!(
                 "{node_id}: メディア ID が重複しています"
@@ -702,15 +728,44 @@ fn validate_graph(graph: &Graph) -> Vec<ValidationIssue> {
             graph,
             &mut issues,
         );
-        if let Some(layout) = &button.layout {
-            if [layout.x, layout.y, layout.width, layout.height]
-                .iter()
-                .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
-            {
+        if button
+            .style
+            .opacity
+            .is_some_and(|opacity| !opacity.is_finite() || !(0.0..=1.0).contains(&opacity))
+        {
+            issues.push(ValidationIssue::error(format!(
+                "{button_id}: opacity は 0〜1 の有限値で指定してください"
+            )));
+        }
+        for (name, value) in [
+            ("borderWidth", button.style.border_width),
+            ("borderRadius", button.style.border_radius),
+            ("paddingHorizontal", button.style.padding_horizontal),
+            ("paddingVertical", button.style.padding_vertical),
+        ] {
+            if value.is_some_and(|value| !value.is_finite() || value < 0.0) {
                 issues.push(ValidationIssue::error(format!(
-                    "{button_id}: ボタン配置は 0〜1 で指定してください"
+                    "{button_id}: {name} は 0 以上の有限値で指定してください"
                 )));
             }
+        }
+        if button
+            .style
+            .font_size
+            .is_some_and(|value| !value.is_finite() || value <= 0.0)
+        {
+            issues.push(ValidationIssue::error(format!(
+                "{button_id}: fontSize は 0 より大きい有限値で指定してください"
+            )));
+        }
+        if button
+            .style
+            .font_weight
+            .is_some_and(|value| !(1..=1000).contains(&value))
+        {
+            issues.push(ValidationIssue::error(format!(
+                "{button_id}: fontWeight は 1〜1000 の整数で指定してください"
+            )));
         }
         for range in &button.visibility {
             if range.from_ms < 0 || range.to_ms.is_some_and(|end| end < range.from_ms) {
@@ -748,6 +803,13 @@ fn validate_graph(graph: &Graph) -> Vec<ValidationIssue> {
             if !is_safe_accent_color(color) {
                 issues.push(ValidationIssue::error(format!(
                     "{id}: accentColor は白・黒に近すぎない #RRGGBB 形式で指定してください"
+                )));
+            }
+        }
+        if let Some(layout) = &control.layout {
+            if !layout.to_ascii_lowercase().ends_with(".wmg-layout.html") {
+                issues.push(ValidationIssue::error(format!(
+                    "{id}: layout は .wmg-layout.html ファイルを指定してください"
                 )));
             }
         }
@@ -810,12 +872,13 @@ fn all_asset_paths(graph: &Graph) -> BTreeSet<String> {
         }
     }
     for button in graph.buttons.values() {
-        if let Some(appearance) = &button.appearance {
-            insert_optional(&mut paths, &appearance.background_image);
-        }
+        insert_optional(&mut paths, &button.style.background_image);
         if let Some(render) = &button.render {
             paths.insert(render.path.clone());
         }
+    }
+    for control in graph.player_controls.values() {
+        insert_optional(&mut paths, &control.layout);
     }
     paths
 }
@@ -1004,6 +1067,37 @@ mod tests {
         }"#,
         );
         assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn button_nodes_require_a_v1_layout_document() {
+        let missing = messages(
+            r#"{
+            "version":1,
+            "nodes":{
+              "start":{"type":"media","start":true,"buttons":["continue"]},
+              "end":{"type":"media","terminal":true}
+            },
+            "buttons":{"continue":{"text":"Continue","onPress":[{"to":"end","weight":1}]}},
+            "playerControls":{"default":{}},
+            "globalPlayerControl":"default"
+        }"#,
+        );
+        assert!(missing.iter().any(|message| message.contains("レイアウト")));
+
+        let valid = validate_json(
+            r#"{
+            "version":1,
+            "nodes":{
+              "start":{"type":"media","start":true,"buttons":["continue"]},
+              "end":{"type":"media","terminal":true}
+            },
+            "buttons":{"continue":{"targetSlot":"actions","order":10,"zIndex":2,"text":"Continue","style":{"opacity":0.8},"onPress":[{"to":"end","weight":1}]}},
+            "playerControls":{"default":{"layout":"default.wmg-layout.html"}},
+            "globalPlayerControl":"default"
+        }"#,
+        );
+        assert!(valid.is_empty(), "{valid:?}");
     }
 
     #[test]

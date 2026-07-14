@@ -1,4 +1,5 @@
-import type { AssetEntry, MediaCandidate, PlayerControlSettings, ScriptDocument, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode } from './types'
+import { LAYOUT_EXTENSION, layoutSlotNames, validateLayoutSource } from './layout'
+import type { AssetEntry, GraphLayoutPlacement, LayoutDocument, MediaCandidate, PlayerControlSettings, ScriptDocument, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode } from './types'
 
 const hslToHex = (hue: number, saturation = 55, lightness = 52) => {
   const s = saturation / 100
@@ -39,8 +40,9 @@ const nextEditorColor = (items: Record<string, { editor?: { color?: string } }>)
 export const nextNodeColor = (nodes: Record<string, WmgNode>) => nextEditorColor(nodes)
 export const nextButtonColor = (buttons: Record<string, WmgButton>) => nextEditorColor(buttons)
 export const nextPlayerControlColor = (controls: Record<string, PlayerControlSettings>) => nextEditorColor(controls)
+export const nextLayoutColor = (layouts: Record<string, GraphLayoutPlacement>) => nextEditorColor(Object.fromEntries(Object.entries(layouts).map(([path, placement]) => [path, { editor: placement }])))
 
-export type PlayerControlBooleanKey = Exclude<keyof PlayerControlSettings, 'accentColor' | 'editor'>
+export type PlayerControlBooleanKey = Exclude<keyof PlayerControlSettings, 'accentColor' | 'layout' | 'editor'>
 
 export const DEFAULT_PLAYER_CONTROLS: Pick<PlayerControlSettings, PlayerControlBooleanKey> = {
   allowStop: true,
@@ -64,13 +66,14 @@ export const createGraph = (): WmgGraph => ({
       media: [],
       onEnd: [],
       buttons: [],
-      editor: { x: 120, y: 160, label: 'Start', color: hslToHex(Math.random() * 360, 56, 52) },
+      editor: { x: 120, y: 220, label: 'Start', color: hslToHex(Math.random() * 360, 56, 52) },
     },
   },
   buttons: {},
   playerControls: {
-    default: { ...DEFAULT_PLAYER_CONTROLS, editor: { x: 120, y: 38, color: '#4f8c78' } },
+    default: { ...DEFAULT_PLAYER_CONTROLS, layout: `default${LAYOUT_EXTENSION}`, editor: { x: 120, y: 110, color: '#4f8c78' } },
   },
+  editor: { layouts: { [`default${LAYOUT_EXTENSION}`]: { x: 120, y: 20, color: '#4d8e9f' } } },
 })
 
 const normalizeMetadata = (value: unknown): WmgMetadata | undefined => {
@@ -103,7 +106,7 @@ const normalizeMetadata = (value: unknown): WmgMetadata | undefined => {
 
 export const normalizeGraph = (value: unknown): WmgGraph => {
   if (!value || typeof value !== 'object') throw new Error('JSONのルートがオブジェクトではありません')
-  const raw = value as { version?: unknown; metadata?: unknown; nodes?: unknown; buttons?: unknown; playerControls?: unknown; globalPlayerControl?: unknown; playbackStats?: unknown }
+  const raw = value as { version?: unknown; metadata?: unknown; nodes?: unknown; buttons?: unknown; playerControls?: unknown; globalPlayerControl?: unknown; playbackStats?: unknown; editor?: unknown }
   if (raw.version !== 1) throw new Error('対応しているWMGFバージョンは1です')
   if (!raw.nodes || typeof raw.nodes !== 'object' || Array.isArray(raw.nodes)) {
     throw new Error('nodesが見つかりません')
@@ -139,6 +142,8 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
     node.editor.color ??= hslToHex((baseHue + index * 137.508) % 360, 54, 51)
   })
   Object.values(buttons).forEach((button, index) => {
+    delete (button as WmgButton & { layout?: unknown }).layout
+    delete (button as WmgButton & { appearance?: unknown }).appearance
     button.onPress ??= []
     button.editor ??= { x: 180 + (index % 4) * 190, y: 360 + Math.floor(index / 4) * 90 }
     button.editor.color ??= hslToHex((baseHue + 70 + index * 137.508) % 360, 42, 56)
@@ -147,13 +152,15 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`playerControls.${id}はオブジェクトで指定してください`)
     const rawControl = value as Record<string, unknown>
     const control = { ...DEFAULT_PLAYER_CONTROLS } as PlayerControlSettings
-    for (const [key, fallback] of Object.entries(DEFAULT_PLAYER_CONTROLS) as Array<[keyof typeof DEFAULT_PLAYER_CONTROLS, boolean]>) {
+    for (const [key, fallback] of Object.entries(DEFAULT_PLAYER_CONTROLS) as Array<[PlayerControlBooleanKey, boolean]>) {
       const candidate = rawControl[key]
       if (candidate !== undefined && typeof candidate !== 'boolean') throw new Error(`playerControls.${id}.${key}は真偽値で指定してください`)
-      control[key] = candidate === undefined ? fallback : candidate
+      control[key] = candidate === undefined ? fallback : candidate as boolean
     }
     if (rawControl.accentColor !== undefined && typeof rawControl.accentColor !== 'string') throw new Error(`playerControls.${id}.accentColorは文字列で指定してください`)
     if (typeof rawControl.accentColor === 'string' && rawControl.accentColor.trim()) control.accentColor = rawControl.accentColor.trim()
+    if (rawControl.layout !== undefined && typeof rawControl.layout !== 'string') throw new Error(`playerControls.${id}.layoutは文字列で指定してください`)
+    if (typeof rawControl.layout === 'string' && rawControl.layout.trim()) control.layout = rawControl.layout.trim()
     if (rawControl.editor !== undefined && (!rawControl.editor || typeof rawControl.editor !== 'object' || Array.isArray(rawControl.editor))) {
       throw new Error(`playerControls.${id}.editorはオブジェクトで指定してください`)
     }
@@ -166,8 +173,25 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
     control.editor = editor
     playerControls[id] = control
   })
+  if (raw.editor !== undefined && (!raw.editor || typeof raw.editor !== 'object' || Array.isArray(raw.editor))) throw new Error('editorはオブジェクトで指定してください')
+  const rawGraphEditor = (raw.editor ?? {}) as Record<string, unknown>
+  if (rawGraphEditor.layouts !== undefined && (!rawGraphEditor.layouts || typeof rawGraphEditor.layouts !== 'object' || Array.isArray(rawGraphEditor.layouts))) throw new Error('editor.layoutsはオブジェクトで指定してください')
+  const layoutPlacements: Record<string, GraphLayoutPlacement> = {}
+  Object.entries((rawGraphEditor.layouts ?? {}) as Record<string, unknown>).forEach(([path, value], index) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`editor.layouts.${path}はオブジェクトで指定してください`)
+    const placement = value as Record<string, unknown>
+    layoutPlacements[path] = {
+      x: typeof placement.x === 'number' && Number.isFinite(placement.x) ? placement.x : 320 + (index % 4) * 190,
+      y: typeof placement.y === 'number' && Number.isFinite(placement.y) ? placement.y : 20 + Math.floor(index / 4) * 80,
+      color: typeof placement.color === 'string' ? placement.color : hslToHex((baseHue + 235 + index * 137.508) % 360, 38, 50),
+    }
+  })
+  const referencedLayouts = [...new Set(Object.values(playerControls).map((control) => control.layout).filter((path): path is string => Boolean(path)))]
+  referencedLayouts.forEach((path, index) => {
+    if (!layoutPlacements[path]) layoutPlacements[path] = { x: 320 + (index % 4) * 190, y: 20 + Math.floor(index / 4) * 80, color: hslToHex((baseHue + 235 + index * 137.508) % 360, 38, 50) }
+  })
   const metadata = normalizeMetadata(raw.metadata)
-  return { version: 1, ...(metadata ? { metadata } : {}), nodes, buttons, playerControls, ...(raw.globalPlayerControl ? { globalPlayerControl: raw.globalPlayerControl } : {}), ...(playbackStats ? { playbackStats } : {}) }
+  return { version: 1, ...(metadata ? { metadata } : {}), nodes, buttons, playerControls, ...(raw.globalPlayerControl ? { globalPlayerControl: raw.globalPlayerControl } : {}), ...(playbackStats ? { playbackStats } : {}), ...(Object.keys(layoutPlacements).length ? { editor: { layouts: layoutPlacements } } : {}) }
 }
 
 export const fileKind = (path: string): AssetEntry['kind'] => {
@@ -201,7 +225,7 @@ const allNodePaths = (node: WmgNode) => [
   ]),
 ].filter(Boolean) as string[]
 
-export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: ScriptDocument[] = []): ValidationIssue[] => {
+export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: ScriptDocument[] = [], layouts: LayoutDocument[] = []): ValidationIssue[] => {
   const issues: ValidationIssue[] = []
   const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
   for (const key of ['createdAt', 'updatedAt'] as const) {
@@ -224,6 +248,7 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: Sc
   const playerControlIds = new Set(playerControlEntries.map(([id]) => id))
   const assetPaths = new Set(assets.map((asset) => asset.path))
   const scriptPaths = new Set(scripts.map((script) => script.path))
+  const layoutByPath = new Map(layouts.map((layout) => [layout.path, layout]))
   const thumbnail = graph.metadata?.thumbnail
   if (thumbnail && (/^(?:[a-z]+:|\/)/i.test(thumbnail) || thumbnail.split('/').includes('..'))) {
     issues.push({ severity: 'error', message: `コンテンツ外を参照するパスです: ${thumbnail}` })
@@ -262,6 +287,22 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: Sc
     if (node.type === 'media' && !node.terminal && !(node.onEnd?.length) && !(node.buttons?.length)) {
       issues.push({ severity: 'warning', nodeId, message: '終端ではないノードに遷移がありません' })
     }
+    if (node.type === 'media' && node.buttons?.length) {
+      const controlId = node.playerControl ?? graph.globalPlayerControl
+      const layoutPath = controlId ? graph.playerControls[controlId]?.layout : undefined
+      if (!layoutPath) {
+        issues.push({ severity: 'error', nodeId, playerControlId: controlId, message: 'ボタンを表示する再生設定にレイアウトが接続されていません' })
+      } else {
+        const layout = layoutByPath.get(layoutPath)
+        if (layout) {
+          const slots = new Set(layoutSlotNames(layout.content))
+          node.buttons.forEach((buttonId) => {
+            const slot = graph.buttons[buttonId]?.targetSlot?.trim() ?? ''
+            if (!slots.has(slot)) issues.push({ severity: 'error', nodeId, buttonId, layoutPath, message: `レイアウト「${layoutPath}」にslot「${slot || '(default)'}」がありません` })
+          })
+        }
+      }
+    }
     const mediaIds = new Set<string>()
     node.media?.forEach((media) => {
       if (mediaIds.has(media.id)) issues.push({ severity: 'error', nodeId, message: `メディアID「${media.id}」が重複しています` })
@@ -287,7 +328,16 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: Sc
     if (button.onPress?.length && !button.onPress.some((transition) => transition.weight > 0)) issues.push({ severity: 'error', buttonId, message: '遷移候補の重みがすべて0です' })
     if (!entries.some(([, node]) => node.buttons?.includes(buttonId))) issues.push({ severity: 'warning', buttonId, message: 'どのノードにも接続されていないボタンです' })
     if (button.render?.path && !scriptPaths.has(button.render.path)) issues.push({ severity: 'error', buttonId, scriptPath: button.render.path, message: `表示スクリプトが見つかりません: ${button.render.path}` })
-    const path = button.appearance?.backgroundImage
+    if (button.order !== undefined && !Number.isInteger(button.order)) issues.push({ severity: 'error', buttonId, message: 'orderは整数で指定してください' })
+    if (button.zIndex !== undefined && !Number.isInteger(button.zIndex)) issues.push({ severity: 'error', buttonId, message: 'zIndexは整数で指定してください' })
+    if (button.style?.opacity !== undefined && (!Number.isFinite(button.style.opacity) || button.style.opacity < 0 || button.style.opacity > 1)) issues.push({ severity: 'error', buttonId, message: 'opacityは0〜1の有限値で指定してください' })
+    for (const key of ['borderWidth', 'borderRadius', 'paddingHorizontal', 'paddingVertical'] as const) {
+      const value = button.style?.[key]
+      if (value !== undefined && (!Number.isFinite(value) || value < 0)) issues.push({ severity: 'error', buttonId, message: `${key}は0以上の有限値で指定してください` })
+    }
+    if (button.style?.fontSize !== undefined && (!Number.isFinite(button.style.fontSize) || button.style.fontSize <= 0)) issues.push({ severity: 'error', buttonId, message: 'fontSizeは0より大きい有限値で指定してください' })
+    if (button.style?.fontWeight !== undefined && (!Number.isInteger(button.style.fontWeight) || button.style.fontWeight < 1 || button.style.fontWeight > 1000)) issues.push({ severity: 'error', buttonId, message: 'fontWeightは1〜1000の整数で指定してください' })
+    const path = button.style?.backgroundImage
     if (path && (/^(?:[a-z]+:|\/)/i.test(path) || path.split('/').includes('..'))) issues.push({ severity: 'error', buttonId, message: `コンテンツ外を参照するパスです: ${path}` })
     else if (path && assets.length && !assetPaths.has(path)) issues.push({ severity: 'warning', buttonId, message: `ファイルが見つかりません: ${path}` })
   }
@@ -298,6 +348,12 @@ export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: Sc
     const usedByNode = entries.some(([, node]) => node.playerControl === playerControlId)
     if (!usedGlobally && !usedByNode) issues.push({ severity: 'warning', playerControlId, message: 'どこにも接続されていない再生設定です' })
     if (control.accentColor && !isSafeAccentColor(control.accentColor)) issues.push({ severity: 'error', playerControlId, message: 'accentColorは白・黒に近すぎない#RRGGBB形式で指定してください' })
+    if (control.layout) {
+      if (!control.layout.toLowerCase().endsWith(LAYOUT_EXTENSION)) issues.push({ severity: 'error', playerControlId, layoutPath: control.layout, message: `layoutは${LAYOUT_EXTENSION}ファイルを指定してください` })
+      const layout = layoutByPath.get(control.layout)
+      if (!layout) issues.push({ severity: 'error', playerControlId, layoutPath: control.layout, message: `レイアウトファイルが見つかりません: ${control.layout}` })
+      else validateLayoutSource(layout.content).forEach((issue) => issues.push({ severity: issue.severity, playerControlId, layoutPath: control.layout, message: `${control.layout}: ${issue.message}` }))
+    }
   }
 
   return issues

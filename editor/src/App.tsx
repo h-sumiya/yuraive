@@ -1,12 +1,14 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { createGraph, DEFAULT_PLAYER_CONTROLS, defaultMedia, fileKind, nextButtonColor, nextNodeColor, nextPlayerControlColor, normalizeGraph, probability, validateGraph, type PlayerControlBooleanKey } from './graph'
+import { createGraph, DEFAULT_PLAYER_CONTROLS, defaultMedia, fileKind, nextButtonColor, nextLayoutColor, nextNodeColor, nextPlayerControlColor, normalizeGraph, probability, validateGraph, type PlayerControlBooleanKey } from './graph'
 import { Preview } from './Preview'
+import { LayoutEditor, LayoutInspector } from './LayoutEditor'
+import { DEFAULT_LAYOUT_SOURCE, LAYOUT_EXTENSION } from './layout'
 import { createStarlarkContext } from './scriptContext'
 import ScriptInspector from './ScriptInspector'
 import type { ScriptTestState } from './ScriptEditor'
 import { parseStarlarkErrorLocation, runStarlark } from './starlark'
-import type { AssetEntry, EditorTab, GraphDocument, MediaCandidate, PlaybackHistoryEntry, PlayerControlSettings, ScriptDocument, Transition, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode, WorkspaceFolder } from './types'
+import type { AssetEntry, EditorTab, GraphDocument, GraphLayoutPlacement, LayoutDocument, MediaCandidate, PlaybackHistoryEntry, PlayerControlSettings, ScriptDocument, Transition, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode, WorkspaceFolder } from './types'
 
 const ScriptEditor = lazy(() => import('./ScriptEditor').then((module) => ({ default: module.ScriptEditor })))
 
@@ -45,15 +47,23 @@ const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 const ASSET_DRAG_TYPE = 'application/x-wmgf-asset-path'
 const FOLDER_DRAG_TYPE = 'application/x-wmgf-folder-path'
 const SCRIPT_DRAG_TYPE = 'application/x-wmgf-script-uid'
+const LAYOUT_DRAG_TYPE = 'application/x-wmgf-layout-path'
+const LAYOUT_UID_DRAG_TYPE = 'application/x-wmgf-layout-uid'
 const TAB_DRAG_TYPE = 'application/x-wmgf-editor-tab'
-let activeTreeDrag: { label: string; kind: 'folder' | 'media' } | null = null
+let activeTreeDrag: { label: string; kind: 'folder' | 'media' | 'layout' } | null = null
 const draftKey = (workspace: string, path: string) => `wmgf-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
 const scriptDraftKey = (workspace: string, path: string) => `wmgf-script-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
+const layoutDraftKey = (workspace: string, path: string) => `wmgf-layout-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
 const defaultScriptSource = (name = 'script') => `# ${name}\n# ctx["history"]: 確定済み再生履歴（最大1000件）\n# ctx["current"]: 現在の再生状態 / ctx["totalActivePlayMs"]: 実再生時間の合計\n# random(), randint(start, end), choice(items), shuffled(items) が利用できます。\n\ndef jump(ctx):\n    """Script Nodeから遷移するNode IDを返します。"""\n    return None\n\ndef render(ctx):\n    """Buttonの表示内容を上書きします。"""\n    return {\n        "visible": True,\n        "text": "Continue",\n        "style": {},\n    }\n\ndef render_stats(ctx):\n    """1セッション分の再生統計を返します。"""\n    minutes = ctx["session"]["activePlayMs"] // 60000\n    return {\n        "sortValue": minutes,\n        "display": {\n            "schemaVersion": 1,\n            "fallbackText": "%s分再生" % minutes,\n            "root": {"type": "text", "text": "%s分再生" % minutes},\n        },\n    }\n`
 const scriptStem = (value: string) => value.trim().replace(/(?:\.star)+$/i, '')
 const scriptFileName = (value: string) => {
   const stem = scriptStem(value)
   return stem ? `${stem}.star` : ''
+}
+const layoutStem = (value: string) => value.trim().replace(/(?:\.wmg-layout\.html)+$/i, '')
+const layoutFileName = (value: string) => {
+  const stem = layoutStem(value)
+  return stem ? `${stem}${LAYOUT_EXTENSION}` : ''
 }
 const normalizeSearchText = (value: string) => value
   .normalize('NFKC')
@@ -94,6 +104,22 @@ const restoreScriptDrafts = (workspace: string, scripts: ScriptDocument[]) => sc
   }
 })
 
+const restoreLayoutDrafts = (workspace: string, layouts: LayoutDocument[]) => layouts.map((layout) => {
+  const stored = localStorage.getItem(layoutDraftKey(workspace, layout.path))
+  if (!stored) return layout
+  try {
+    const draft = JSON.parse(stored) as { content?: string }
+    if (typeof draft.content !== 'string' || !window.confirm(`「${layout.path}」にブラウザへ自動保存された未保存データがあります。\n復元しますか？`)) {
+      localStorage.removeItem(layoutDraftKey(workspace, layout.path))
+      return layout
+    }
+    return { ...layout, content: draft.content, dirty: true }
+  } catch {
+    localStorage.removeItem(layoutDraftKey(workspace, layout.path))
+    return layout
+  }
+})
+
 const relativeAssets = (document: GraphDocument, assets: AssetEntry[]) => {
   const parent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
   return assets.map((asset) => ({ ...asset, path: parent && asset.path.startsWith(parent) ? asset.path.slice(parent.length) : asset.path }))
@@ -102,6 +128,11 @@ const relativeAssets = (document: GraphDocument, assets: AssetEntry[]) => {
 const relativeScripts = (document: GraphDocument, scripts: ScriptDocument[]) => {
   const parent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
   return scripts.map((script) => ({ ...script, path: parent && script.path.startsWith(parent) ? script.path.slice(parent.length) : script.path }))
+}
+
+const relativeLayouts = (document: GraphDocument, layouts: LayoutDocument[]) => {
+  const parent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
+  return layouts.map((layout) => ({ ...layout, path: parent && layout.path.startsWith(parent) ? layout.path.slice(parent.length) : layout.path }))
 }
 
 const serialize = (graph: WmgGraph) => `${JSON.stringify(graph, null, 2)}\n`
@@ -118,6 +149,7 @@ async function readDirectory(root: FileSystemDirectoryHandle) {
   const documents: GraphDocument[] = []
   const assets: AssetEntry[] = []
   const scripts: ScriptDocument[] = []
+  const layouts: LayoutDocument[] = []
   const folders: WorkspaceFolder[] = []
   const errors: string[] = []
   const walk = async (directory: FileSystemDirectoryHandle, prefix = '') => {
@@ -136,6 +168,8 @@ async function readDirectory(root: FileSystemDirectoryHandle) {
           }
         } else if (name.toLowerCase().endsWith('.star')) {
           scripts.push({ uid: uid(), name, path, content: await file.text(), dirty: false, handle: entry })
+        } else if (name.toLowerCase().endsWith(LAYOUT_EXTENSION)) {
+          layouts.push({ uid: uid(), name, path, content: await file.text(), dirty: false, handle: entry })
         } else {
           assets.push({ name, path, kind: fileKind(path), file })
         }
@@ -143,7 +177,7 @@ async function readDirectory(root: FileSystemDirectoryHandle) {
     }
   }
   await walk(root)
-  return { documents, assets, scripts, folders, errors }
+  return { documents, assets, scripts, layouts, folders, errors }
 }
 
 async function collectDroppedFiles(handle: FileSystemHandle, prefix = ''): Promise<Array<{ file: File; path: string }>> {
@@ -319,8 +353,7 @@ function MediaEditor({ media, index, probabilityMode, assets, onChange, onRemove
 
 function ButtonEditor({ buttonId, button, nodes, nodeLabels, assets, scripts, onChange, onRename, onRemove, onPick, onOpenScript }: { buttonId: string; button: WmgButton; nodes: string[]; nodeLabels: Record<string, string>; assets: AssetEntry[]; scripts: ScriptDocument[]; onChange: (button: WmgButton) => void; onRename: (next: string) => void; onRemove: () => void; onPick: (id: string) => void; onOpenScript: (script: ScriptDocument) => void }) {
   const details = useRef<HTMLDetailsElement>(null)
-  const layout = button.layout ?? { x: .7, y: .8, width: .2, height: .1, z: 10 }
-  const appearance = button.appearance ?? {}
+  const style = button.style ?? {}
   const intervals = button.visibility ?? []
   useEffect(() => { if (details.current) details.current.open = true }, [])
   return <details className="item-editor" ref={details}>
@@ -328,15 +361,19 @@ function ButtonEditor({ buttonId, button, nodes, nodeLabels, assets, scripts, on
     <div className="item-editor-body">
       <Field label="ID"><input key={buttonId} defaultValue={buttonId} onBlur={(event) => onRename(event.target.value.trim())} onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}/></Field>
       <Field label="グラフカラー"><div className="color-field"><DebouncedColorInput value={button.editor?.color ?? '#8b6fa3'} onCommit={(color) => onChange({ ...button, editor: { ...button.editor, color } })}/><input value={button.editor?.color ?? '#8b6fa3'} onChange={(event) => onChange({ ...button, editor: { ...button.editor, color: event.target.value } })}/></div></Field>
+      <div className="subheading">Slot配置</div>
+      <Field label="対象slot" hint="空欄はデフォルトslot"><input value={button.targetSlot ?? ''} placeholder="default" onChange={(event) => onChange({ ...button, targetSlot: event.target.value || undefined })}/></Field>
+      <div className="two-col"><Field label="注入順 order"><NumberInput step={1} value={button.order ?? 0} onChange={(order) => onChange({ ...button, order })}/></Field><Field label="重なり z-index"><NumberInput step={1} value={button.zIndex ?? 0} onChange={(zIndex) => onChange({ ...button, zIndex })}/></Field></div>
       <div className="subheading">外観</div>
-      <Field label="表示テキスト"><input value={appearance.text ?? ''} onChange={(event) => onChange({ ...button, appearance: { ...appearance, text: event.target.value || undefined } })}/></Field>
-      <div className="two-col"><Field label="背景色"><DebouncedColorInput value={appearance.backgroundColor?.slice(0, 7) ?? '#333333'} onCommit={(backgroundColor) => onChange({ ...button, appearance: { ...appearance, backgroundColor } })}/></Field><Field label="文字色"><DebouncedColorInput value={appearance.textColor?.slice(0, 7) ?? '#ffffff'} onCommit={(textColor) => onChange({ ...button, appearance: { ...appearance, textColor } })}/></Field></div>
-      <Field label="背景画像"><PathPicker value={appearance.backgroundImage ?? ''} assets={assets} kinds={['image']} placeholder="任意" onChange={(value) => onChange({ ...button, appearance: { ...appearance, backgroundImage: value || undefined } })}/></Field>
+      <Field label="表示テキスト"><input value={button.text ?? ''} onChange={(event) => onChange({ ...button, text: event.target.value || undefined })}/></Field>
+      <div className="two-col"><Field label="背景色"><DebouncedColorInput value={style.backgroundColor?.slice(0, 7) ?? '#702bc4'} onCommit={(backgroundColor) => onChange({ ...button, style: { ...style, backgroundColor } })}/></Field><Field label="文字色"><DebouncedColorInput value={style.textColor?.slice(0, 7) ?? '#ffffff'} onCommit={(textColor) => onChange({ ...button, style: { ...style, textColor } })}/></Field></div>
+      <Field label="背景画像"><PathPicker value={style.backgroundImage ?? ''} assets={assets} kinds={['image']} placeholder="レイアウトCSSを使用" onChange={(value) => onChange({ ...button, style: { ...style, backgroundImage: value || undefined } })}/></Field>
+      <div className="three-col"><Field label="不透明度"><NumberInput min={0} max={1} step={.05} value={style.opacity ?? 1} onChange={(opacity) => onChange({ ...button, style: { ...style, opacity } })}/></Field><Field label="枠線幅"><NumberInput min={0} step={1} value={style.borderWidth ?? 0} onChange={(borderWidth) => onChange({ ...button, style: { ...style, borderWidth } })}/></Field><Field label="角丸"><NumberInput min={0} step={1} value={style.borderRadius ?? 0} onChange={(borderRadius) => onChange({ ...button, style: { ...style, borderRadius } })}/></Field></div>
+      <div className="two-col"><Field label="文字サイズ"><NumberInput min={1} step={1} value={style.fontSize ?? 16} onChange={(fontSize) => onChange({ ...button, style: { ...style, fontSize } })}/></Field><Field label="文字ウェイト"><NumberInput min={1} max={1000} step={100} value={style.fontWeight ?? 600} onChange={(fontWeight) => onChange({ ...button, style: { ...style, fontWeight } })}/></Field></div>
+      <div className="two-col"><Field label="横padding"><NumberInput min={0} step={1} value={style.paddingHorizontal ?? 0} onChange={(paddingHorizontal) => onChange({ ...button, style: { ...style, paddingHorizontal } })}/></Field><Field label="縦padding"><NumberInput min={0} step={1} value={style.paddingVertical ?? 0} onChange={(paddingVertical) => onChange({ ...button, style: { ...style, paddingVertical } })}/></Field></div>
       <div className="subheading">動的表示（Starlark）</div>
       <Field label="表示スクリプト"><div className="script-reference"><select value={button.render?.path ?? ''} onChange={(event) => onChange({ ...button, render: event.target.value ? { path: event.target.value, function: button.render?.function ?? 'render' } : undefined })}><option value="">使用しない</option>{scripts.map((script) => <option value={script.path} key={script.uid}>{script.path}</option>)}</select>{button.render?.path && <button className="icon-button" title="スクリプトを開く" onClick={() => { const script = scripts.find((item) => item.path === button.render?.path); if (script) onOpenScript(script) }}><Icon name="script" size={13}/></button>}</div></Field>
       {button.render && <Field label="関数"><input value={button.render.function ?? 'render'} onChange={(event) => onChange({ ...button, render: { ...button.render!, function: event.target.value } })}/></Field>}
-      <div className="subheading">配置（表示領域に対する比率）</div>
-      <div className="five-col">{(['x', 'y', 'width', 'height', 'z'] as const).map((key) => <Field label={key === 'width' ? '幅' : key === 'height' ? '高さ' : key.toUpperCase()} key={key}><NumberInput min={key === 'z' ? undefined : 0} max={key === 'z' ? undefined : 1} step={key === 'z' ? 1 : .05} value={layout[key]} onChange={(value) => onChange({ ...button, layout: { ...layout, [key]: value } })}/></Field>)}</div>
       <div className="subheading row-between"><span>表示タイミング</span><button className="mini-button" onClick={() => onChange({ ...button, visibility: [...intervals, { fromMs: 0, toMs: null }] })}>+ 区間</button></div>
       {intervals.length === 0 && <div className="empty-inline">常に表示</div>}
       {intervals.map((interval, intervalIndex) => <div className="interval-row" key={intervalIndex}><NumberInput min={0} value={interval.fromMs} onChange={(fromMs) => onChange({ ...button, visibility: intervals.map((item, i) => i === intervalIndex ? { ...item, fromMs } : item) })}/><span>〜</span><input type="number" min="0" value={interval.toMs ?? ''} placeholder="終了まで" onChange={(event) => onChange({ ...button, visibility: intervals.map((item, i) => i === intervalIndex ? { ...item, toMs: event.target.value === '' ? null : Number(event.target.value) } : item) })}/><button className="icon-button" onClick={() => onChange({ ...button, visibility: intervals.filter((_, i) => i !== intervalIndex) })}><Icon name="close" size={12}/></button></div>)}
@@ -395,7 +432,7 @@ function GraphMetadataInspector({ graph, graphName, assets, scripts, onChange }:
         {dateField('updatedAt', '更新日時')}
       </Section>
       <Section title="再生統計">
-        <label className="check-row"><input type="checkbox" checked={Boolean(graph.playbackStats)} onChange={(event) => { const next = { ...graph }; if (event.target.checked) next.playbackStats = { path: scripts[0]?.path ?? '', function: 'render_stats' }; else delete next.playbackStats; onChange(next) }}/><span><strong>作者定義の再生統計を有効にする</strong><small>セッションごとにStarlarkを1回実行します</small></span></label>
+        <label className="check-row"><input type="checkbox" checked={Boolean(graph.playbackStats)} onChange={(event) => { const next = { ...graph }; if (event.target.checked) next.playbackStats = { path: scripts[0]?.path ?? '', function: 'render_stats' }; else delete next.playbackStats; onChange(next) }}/><span><strong>作者定義の再生統計を有効にする</strong></span></label>
         {graph.playbackStats && <>
           <Field label="スクリプト"><select aria-label="再生統計スクリプト" value={graph.playbackStats.path} onChange={(event) => onChange({ ...graph, playbackStats: { ...graph.playbackStats!, path: event.target.value } })}><option value="">選択してください</option>{scripts.map((script) => <option value={script.path} key={script.uid}>{script.path}</option>)}</select></Field>
           <Field label="関数" hint="省略時 render_stats"><input aria-label="再生統計関数" value={graph.playbackStats.function ?? ''} placeholder="render_stats" onChange={(event) => onChange({ ...graph, playbackStats: { ...graph.playbackStats!, function: event.target.value || undefined } })}/></Field>
@@ -416,7 +453,7 @@ const playerControlLabels: Array<[PlayerControlBooleanKey, string, 'visibility' 
   ['allowPrevious', '前へ戻ることを許可', 'action'],
 ]
 
-function PlayerControlInspector({ controlId, control, issues, global, usedBy, onChange, onRename, onGlobal, onDelete }: { controlId: string; control: PlayerControlSettings; issues: ValidationIssue[]; global: boolean; usedBy: string[]; onChange: (control: PlayerControlSettings) => void; onRename: (next: string) => void; onGlobal: (enabled: boolean) => void; onDelete: () => void }) {
+function PlayerControlInspector({ controlId, control, layouts, issues, global, usedBy, onChange, onRename, onGlobal, onDelete, onOpenLayout }: { controlId: string; control: PlayerControlSettings; layouts: LayoutDocument[]; issues: ValidationIssue[]; global: boolean; usedBy: string[]; onChange: (control: PlayerControlSettings) => void; onRename: (next: string) => void; onGlobal: (enabled: boolean) => void; onDelete: () => void; onOpenLayout: (layout: LayoutDocument) => void }) {
   const section = (kind: 'visibility' | 'action') => playerControlLabels.filter(([, , group]) => group === kind).map(([key, label]) => <label className="check-row control-check" key={key}><input type="checkbox" checked={control[key]} onChange={(event) => onChange({ ...control, [key]: event.target.checked })}/><span>{label}</span></label>)
   return <aside className="inspector player-control-inspector" data-testid="player-control-inspector">
     <div className="panel-title"><span>再生コントロール</span><button className="icon-button danger" title="設定を削除" onClick={onDelete}><Icon name="trash" size={14}/></button></div>
@@ -426,6 +463,7 @@ function PlayerControlInspector({ controlId, control, issues, global, usedBy, on
       <Section title="設定">
         <Field label="設定ID"><input aria-label="再生設定ID" key={controlId} defaultValue={controlId} onBlur={(event) => onRename(event.target.value.trim())} onKeyDown={(event) => event.key === 'Enter' && event.currentTarget.blur()}/></Field>
         <Field label="グラフカラー"><div className="color-field"><DebouncedColorInput value={control.editor?.color ?? '#4f8c78'} onCommit={(color) => onChange({ ...control, editor: { ...control.editor, color } })}/><input value={control.editor?.color ?? '#4f8c78'} onChange={(event) => onChange({ ...control, editor: { ...control.editor, color: event.target.value } })}/></div></Field>
+        <Field label="ボタンレイアウト" hint="ファイルツリーからノード上部のポートへドロップしても接続できます"><div className="script-reference"><select value={control.layout ?? ''} onChange={(event) => onChange({ ...control, layout: event.target.value || undefined })}><option value="">未接続</option>{layouts.map((layout) => <option value={layout.path} key={layout.uid}>{layout.path}</option>)}</select>{control.layout && <button className="icon-button" title="レイアウトを開く" onClick={() => { const layout = layouts.find((item) => item.path === control.layout); if (layout) onOpenLayout(layout) }}><Icon name="fit" size={13}/></button>}</div></Field>
         <label className="check-row global-control-check"><input type="checkbox" checked={global} onChange={(event) => onGlobal(event.target.checked)}/><span><strong>グローバル設定</strong><small>個別設定がない全Media Nodeへ適用</small></span></label>
         <label className="check-row"><input type="checkbox" checked={Boolean(control.accentColor)} onChange={(event) => onChange({ ...control, accentColor: event.target.checked ? '#8065c4' : undefined })}/><span><strong>プレイヤーのアクセント色</strong><small>白・黒に近すぎない#RRGGBBのみ使用できます</small></span></label>
         {control.accentColor && <Field label="アクセントカラー"><div className="color-field"><DebouncedColorInput value={control.accentColor} onCommit={(accentColor) => onChange({ ...control, accentColor })}/><input aria-label="アクセントカラー" value={control.accentColor} onChange={(event) => onChange({ ...control, accentColor: event.target.value })}/></div></Field>}
@@ -433,6 +471,24 @@ function PlayerControlInspector({ controlId, control, issues, global, usedBy, on
       <Section title="表示">{section('visibility')}</Section>
       <Section title="操作">{section('action')}</Section>
       <button className="text-button danger" onClick={onDelete}><Icon name="trash" size={14}/>この設定を削除</button>
+    </div>
+  </aside>
+}
+
+function GraphLayoutInspector({ path, placement, layout, connectedControls, onChange, onOpen, onRemove }: { path: string; placement: GraphLayoutPlacement; layout?: LayoutDocument; connectedControls: string[]; onChange: (placement: GraphLayoutPlacement) => void; onOpen: () => void; onRemove: () => void }) {
+  return <aside className="inspector graph-layout-inspector" data-testid="graph-layout-inspector">
+    <div className="panel-title"><span>レイアウトノード</span><button className="icon-button danger" title="グラフから取り除く" onClick={onRemove}><Icon name="trash" size={14}/></button></div>
+    <div className="inspector-scroll">
+      <div className="node-identity layout-node-identity"><span className="layout-glyph"><Icon name="fit" size={15}/></span><div><strong>{path.split('/').at(-1)}</strong><small>{path}</small></div></div>
+      {!layout && <div className="node-issues"><div className="error"><Icon name="warning" size={13}/>レイアウトファイルが見つかりません</div></div>}
+      <Section title="レイアウト">
+        <Field label="ファイル"><div className="script-reference"><input value={path} readOnly/>{layout && <button className="icon-button" title="レイアウトを開く" onClick={onOpen}><Icon name="fit" size={13}/></button>}</div></Field>
+        <Field label="グラフカラー"><div className="color-field"><DebouncedColorInput value={placement.color ?? '#4d8e9f'} onCommit={(color) => onChange({ ...placement, color })}/><input value={placement.color ?? '#4d8e9f'} onChange={(event) => onChange({ ...placement, color: event.target.value })}/></div></Field>
+      </Section>
+      <Section title="接続中の再生設定" count={connectedControls.length}>
+        {connectedControls.length ? connectedControls.map((id) => <div className="layout-control-reference" key={id}><Icon name="controls" size={12}/><span>{id}</span></div>) : <div className="empty-block">下部ポートから再生設定へ接続できます</div>}
+      </Section>
+      <button className="text-button danger" onClick={onRemove}><Icon name="trash" size={14}/>グラフから取り除く</button>
     </div>
   </aside>
 }
@@ -448,7 +504,7 @@ function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probab
     return <aside className="inspector button-only-inspector">
       <div className="panel-title"><span>ボタン</span><button className="icon-button danger" title="ボタンを削除" onClick={onDeleteButton}><Icon name="trash" size={14}/></button></div>
       <div className="inspector-scroll">
-        <div className="node-identity button-identity"><span className="button-glyph">B</span><div><strong>{button.appearance?.text || buttonId}</strong><small>{parents.length ? parents.join(', ') : '未接続'} · {buttonId}</small></div></div>
+        <div className="node-identity button-identity"><span className="button-glyph">B</span><div><strong>{button.text || buttonId}</strong><small>{parents.length ? parents.join(', ') : '未接続'} · {buttonId}</small></div></div>
         {buttonIssues.length > 0 && <div className="node-issues">{buttonIssues.map((issue, index) => <div className={issue.severity} key={index}><Icon name="warning" size={13}/>{issue.message}</div>)}</div>}
         <div className="button-only-editor"><ButtonEditor buttonId={buttonId} button={button} nodes={nodeIds} nodeLabels={nodeLabels} assets={assets} scripts={scripts} onChange={onChangeButton} onRename={onRenameButton} onRemove={onDeleteButton} onPick={onPick} onOpenScript={onOpenScript}/></div>
       </div>
@@ -502,7 +558,7 @@ function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probab
         <TransitionEditor transitions={node.onEnd ?? []} nodes={nodeIds} nodeLabels={nodeLabels} probabilityMode={probabilityMode} onChange={(onEnd) => onChange({ ...node, onEnd })} onPick={onPick}/>
       </Section>}
       {!node.terminal && <Section title="接続ボタン" count={node.buttons?.length ?? 0} action={<button className="mini-button" onClick={() => onAddButton(nodeId)}>+ 作成</button>}>
-        {(node.buttons ?? []).map((id) => <div className="button-reference" key={id}><button onClick={() => onPickButton(id)}><span className="button-glyph">B</span><span>{graph.buttons[id]?.appearance?.text || id}</span><small>{id}</small></button><button className="icon-button" title="ノードから切断" onClick={() => onDetachButton(nodeId, id)}><Icon name="close" size={12}/></button></div>)}
+        {(node.buttons ?? []).map((id) => <div className="button-reference" key={id}><button onClick={() => onPickButton(id)}><span className="button-glyph">B</span><span>{graph.buttons[id]?.text || id}</span><small>{id}</small></button><button className="icon-button" title="ノードから切断" onClick={() => onDetachButton(nodeId, id)}><Icon name="close" size={12}/></button></div>)}
         {!node.buttons?.length && <div className="empty-block">下部ポートからボタンへ接続できます</div>}
       </Section>}
     </div>
@@ -510,44 +566,49 @@ function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probab
 }
 
 type View = { zoom: number; x: number; y: number }
-type GraphEdgeRef = { from: string; to: string; index: number; type: 'end' | 'button' | 'attachment' | 'control' }
-type ConnectionDraft = { from: string; type: 'end' | 'button' | 'attachment' | 'control'; x: number; y: number }
+type GraphEdgeRef = { from: string; to: string; index: number; type: 'end' | 'button' | 'attachment' | 'control' | 'layout' }
+type ConnectionDraft = { from: string; type: 'end' | 'button' | 'attachment' | 'control' | 'layout'; x: number; y: number }
 
 type GraphCanvasProps = {
-  graph: WmgGraph; selectedNode: string | null; selectedButton: string | null; selectedPlayerControl: string | null; probabilityMode: boolean; showWeights: boolean; view: View
-  onView: (view: View) => void; onSelectNode: (id: string | null) => void; onSelectButton: (id: string) => void; onSelectPlayerControl: (id: string) => void
-  onMoveNode: (id: string, x: number, y: number) => void; onMoveButton: (id: string, x: number, y: number) => void; onMovePlayerControl: (id: string, x: number, y: number) => void
-  onAddNode: (x: number, y: number) => void; onAddScriptNode: (x: number, y: number) => void; onAddButton: (x: number, y: number) => void; onAddPlayerControl: (x: number, y: number) => void
+  graph: WmgGraph; layouts: LayoutDocument[]; selectedNode: string | null; selectedButton: string | null; selectedPlayerControl: string | null; selectedLayout: string | null; probabilityMode: boolean; showWeights: boolean; view: View
+  onView: (view: View) => void; onSelectNode: (id: string | null) => void; onSelectButton: (id: string) => void; onSelectPlayerControl: (id: string) => void; onSelectLayout: (path: string) => void
+  onMoveNode: (id: string, x: number, y: number) => void; onMoveButton: (id: string, x: number, y: number) => void; onMovePlayerControl: (id: string, x: number, y: number) => void; onMoveLayout: (path: string, x: number, y: number) => void
+  onAddNode: (x: number, y: number) => void; onAddScriptNode: (x: number, y: number) => void; onAddButton: (x: number, y: number) => void; onAddLayout: (x: number, y: number, path?: string) => void; onAddPlayerControl: (x: number, y: number) => void
   onConnectNode: (from: string, to: string) => void; onConnectButton: (buttonId: string, to: string) => void; onAttachButton: (nodeId: string, buttonId: string) => void; onAttachPlayerControl: (nodeId: string, controlId: string) => void
+  onAttachLayout: (controlId: string, layoutPath?: string) => void
   onAssetDrop: (path: string, nodeId: string | null, x: number, y: number) => void; onFolderDrop: (path: string, nodeId: string | null, x: number, y: number) => void
+  onLayoutDrop: (path: string, x: number, y: number) => void
   onExternalDrop: (promises: Array<Promise<FileSystemHandle | null>>, x: number, y: number) => void
   onWeightChange: (edge: GraphEdgeRef, value: number, asProbability: boolean) => void; onDisconnect: (edge: GraphEdgeRef) => void; onInsertNode: (edge: GraphEdgeRef) => void
-  onDeleteNode: (nodeId: string, bridge: boolean) => void; onDeleteButton: (buttonId: string) => void; onDeletePlayerControl: (controlId: string) => void; onSave: () => void
+  onDeleteNode: (nodeId: string, bridge: boolean) => void; onDeleteButton: (buttonId: string) => void; onDeleteLayout: (path: string) => void; onDeletePlayerControl: (controlId: string) => void; onOpenLayout: (path: string) => void; onSave: () => void
 }
 
-function GraphCanvas({ graph, selectedNode, selectedButton, selectedPlayerControl, probabilityMode, showWeights, view, onView, onSelectNode, onSelectButton, onSelectPlayerControl, onMoveNode, onMoveButton, onMovePlayerControl, onAddNode, onAddScriptNode, onAddButton, onAddPlayerControl, onConnectNode, onConnectButton, onAttachButton, onAttachPlayerControl, onAssetDrop, onFolderDrop, onExternalDrop, onWeightChange, onDisconnect, onInsertNode, onDeleteNode, onDeleteButton, onDeletePlayerControl, onSave }: GraphCanvasProps) {
+function GraphCanvas({ graph, layouts, selectedNode, selectedButton, selectedPlayerControl, selectedLayout, probabilityMode, showWeights, view, onView, onSelectNode, onSelectButton, onSelectPlayerControl, onSelectLayout, onMoveNode, onMoveButton, onMovePlayerControl, onMoveLayout, onAddNode, onAddScriptNode, onAddButton, onAddLayout, onAddPlayerControl, onConnectNode, onConnectButton, onAttachButton, onAttachPlayerControl, onAttachLayout, onAssetDrop, onFolderDrop, onLayoutDrop, onExternalDrop, onWeightChange, onDisconnect, onInsertNode, onDeleteNode, onDeleteButton, onDeleteLayout, onDeletePlayerControl, onOpenLayout, onSave }: GraphCanvasProps) {
   const surface = useRef<HTMLDivElement>(null)
-  const drag = useRef<{ type: 'node' | 'button' | 'control' | 'pan'; id?: string; startX: number; startY: number; originX: number; originY: number } | null>(null)
+  const drag = useRef<{ type: 'node' | 'button' | 'control' | 'layout' | 'pan'; id?: string; startX: number; startY: number; originX: number; originY: number } | null>(null)
   const draftRef = useRef<ConnectionDraft | null>(null)
   const connectionDragged = useRef(false)
   const [draft, setDraft] = useState<ConnectionDraft | null>(null)
   const [edgeMenu, setEdgeMenu] = useState<{ edge: GraphEdgeRef; x: number; y: number } | null>(null)
   const [nodeMenu, setNodeMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null)
   const [buttonMenu, setButtonMenu] = useState<{ buttonId: string; x: number; y: number } | null>(null)
+  const [layoutMenu, setLayoutMenu] = useState<{ path: string; x: number; y: number } | null>(null)
   const [controlMenu, setControlMenu] = useState<{ controlId: string; x: number; y: number } | null>(null)
   const [canvasMenu, setCanvasMenu] = useState<{ x: number; y: number; nodeX: number; nodeY: number } | null>(null)
   const [disconnectMenu, setDisconnectMenu] = useState<{ title: string; edges: GraphEdgeRef[]; x: number; y: number } | null>(null)
-  const [dropPreview, setDropPreview] = useState<{ x: number; y: number; label: string; kind: 'folder' | 'media' } | null>(null)
+  const [dropPreview, setDropPreview] = useState<{ x: number; y: number; label: string; kind: 'folder' | 'media' | 'layout' } | null>(null)
   const nodeEntries = Object.entries(graph.nodes)
   const buttonEntries = Object.entries(graph.buttons)
   const playerControlEntries = Object.entries(graph.playerControls ?? {})
+  const layoutEntries = Object.entries(graph.editor?.layouts ?? {})
   const transitionEdges = [
     ...nodeEntries.flatMap(([from, node]) => (node.onEnd ?? []).map((transition, index) => ({ from, to: transition.to, transition, index, type: 'end' as const, set: node.onEnd ?? [] }))),
     ...buttonEntries.flatMap(([from, button]) => (button.onPress ?? []).map((transition, index) => ({ from, to: transition.to, transition, index, type: 'button' as const, set: button.onPress ?? [] }))),
   ].filter((edge) => graph.nodes[edge.to])
   const attachmentEdges = nodeEntries.flatMap(([from, node]) => (node.buttons ?? []).map((to, index) => ({ from, to, index, type: 'attachment' as const }))).filter((edge) => graph.buttons[edge.to])
   const controlEdges = nodeEntries.flatMap(([from, node]) => node.playerControl ? [{ from, to: node.playerControl, index: 0, type: 'control' as const }] : []).filter((edge) => graph.playerControls?.[edge.to])
-  const edges = [...transitionEdges, ...attachmentEdges, ...controlEdges]
+  const layoutEdges = playerControlEntries.flatMap(([to, control]) => control.layout && graph.editor?.layouts?.[control.layout] ? [{ from: control.layout, to, index: 0, type: 'layout' as const }] : [])
+  const edges = [...transitionEdges, ...attachmentEdges, ...controlEdges, ...layoutEdges]
   const edgeRef = (edge: typeof edges[number]): GraphEdgeRef => ({ from: edge.from, to: edge.to, index: edge.index, type: edge.type })
   const isCompactNode = (node: WmgNode) => node.type === 'script' || !(node.media?.length)
   const point = (id: string, side: 'in' | 'out') => {
@@ -559,13 +620,15 @@ function GraphCanvas({ graph, selectedNode, selectedButton, selectedPlayerContro
   const nodeControlPoint = (id: string) => { const node = graph.nodes[id]; return { x: (node.editor?.x ?? 0) + (isCompactNode(node) ? 78 : 92), y: node.editor?.y ?? 0 } }
   const buttonPoint = (id: string, side: 'in' | 'out') => { const button = graph.buttons[id]; return { x: (button.editor?.x ?? 0) + (side === 'in' ? 75 : 150), y: (button.editor?.y ?? 0) + (side === 'in' ? 0 : 23) } }
   const playerControlPoint = (id: string) => { const control = graph.playerControls[id]; return { x: (control.editor?.x ?? 0) + 82, y: (control.editor?.y ?? 0) + 54 } }
+  const controlLayoutPoint = (id: string) => { const control = graph.playerControls[id]; return { x: (control.editor?.x ?? 0) + 82, y: control.editor?.y ?? 0 } }
+  const layoutPoint = (path: string) => { const placement = graph.editor?.layouts?.[path]; return { x: (placement?.x ?? 0) + 82, y: (placement?.y ?? 0) + 50 } }
   const displayName = (id: string) => graph.nodes[id]?.editor?.label || id
-  const buttonName = (id: string) => graph.buttons[id]?.appearance?.text || id
+  const buttonName = (id: string) => graph.buttons[id]?.text || id
   const controlName = (id: string) => id
-  const isDimmed = (edge: typeof edges[number]) => selectedNode ? ['attachment', 'control'].includes(edge.type) ? edge.from !== selectedNode : edge.type === 'end' ? edge.from !== selectedNode && edge.to !== selectedNode : edge.to !== selectedNode : selectedButton ? edge.type === 'attachment' ? edge.to !== selectedButton : edge.type === 'button' ? edge.from !== selectedButton : true : selectedPlayerControl ? edge.type !== 'control' || edge.to !== selectedPlayerControl : false
-  const edgeStart = (edge: typeof edges[number]) => edge.type === 'attachment' ? nodeButtonPoint(edge.from) : edge.type === 'control' ? nodeControlPoint(edge.from) : edge.type === 'button' ? buttonPoint(edge.from, 'out') : point(edge.from, 'out')
-  const edgeEnd = (edge: typeof edges[number]) => edge.type === 'attachment' ? buttonPoint(edge.to, 'in') : edge.type === 'control' ? playerControlPoint(edge.to) : point(edge.to, 'in')
-  const draftStart = (current: ConnectionDraft) => current.type === 'attachment' ? nodeButtonPoint(current.from) : current.type === 'control' ? nodeControlPoint(current.from) : current.type === 'button' ? buttonPoint(current.from, 'out') : point(current.from, 'out')
+  const isDimmed = (edge: typeof edges[number]) => selectedNode ? ['attachment', 'control'].includes(edge.type) ? edge.from !== selectedNode : edge.type === 'end' ? edge.from !== selectedNode && edge.to !== selectedNode : true : selectedButton ? edge.type === 'attachment' ? edge.to !== selectedButton : edge.type === 'button' ? edge.from !== selectedButton : true : selectedPlayerControl ? !['control', 'layout'].includes(edge.type) || edge.to !== selectedPlayerControl : selectedLayout ? edge.type !== 'layout' || edge.from !== selectedLayout : false
+  const edgeStart = (edge: typeof edges[number]) => edge.type === 'attachment' ? nodeButtonPoint(edge.from) : edge.type === 'control' ? nodeControlPoint(edge.from) : edge.type === 'layout' ? layoutPoint(edge.from) : edge.type === 'button' ? buttonPoint(edge.from, 'out') : point(edge.from, 'out')
+  const edgeEnd = (edge: typeof edges[number]) => edge.type === 'attachment' ? buttonPoint(edge.to, 'in') : edge.type === 'control' ? playerControlPoint(edge.to) : edge.type === 'layout' ? controlLayoutPoint(edge.to) : point(edge.to, 'in')
+  const draftStart = (current: ConnectionDraft) => current.type === 'attachment' ? nodeButtonPoint(current.from) : current.type === 'control' ? nodeControlPoint(current.from) : current.type === 'layout' ? layoutPoint(current.from) : current.type === 'button' ? buttonPoint(current.from, 'out') : point(current.from, 'out')
   const pointerMove = useCallback((event: PointerEvent) => {
     if (draftRef.current) {
       connectionDragged.current = true
@@ -583,7 +646,8 @@ function GraphCanvas({ graph, selectedNode, selectedButton, selectedPlayerContro
     else if (current.type === 'node' && current.id) onMoveNode(current.id, current.originX + dx / view.zoom, current.originY + dy / view.zoom)
     else if (current.type === 'button' && current.id) onMoveButton(current.id, current.originX + dx / view.zoom, current.originY + dy / view.zoom)
     else if (current.type === 'control' && current.id) onMovePlayerControl(current.id, current.originX + dx / view.zoom, current.originY + dy / view.zoom)
-  }, [onMoveButton, onMoveNode, onMovePlayerControl, onView, view])
+    else if (current.type === 'layout' && current.id) onMoveLayout(current.id, current.originX + dx / view.zoom, current.originY + dy / view.zoom)
+  }, [onMoveButton, onMoveLayout, onMoveNode, onMovePlayerControl, onView, view])
   useEffect(() => {
     const up = (event: PointerEvent) => {
       const currentDraft = draftRef.current
@@ -595,6 +659,9 @@ function GraphCanvas({ graph, selectedNode, selectedButton, selectedPlayerContro
         } else if (currentDraft.type === 'control') {
           const target = targetElement?.closest<HTMLElement>('.control-input-port')?.dataset.controlId
           if (target) onAttachPlayerControl(currentDraft.from, target)
+        } else if (currentDraft.type === 'layout') {
+          const target = targetElement?.closest<HTMLElement>('.control-layout-port')?.dataset.controlId
+          if (target) onAttachLayout(target, currentDraft.from)
         } else {
           const target = targetElement?.closest<HTMLElement>('.node-input-port')?.dataset.nodeId
           if (target && (currentDraft.type === 'button' || target !== currentDraft.from)) {
@@ -610,7 +677,7 @@ function GraphCanvas({ graph, selectedNode, selectedButton, selectedPlayerContro
     window.addEventListener('pointermove', pointerMove)
     window.addEventListener('pointerup', up)
     return () => { window.removeEventListener('pointermove', pointerMove); window.removeEventListener('pointerup', up) }
-  }, [onAttachButton, onAttachPlayerControl, onConnectButton, onConnectNode, pointerMove])
+  }, [onAttachButton, onAttachLayout, onAttachPlayerControl, onConnectButton, onConnectNode, pointerMove])
   useEffect(() => {
     const cancel = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { draftRef.current = null; setDraft(null) }
@@ -644,13 +711,69 @@ function GraphCanvas({ graph, selectedNode, selectedButton, selectedPlayerContro
     const rect = surface.current?.getBoundingClientRect()
     return { x: ((clientX - (rect?.left ?? 0)) - view.x) / view.zoom, y: ((clientY - (rect?.top ?? 0)) - view.y) / view.zoom }
   }
-  return <div className={`graph-surface ${draft ? 'connecting' : ''}`} ref={surface} onPointerDown={(event) => { setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setControlMenu(null); setCanvasMenu(null); setDisconnectMenu(null); if (event.button !== 0 || (event.target as Element).closest?.('.graph-node, .graph-button-node, .graph-control-node, .graph-menu, .wire-weight-editor')) return; drag.current = { type: 'pan', startX: event.clientX, startY: event.clientY, originX: view.x, originY: view.y }; onSelectNode(null) }} onContextMenu={(event) => { if ((event.target as Element).closest?.('.graph-node, .graph-button-node, .graph-control-node, .graph-menu, .edge, .wire-weight-editor')) return; event.preventDefault(); const rect = surface.current?.getBoundingClientRect(); const local = localPoint(event.clientX, event.clientY); setCanvasMenu({ x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0), nodeX: local.x - 78, nodeY: local.y - 24 }); setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setControlMenu(null); setDisconnectMenu(null) }} onDoubleClick={(event) => { if (!(event.target as Element).closest?.('.graph-node, .graph-button-node, .graph-control-node, .graph-menu, .wire-weight-editor')) { const local = localPoint(event.clientX, event.clientY); onAddNode(local.x - 78, local.y - 24) } }} onDragEnterCapture={(event) => { if ((event.target as Element).closest?.('.graph-node')) setDropPreview(null) }} onDragOverCapture={(event) => { if ((event.target as Element).closest?.('.graph-node')) setDropPreview(null) }} onDragOver={(event) => { if ((event.target as Element).closest?.('.graph-node')) { setDropPreview(null); return } if (event.dataTransfer.types.includes(ASSET_DRAG_TYPE) || event.dataTransfer.types.includes(FOLDER_DRAG_TYPE) || event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; const local = localPoint(event.clientX, event.clientY); const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); const rawLabel = path || folder; const fallbackLabel = rawLabel ? (rawLabel === '.' ? 'コンテンツフォルダ' : rawLabel.split('/').filter(Boolean).at(-1)?.replace(/\.[^.]+$/, '') ?? '新規ノード') : 'ドロップして追加'; setDropPreview({ x: local.x, y: local.y, label: activeTreeDrag?.label ?? fallbackLabel, kind: activeTreeDrag?.kind ?? (folder || event.dataTransfer.types.includes('Files') ? 'folder' : 'media') }) } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropPreview(null) }} onDrop={(event) => { setDropPreview(null); const local = localPoint(event.clientX, event.clientY); const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); if (path) { event.preventDefault(); onAssetDrop(path, null, local.x, local.y); return } if (folder) { event.preventDefault(); onFolderDrop(folder, null, local.x, local.y); return } if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.stopPropagation(); const promises = Array.from(event.dataTransfer.items).map((item) => (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> }).getAsFileSystemHandle?.() ?? Promise.resolve(null)); onExternalDrop(promises, local.x, local.y) } }}>
+  const graphItemSelector = '.graph-node, .graph-button-node, .graph-layout-node, .graph-control-node, .graph-menu, .wire-weight-editor'
+  return <div
+    className={`graph-surface ${draft ? 'connecting' : ''}`}
+    ref={surface}
+    onPointerDown={(event) => {
+      setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setLayoutMenu(null); setControlMenu(null); setCanvasMenu(null); setDisconnectMenu(null)
+      if (event.button !== 0 || (event.target as Element).closest?.(graphItemSelector)) return
+      drag.current = { type: 'pan', startX: event.clientX, startY: event.clientY, originX: view.x, originY: view.y }
+      onSelectNode(null)
+    }}
+    onContextMenu={(event) => {
+      if ((event.target as Element).closest?.(`${graphItemSelector}, .edge`)) return
+      event.preventDefault()
+      const rect = surface.current?.getBoundingClientRect()
+      const local = localPoint(event.clientX, event.clientY)
+      setCanvasMenu({ x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0), nodeX: local.x - 78, nodeY: local.y - 24 })
+      setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setLayoutMenu(null); setControlMenu(null); setDisconnectMenu(null)
+    }}
+    onDoubleClick={(event) => {
+      if (!(event.target as Element).closest?.(graphItemSelector)) {
+        const local = localPoint(event.clientX, event.clientY)
+        onAddNode(local.x - 78, local.y - 24)
+      }
+    }}
+    onDragEnterCapture={(event) => { if ((event.target as Element).closest?.('.graph-node')) setDropPreview(null) }}
+    onDragOverCapture={(event) => { if ((event.target as Element).closest?.('.graph-node')) setDropPreview(null) }}
+    onDragOver={(event) => {
+      if ((event.target as Element).closest?.('.graph-node')) { setDropPreview(null); return }
+      const hasLayout = event.dataTransfer.types.includes(LAYOUT_DRAG_TYPE)
+      if (event.dataTransfer.types.includes(ASSET_DRAG_TYPE) || event.dataTransfer.types.includes(FOLDER_DRAG_TYPE) || hasLayout || event.dataTransfer.types.includes('Files')) {
+        event.preventDefault(); event.dataTransfer.dropEffect = 'copy'
+        const local = localPoint(event.clientX, event.clientY)
+        const path = event.dataTransfer.getData(ASSET_DRAG_TYPE)
+        const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE)
+        const layout = event.dataTransfer.getData(LAYOUT_DRAG_TYPE)
+        const rawLabel = path || folder || layout
+        const fallbackLabel = rawLabel ? (rawLabel === '.' ? 'コンテンツフォルダ' : rawLabel.split('/').filter(Boolean).at(-1)?.replace(/\.[^.]+$/, '') ?? '新規ノード') : 'ドロップして追加'
+        setDropPreview({ x: local.x, y: local.y, label: activeTreeDrag?.label ?? fallbackLabel, kind: activeTreeDrag?.kind ?? (hasLayout ? 'layout' : folder || event.dataTransfer.types.includes('Files') ? 'folder' : 'media') })
+      }
+    }}
+    onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropPreview(null) }}
+    onDrop={(event) => {
+      setDropPreview(null)
+      const local = localPoint(event.clientX, event.clientY)
+      const path = event.dataTransfer.getData(ASSET_DRAG_TYPE)
+      const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE)
+      const layout = event.dataTransfer.getData(LAYOUT_DRAG_TYPE)
+      if (layout) { event.preventDefault(); event.stopPropagation(); onLayoutDrop(layout, local.x, local.y); return }
+      if (path) { event.preventDefault(); onAssetDrop(path, null, local.x, local.y); return }
+      if (folder) { event.preventDefault(); onFolderDrop(folder, null, local.x, local.y); return }
+      if (event.dataTransfer.types.includes('Files')) {
+        event.preventDefault(); event.stopPropagation()
+        const promises = Array.from(event.dataTransfer.items).map((item) => (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> }).getAsFileSystemHandle?.() ?? Promise.resolve(null))
+        onExternalDrop(promises, local.x, local.y)
+      }
+    }}
+  >
     <div className="graph-grid" style={{ backgroundPosition: `${view.x}px ${view.y}px`, backgroundSize: `${24 * view.zoom}px ${24 * view.zoom}px` }}/>
     <div className="graph-world" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}>
       <svg className="edges" width="4000" height="3000" viewBox="0 0 4000 3000">
-        <defs><marker id="arrow-end" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-end-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-button" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-button-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-attachment" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto"><path className="arrow-attachment-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-control" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto"><path className="arrow-control-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-draft" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-draft-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker></defs>
-        {edges.map((edge) => { const a = edgeStart(edge); const b = edgeEnd(edge); const vertical = edge.type === 'attachment' || edge.type === 'control'; const direction = b.y >= a.y ? 1 : -1; const bend = Math.max(45, Math.abs((vertical ? b.y - a.y : b.x - a.x)) * .45); const path = vertical ? `M ${a.x} ${a.y} C ${a.x} ${a.y + bend * direction}, ${b.x} ${b.y - bend * direction}, ${b.x} ${b.y}` : `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`; const color = edge.type === 'button' ? graph.buttons[edge.from]?.editor?.color : edge.type === 'control' ? graph.playerControls[edge.to]?.editor?.color : graph.nodes[edge.from]?.editor?.color; return <g className={`edge ${edge.type} ${isDimmed(edge) ? 'dimmed' : ''}`} style={{ '--edge-color': color ?? '#71808e' } as React.CSSProperties} data-from={edge.from} data-to={edge.to} key={`${edge.from}-${edge.type}-${edge.index}`}><path d={path} markerEnd={`url(#arrow-${edge.type})`}/><path className="edge-hit" d={path} onContextMenu={(event) => { event.preventDefault(); const rect = surface.current?.getBoundingClientRect(); setEdgeMenu({ edge: edgeRef(edge), x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setNodeMenu(null); setButtonMenu(null); setControlMenu(null); setDisconnectMenu(null) }}/></g> })}
-        {draft && (() => { const a = draftStart(draft); const vertical = draft.type === 'attachment' || draft.type === 'control'; const direction = draft.y >= a.y ? 1 : -1; const bend = Math.max(45, Math.abs((vertical ? draft.y - a.y : draft.x - a.x)) * .45); const path = vertical ? `M ${a.x} ${a.y} C ${a.x} ${a.y + bend * direction}, ${draft.x} ${draft.y - bend * direction}, ${draft.x} ${draft.y}` : `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${draft.x - bend} ${draft.y}, ${draft.x} ${draft.y}`; const color = graph.nodes[draft.from]?.editor?.color ?? (draft.type === 'button' ? graph.buttons[draft.from]?.editor?.color : undefined); return <path className="draft-edge" style={{ '--edge-color': color ?? '#55addd' } as React.CSSProperties} d={path} markerEnd="url(#arrow-draft)"/> })()}
+        <defs><marker id="arrow-end" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-end-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-button" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-button-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-attachment" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto"><path className="arrow-attachment-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-control" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto"><path className="arrow-control-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-layout" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto"><path className="arrow-layout-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker><marker id="arrow-draft" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path className="arrow-draft-shape" d="M 1 1 L 11 6 L 1 11 z"/></marker></defs>
+        {edges.map((edge) => { const a = edgeStart(edge); const b = edgeEnd(edge); const vertical = edge.type === 'attachment' || edge.type === 'control' || edge.type === 'layout'; const direction = b.y >= a.y ? 1 : -1; const bend = Math.max(45, Math.abs((vertical ? b.y - a.y : b.x - a.x)) * .45); const path = vertical ? `M ${a.x} ${a.y} C ${a.x} ${a.y + bend * direction}, ${b.x} ${b.y - bend * direction}, ${b.x} ${b.y}` : `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`; const color = edge.type === 'button' ? graph.buttons[edge.from]?.editor?.color : edge.type === 'control' ? graph.playerControls[edge.to]?.editor?.color : edge.type === 'layout' ? graph.editor?.layouts?.[edge.from]?.color : graph.nodes[edge.from]?.editor?.color; return <g className={`edge ${edge.type} ${isDimmed(edge) ? 'dimmed' : ''}`} style={{ '--edge-color': color ?? '#71808e' } as React.CSSProperties} data-from={edge.from} data-to={edge.to} key={`${edge.from}-${edge.type}-${edge.index}`}><path d={path} markerEnd={`url(#arrow-${edge.type})`}/><path className="edge-hit" d={path} onContextMenu={(event) => { event.preventDefault(); const rect = surface.current?.getBoundingClientRect(); setEdgeMenu({ edge: edgeRef(edge), x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setNodeMenu(null); setButtonMenu(null); setLayoutMenu(null); setControlMenu(null); setDisconnectMenu(null) }}/></g> })}
+        {draft && (() => { const a = draftStart(draft); const vertical = draft.type === 'attachment' || draft.type === 'control' || draft.type === 'layout'; const direction = draft.y >= a.y ? 1 : -1; const bend = Math.max(45, Math.abs((vertical ? draft.y - a.y : draft.x - a.x)) * .45); const path = vertical ? `M ${a.x} ${a.y} C ${a.x} ${a.y + bend * direction}, ${draft.x} ${draft.y - bend * direction}, ${draft.x} ${draft.y}` : `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${draft.x - bend} ${draft.y}, ${draft.x} ${draft.y}`; const color = graph.nodes[draft.from]?.editor?.color ?? (draft.type === 'button' ? graph.buttons[draft.from]?.editor?.color : draft.type === 'layout' ? graph.editor?.layouts?.[draft.from]?.color : undefined); return <path className="draft-edge" style={{ '--edge-color': color ?? '#55addd' } as React.CSSProperties} d={path} markerEnd="url(#arrow-draft)"/> })()}
       </svg>
       {showWeights && transitionEdges.filter((edge) => edge.set.length > 1).map((edge) => { const a = edgeStart(edge); const b = edgeEnd(edge); return <label className={`wire-weight-editor ${edge.type} ${isDimmed(edge) ? 'dimmed' : ''}`} data-from={edge.from} data-to={edge.to} style={{ left: (a.x + b.x) / 2, top: (a.y + b.y) / 2 - 8 }} key={`editor-${edge.from}-${edge.type}-${edge.index}`} title={probabilityMode ? '遷移確率' : '遷移の重み'} onPointerDown={(event) => event.stopPropagation()}><input type="number" min="0" max={probabilityMode ? 100 : undefined} step={probabilityMode ? .1 : 1} value={probabilityMode ? Number(probability(edge.transition.weight, edge.set).toFixed(1)) : edge.transition.weight} onChange={(event) => onWeightChange(edgeRef(edge), Number(event.target.value), probabilityMode)}/><span>{probabilityMode ? '%' : ''}</span></label> })}
       {nodeEntries.map(([id, node]) => <div key={id} data-node-id={id} className={`graph-node ${isCompactNode(node) ? 'compact' : ''} ${node.type === 'script' ? 'script-node' : ''} ${selectedNode === id ? 'selected' : ''} ${node.terminal ? 'terminal' : ''} ${draft?.from === id && draft.type !== 'button' ? 'source' : ''}`} style={{ left: node.editor?.x ?? 0, top: node.editor?.y ?? 0, '--node-color': node.editor?.color ?? '#4676a9' } as React.CSSProperties} onPointerDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); onSelectNode(id); drag.current = { type: 'node', id, startX: event.clientX, startY: event.clientY, originX: node.editor?.x ?? 0, originY: node.editor?.y ?? 0 } }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const rect = surface.current?.getBoundingClientRect(); setNodeMenu({ nodeId: id, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setButtonMenu(null); setDisconnectMenu(null) }} onDragOver={(event) => { if (node.type === 'media' && (event.dataTransfer.types.includes(ASSET_DRAG_TYPE) || event.dataTransfer.types.includes(FOLDER_DRAG_TYPE))) { event.preventDefault(); event.stopPropagation(); setDropPreview(null); event.currentTarget.classList.add('drag-over') } }} onDragLeave={(event) => event.currentTarget.classList.remove('drag-over')} onDrop={(event) => { if (node.type === 'script') return; setDropPreview(null); const path = event.dataTransfer.getData(ASSET_DRAG_TYPE); const folder = event.dataTransfer.getData(FOLDER_DRAG_TYPE); event.currentTarget.classList.remove('drag-over'); if (path) { event.preventDefault(); event.stopPropagation(); onAssetDrop(path, id, node.editor?.x ?? 0, node.editor?.y ?? 0) } else if (folder) { event.preventDefault(); event.stopPropagation(); onFolderDrop(folder, id, node.editor?.x ?? 0, node.editor?.y ?? 0) } }}>
@@ -672,22 +795,28 @@ function GraphCanvas({ graph, selectedNode, selectedButton, selectedPlayerContro
       </div>)}
       {buttonEntries.map(([id, button]) => { const outgoing = transitionEdges.filter((edge) => edge.type === 'button' && edge.from === id).map(edgeRef); const incoming = attachmentEdges.filter((edge) => edge.to === id).map(edgeRef); return <div className={`graph-button-node ${selectedButton === id ? 'selected' : ''} ${draft?.from === id && draft.type === 'button' ? 'source' : ''}`} data-button-id={id} style={{ left: button.editor?.x ?? 0, top: button.editor?.y ?? 0, '--node-color': button.editor?.color ?? '#8b6fa3' } as React.CSSProperties} key={id} onPointerDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); onSelectButton(id); drag.current = { type: 'button', id, startX: event.clientX, startY: event.clientY, originX: button.editor?.x ?? 0, originY: button.editor?.y ?? 0 } }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const rect = surface.current?.getBoundingClientRect(); setButtonMenu({ buttonId: id, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setNodeMenu(null); setDisconnectMenu(null) }}>
         <button className="port button-input-port" data-button-id={id} title="ノードとの接続" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); if (incoming.length === 1) onDisconnect(incoming[0]); else if (incoming.length > 1) { const rect = surface.current?.getBoundingClientRect(); setDisconnectMenu({ title: `${buttonName(id)} を使用するノード`, edges: incoming, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }) } }}/>
-        <span className="button-glyph">B</span><div><strong>{button.appearance?.text || id}</strong><small>{id} · {incoming.length} ノード · {outgoing.length} 遷移</small></div>
+        <span className="button-glyph">B</span><div><strong>{button.text || id}</strong><small>{id} · {incoming.length} ノード · {outgoing.length} 遷移</small></div>
         <button className="port output button-port" title="ドラッグで押下時遷移を作成" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); connectionDragged.current = false; onSelectButton(id); const start = buttonPoint(id, 'out'); const next: ConnectionDraft = { from: id, type: 'button', x: start.x, y: start.y }; draftRef.current = next; setDraft(next) }} onClick={(event) => { event.stopPropagation(); if (connectionDragged.current) { connectionDragged.current = false; return } if (outgoing.length === 1) onDisconnect(outgoing[0]); else if (outgoing.length > 1) { const rect = surface.current?.getBoundingClientRect(); setDisconnectMenu({ title: `${buttonName(id)} からの接続`, edges: outgoing, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }) } }}/>
       </div> })}
-      {playerControlEntries.map(([id, control]) => { const incoming = controlEdges.filter((edge) => edge.to === id).map(edgeRef); return <div className={`graph-control-node ${selectedPlayerControl === id ? 'selected' : ''}`} data-control-id={id} style={{ left: control.editor?.x ?? 0, top: control.editor?.y ?? 0, '--node-color': control.editor?.color ?? '#4f8c78' } as React.CSSProperties} key={id} onPointerDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); onSelectPlayerControl(id); drag.current = { type: 'control', id, startX: event.clientX, startY: event.clientY, originX: control.editor?.x ?? 0, originY: control.editor?.y ?? 0 } }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const rect = surface.current?.getBoundingClientRect(); setControlMenu({ controlId: id, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setDisconnectMenu(null) }}>
-        <span className="control-glyph"><Icon name="controls" size={14}/></span><div><strong>{id}</strong><small>{graph.globalPlayerControl === id ? 'GLOBAL · ' : ''}{incoming.length} ノード</small></div>
+      {layoutEntries.map(([path, placement]) => { const outgoing = layoutEdges.filter((edge) => edge.from === path).map(edgeRef); const layout = layouts.find((item) => item.path === path); return <div className={`graph-layout-node ${selectedLayout === path ? 'selected' : ''} ${draft?.from === path && draft.type === 'layout' ? 'source' : ''} ${layout ? '' : 'missing'}`} data-layout-path={path} style={{ left: placement.x ?? 0, top: placement.y ?? 0, '--node-color': placement.color ?? '#4d8e9f' } as React.CSSProperties} key={path} onPointerDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); onSelectLayout(path); drag.current = { type: 'layout', id: path, startX: event.clientX, startY: event.clientY, originX: placement.x ?? 0, originY: placement.y ?? 0 } }} onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); if (layout) onOpenLayout(path) }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const rect = surface.current?.getBoundingClientRect(); setLayoutMenu({ path, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setControlMenu(null); setDisconnectMenu(null) }}>
+        <span className="layout-glyph"><Icon name="fit" size={14}/></span><div><strong>{path.split('/').at(-1)}</strong><small>{layout ? `${outgoing.length} 再生設定` : 'ファイルが見つかりません'}</small></div>
+        <button className="port layout-output-port" title="ドラッグで再生設定の上部ポートへ接続" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); connectionDragged.current = false; onSelectLayout(path); const start = layoutPoint(path); const next: ConnectionDraft = { from: path, type: 'layout', x: start.x, y: start.y }; draftRef.current = next; setDraft(next) }} onClick={(event) => { event.stopPropagation(); if (connectionDragged.current) { connectionDragged.current = false; return } if (outgoing.length === 1) onDisconnect(outgoing[0]); else if (outgoing.length > 1) { const rect = surface.current?.getBoundingClientRect(); setDisconnectMenu({ title: `${path.split('/').at(-1)} の接続`, edges: outgoing, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }) } }}/>
+      </div> })}
+      {playerControlEntries.map(([id, control]) => { const incoming = controlEdges.filter((edge) => edge.to === id).map(edgeRef); return <div className={`graph-control-node ${selectedPlayerControl === id ? 'selected' : ''} ${control.layout ? 'has-layout' : ''}`} data-control-id={id} style={{ left: control.editor?.x ?? 0, top: control.editor?.y ?? 0, '--node-color': control.editor?.color ?? '#4f8c78' } as React.CSSProperties} key={id} onPointerDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); onSelectPlayerControl(id); drag.current = { type: 'control', id, startX: event.clientX, startY: event.clientY, originX: control.editor?.x ?? 0, originY: control.editor?.y ?? 0 } }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); const rect = surface.current?.getBoundingClientRect(); setControlMenu({ controlId: id, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }); setEdgeMenu(null); setNodeMenu(null); setButtonMenu(null); setDisconnectMenu(null) }}>
+        <span className="control-glyph"><Icon name="controls" size={14}/></span><div><strong>{id}</strong><small>{control.layout ? control.layout.split('/').at(-1) : graph.globalPlayerControl === id ? 'GLOBAL · レイアウト未接続' : `${incoming.length} ノード · レイアウト未接続`}</small></div>
+        <button className="port control-layout-port" data-control-id={id} title={control.layout ? `${control.layout}（クリックで解除）` : 'レイアウトノードを接続、またはファイルをドロップ'} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); if (control.layout) onAttachLayout(id, undefined) }} onDragOver={(event) => { if (event.dataTransfer.types.includes(LAYOUT_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy'; event.currentTarget.classList.add('drag-over') } }} onDragLeave={(event) => event.currentTarget.classList.remove('drag-over')} onDrop={(event) => { const path = event.dataTransfer.getData(LAYOUT_DRAG_TYPE); event.currentTarget.classList.remove('drag-over'); if (path) { event.preventDefault(); event.stopPropagation(); onAttachLayout(id, path) } }}/>
         <button className="port control-input-port" data-control-id={id} title="ノードとの設定接続" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); if (incoming.length === 1) onDisconnect(incoming[0]); else if (incoming.length > 1) { const rect = surface.current?.getBoundingClientRect(); setDisconnectMenu({ title: `${controlName(id)} を使用するノード`, edges: incoming, x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) }) } }}/>
       </div> })}
-      {dropPreview && <div className="drop-node-preview" style={{ left: dropPreview.x - 92, top: dropPreview.y - 42 }}><span className="preview-node-icon"><Icon name={dropPreview.kind === 'folder' ? 'folder' : 'media'} size={14}/></span><div><strong>{dropPreview.label}</strong><small>{dropPreview.kind === 'folder' ? '音声・動画を一括追加' : 'メディアノードを追加'}</small></div></div>}
+      {dropPreview && <div className={`drop-node-preview ${dropPreview.kind}`} style={{ left: dropPreview.x - 92, top: dropPreview.y - 42 }}><span className="preview-node-icon"><Icon name={dropPreview.kind === 'folder' ? 'folder' : dropPreview.kind === 'layout' ? 'fit' : 'media'} size={14}/></span><div><strong>{dropPreview.label}</strong><small>{dropPreview.kind === 'folder' ? '音声・動画を一括追加' : dropPreview.kind === 'layout' ? 'レイアウトノードを配置' : 'メディアノードを追加'}</small></div></div>}
     </div>
-    {draft && <div className="connect-hint"><Icon name="link" size={14}/>{draft.type === 'attachment' ? 'ボタン上部の入力ポートへドロップ' : draft.type === 'control' ? '上側にある再生設定ノードへドロップ' : 'ノード左側の入力ポートへドロップ'}</div>}
-    {edgeMenu && <div className="graph-menu" style={{ left: edgeMenu.x, top: edgeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{!['attachment', 'control'].includes(edgeMenu.edge.type) && <button onClick={() => { onInsertNode(edgeMenu.edge); setEdgeMenu(null) }}><Icon name="plus" size={13}/>ノードを間に追加</button>}<button onClick={() => { onDisconnect(edgeMenu.edge); setEdgeMenu(null) }}><Icon name="close" size={13}/>接続を解除</button></div>}
+    {draft && <div className="connect-hint"><Icon name="link" size={14}/>{draft.type === 'attachment' ? 'ボタン上部の入力ポートへドロップ' : draft.type === 'control' ? '上側にある再生設定ノードへドロップ' : draft.type === 'layout' ? '再生設定上部のレイアウトポートへドロップ' : 'ノード左側の入力ポートへドロップ'}</div>}
+    {edgeMenu && <div className="graph-menu" style={{ left: edgeMenu.x, top: edgeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{!['attachment', 'control', 'layout'].includes(edgeMenu.edge.type) && <button onClick={() => { onInsertNode(edgeMenu.edge); setEdgeMenu(null) }}><Icon name="plus" size={13}/>ノードを間に追加</button>}<button onClick={() => { onDisconnect(edgeMenu.edge); setEdgeMenu(null) }}><Icon name="close" size={13}/>接続を解除</button></div>}
     {nodeMenu && <div className="graph-menu" style={{ left: nodeMenu.x, top: nodeMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => { onDeleteNode(nodeMenu.nodeId, false); setNodeMenu(null) }}><Icon name="trash" size={13}/>削除</button><button onClick={() => { onDeleteNode(nodeMenu.nodeId, true); setNodeMenu(null) }}><Icon name="link" size={13}/>前後を接続して削除</button></div>}
     {buttonMenu && <div className="graph-menu" style={{ left: buttonMenu.x, top: buttonMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => { onDeleteButton(buttonMenu.buttonId); setButtonMenu(null) }}><Icon name="trash" size={13}/>ボタンを削除</button></div>}
+    {layoutMenu && <div className="graph-menu" style={{ left: layoutMenu.x, top: layoutMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onOpenLayout(layoutMenu.path); setLayoutMenu(null) }}><Icon name="fit" size={13}/>レイアウトを開く</button><button className="danger" onClick={() => { onDeleteLayout(layoutMenu.path); setLayoutMenu(null) }}><Icon name="trash" size={13}/>グラフから取り除く</button></div>}
     {controlMenu && <div className="graph-menu" style={{ left: controlMenu.x, top: controlMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => { onDeletePlayerControl(controlMenu.controlId); setControlMenu(null) }}><Icon name="trash" size={13}/>再生設定を削除</button></div>}
-    {canvasMenu && <div className="graph-menu canvas-menu" style={{ left: canvasMenu.x, top: canvasMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onAddNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="plus" size={13}/>メディアノードを作成</button><button onClick={() => { onAddButton(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><span className="button-glyph">B</span>ボタンを作成</button><button onClick={() => { onAddScriptNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="script" size={13}/>Script Nodeを作成</button><button onClick={() => { onAddPlayerControl(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="controls" size={13}/>再生設定を作成</button><button onClick={() => { onSave(); setCanvasMenu(null) }}><Icon name="save" size={13}/>保存</button></div>}
-    {disconnectMenu && <div className="graph-menu disconnect-menu" style={{ left: disconnectMenu.x, top: disconnectMenu.y }} onPointerDown={(event) => event.stopPropagation()}><strong>{disconnectMenu.title}</strong>{disconnectMenu.edges.map((edge) => <button key={`${edge.from}-${edge.type}-${edge.index}`} onClick={() => { onDisconnect(edge); setDisconnectMenu(null) }}><Icon name="close" size={12}/><span>{edge.type === 'attachment' ? `${displayName(edge.from)} → ${buttonName(edge.to)}` : edge.type === 'control' ? `${displayName(edge.from)} → ${controlName(edge.to)}` : edge.type === 'button' ? `${buttonName(edge.from)} → ${displayName(edge.to)}` : `${displayName(edge.from)} → ${displayName(edge.to)}`}</span><small>{edge.type === 'attachment' ? 'ボタン接続' : edge.type === 'control' ? '再生設定' : edge.type === 'button' ? '押下時' : '再生終了時'}</small></button>)}</div>}
+    {canvasMenu && <div className="graph-menu canvas-menu" style={{ left: canvasMenu.x, top: canvasMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { onAddNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="plus" size={13}/>メディアノードを作成</button><button onClick={() => { onAddButton(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><span className="button-glyph">B</span>ボタンを作成</button><button onClick={() => { onAddLayout(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="fit" size={13}/>レイアウトを配置</button><button onClick={() => { onAddScriptNode(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="script" size={13}/>Script Nodeを作成</button><button onClick={() => { onAddPlayerControl(canvasMenu.nodeX, canvasMenu.nodeY); setCanvasMenu(null) }}><Icon name="controls" size={13}/>再生設定を作成</button><button onClick={() => { onSave(); setCanvasMenu(null) }}><Icon name="save" size={13}/>保存</button></div>}
+    {disconnectMenu && <div className="graph-menu disconnect-menu" style={{ left: disconnectMenu.x, top: disconnectMenu.y }} onPointerDown={(event) => event.stopPropagation()}><strong>{disconnectMenu.title}</strong>{disconnectMenu.edges.map((edge) => <button key={`${edge.from}-${edge.type}-${edge.index}`} onClick={() => { onDisconnect(edge); setDisconnectMenu(null) }}><Icon name="close" size={12}/><span>{edge.type === 'attachment' ? `${displayName(edge.from)} → ${buttonName(edge.to)}` : edge.type === 'control' ? `${displayName(edge.from)} → ${controlName(edge.to)}` : edge.type === 'layout' ? `${edge.from.split('/').at(-1)} → ${controlName(edge.to)}` : edge.type === 'button' ? `${buttonName(edge.from)} → ${displayName(edge.to)}` : `${displayName(edge.from)} → ${displayName(edge.to)}`}</span><small>{edge.type === 'attachment' ? 'ボタン接続' : edge.type === 'control' ? '再生設定' : edge.type === 'layout' ? 'レイアウト' : edge.type === 'button' ? '押下時' : '再生終了時'}</small></button>)}</div>}
   </div>
 }
 
@@ -709,13 +838,13 @@ function Welcome({ busy, onOpen, onFallback }: { busy: boolean; onOpen: () => vo
   </main>
 }
 
-type TreeFile = { name: string; path: string; document?: GraphDocument; script?: ScriptDocument; asset?: AssetEntry }
+type TreeFile = { name: string; path: string; document?: GraphDocument; script?: ScriptDocument; layout?: LayoutDocument; asset?: AssetEntry }
 type TreeBranch = { folders: Map<string, TreeBranch>; files: TreeFile[] }
-type TreeContextTarget = { kind: 'root' | 'folder' | 'graph' | 'script' | 'asset'; path: string; uid?: string }
+type TreeContextTarget = { kind: 'root' | 'folder' | 'graph' | 'script' | 'layout' | 'asset'; path: string; uid?: string }
 type TreeExpansionCommand = { id: number; expanded: boolean }
 type TreeInlineEdit = {
   mode: 'create' | 'rename'
-  kind: 'file' | 'folder' | 'graph' | 'script' | 'asset'
+  kind: 'file' | 'folder' | 'graph' | 'script' | 'layout' | 'asset'
   parentPath: string
   name: string
   source: 'tree' | 'tab'
@@ -726,7 +855,7 @@ function InlineNameInput({ edit, testId = 'tree-name-input', onChange, onCommit,
   const input = useRef<HTMLInputElement>(null)
   const committing = useRef(false)
   const cancelled = useRef(false)
-  const fixedExtension = edit.kind === 'script' ? '.star' : ''
+  const fixedExtension = edit.kind === 'script' ? '.star' : edit.kind === 'layout' ? LAYOUT_EXTENSION : ''
   const commit = async () => {
     if (committing.current || cancelled.current) return
     if (!edit.name.trim()) { onCancel(); return }
@@ -736,7 +865,7 @@ function InlineNameInput({ edit, testId = 'tree-name-input', onChange, onCommit,
     if (!completed) window.requestAnimationFrame(() => { input.current?.focus(); input.current?.select() })
   }
   return <label className="tree-inline-control" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
-    <input ref={input} data-testid={testId} aria-label={edit.mode === 'create' ? '新しい項目の名前' : '新しいファイル名'} autoFocus value={edit.name} spellCheck={false} onChange={(event) => onChange(edit.kind === 'script' ? event.target.value.replace(/(?:\.star)+$/i, '') : event.target.value)} onFocus={(event) => event.currentTarget.select()} onBlur={() => void commit()} onKeyDown={(event) => {
+    <input ref={input} data-testid={testId} aria-label={edit.mode === 'create' ? '新しい項目の名前' : '新しいファイル名'} autoFocus value={edit.name} spellCheck={false} onChange={(event) => onChange(edit.kind === 'script' ? event.target.value.replace(/(?:\.star)+$/i, '') : edit.kind === 'layout' ? event.target.value.replace(/(?:\.wmg-layout\.html)+$/i, '') : event.target.value)} onFocus={(event) => event.currentTarget.select()} onBlur={() => void commit()} onKeyDown={(event) => {
       event.stopPropagation()
       if (event.key === 'Escape') { event.preventDefault(); cancelled.current = true; onCancel() }
       if (event.key === 'Enter') { event.preventDefault(); void commit() }
@@ -745,18 +874,19 @@ function InlineNameInput({ edit, testId = 'tree-name-input', onChange, onCommit,
   </label>
 }
 
-function FileTree({ documents, scripts, folders, assets, activeTab, inlineEdit, expansionCommand, getAssetPath, getFolderPath, onOpenGraph, onOpenScript, onPreview, onContextMenu, onInlineChange, onInlineCommit, onInlineCancel, onMoveScript }: { documents: GraphDocument[]; scripts: ScriptDocument[]; folders: WorkspaceFolder[]; assets: AssetEntry[]; activeTab: string | null; inlineEdit: TreeInlineEdit | null; expansionCommand: TreeExpansionCommand; getAssetPath: (asset: AssetEntry) => string; getFolderPath: (path: string) => string; onOpenGraph: (document: GraphDocument) => void; onOpenScript: (script: ScriptDocument) => void; onPreview: (asset: AssetEntry) => void; onContextMenu: (target: TreeContextTarget, event: React.MouseEvent) => void; onInlineChange: (name: string) => void; onInlineCommit: () => Promise<boolean>; onInlineCancel: () => void; onMoveScript: (uid: string, parentPath: string) => Promise<boolean> }) {
+function FileTree({ documents, scripts, layouts, folders, assets, activeTab, inlineEdit, expansionCommand, getAssetPath, getLayoutPath, getFolderPath, onOpenGraph, onOpenScript, onOpenLayout, onPreview, onContextMenu, onInlineChange, onInlineCommit, onInlineCancel, onMoveScript, onMoveLayout }: { documents: GraphDocument[]; scripts: ScriptDocument[]; layouts: LayoutDocument[]; folders: WorkspaceFolder[]; assets: AssetEntry[]; activeTab: string | null; inlineEdit: TreeInlineEdit | null; expansionCommand: TreeExpansionCommand; getAssetPath: (asset: AssetEntry) => string; getLayoutPath: (layout: LayoutDocument) => string; getFolderPath: (path: string) => string; onOpenGraph: (document: GraphDocument) => void; onOpenScript: (script: ScriptDocument) => void; onOpenLayout: (layout: LayoutDocument) => void; onPreview: (asset: AssetEntry) => void; onContextMenu: (target: TreeContextTarget, event: React.MouseEvent) => void; onInlineChange: (name: string) => void; onInlineCommit: () => Promise<boolean>; onInlineCancel: () => void; onMoveScript: (uid: string, parentPath: string) => Promise<boolean>; onMoveLayout: (uid: string, parentPath: string) => Promise<boolean> }) {
   const [query, setQuery] = useState('')
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set())
   const [draggedScript, setDraggedScript] = useState<string | null>(null)
+  const [draggedLayout, setDraggedLayout] = useState<string | null>(null)
   const [scriptDropTarget, setScriptDropTarget] = useState<string | null>(null)
-  const treeItems = useRef({ documents, scripts, folders, assets })
-  treeItems.current = { documents, scripts, folders, assets }
+  const treeItems = useRef({ documents, scripts, layouts, folders, assets })
+  treeItems.current = { documents, scripts, layouts, folders, assets }
   useEffect(() => { if (inlineEdit?.source === 'tree') setQuery('') }, [inlineEdit])
   useEffect(() => {
     if (expansionCommand.expanded) { setCollapsedFolders(new Set()); return }
     const paths = new Set(treeItems.current.folders.map((folder) => folder.path))
-    ;[...treeItems.current.documents, ...treeItems.current.scripts, ...treeItems.current.assets].forEach((item) => {
+    ;[...treeItems.current.documents, ...treeItems.current.scripts, ...treeItems.current.layouts, ...treeItems.current.assets].forEach((item) => {
       const parts = item.path.split('/').filter(Boolean); parts.pop(); let parent = ''
       parts.forEach((part) => { parent = parent ? `${parent}/${part}` : part; paths.add(parent) })
     })
@@ -764,12 +894,13 @@ function FileTree({ documents, scripts, folders, assets, activeTab, inlineEdit, 
   }, [expansionCommand])
   const normalizedQuery = normalizeSearchText(query)
   const matches = useCallback((name: string, path: string) => !normalizedQuery || normalizeSearchText(name).includes(normalizedQuery) || normalizeSearchText(path).includes(normalizedQuery), [normalizedQuery])
-  const matchCount = documents.filter((item) => matches(item.name, item.path)).length + scripts.filter((item) => matches(item.name, item.path)).length + assets.filter((item) => matches(item.name, item.path)).length + folders.filter((item) => matches(item.path.split('/').at(-1) ?? item.path, item.path)).length
+  const matchCount = documents.filter((item) => matches(item.name, item.path)).length + scripts.filter((item) => matches(item.name, item.path)).length + layouts.filter((item) => matches(item.name, item.path)).length + assets.filter((item) => matches(item.name, item.path)).length + folders.filter((item) => matches(item.path.split('/').at(-1) ?? item.path, item.path)).length
   const tree = useMemo(() => {
     const rootBranch: TreeBranch = { folders: new Map(), files: [] }
     const entries: TreeFile[] = [
       ...documents.map((document) => ({ name: document.name, path: document.path, document })),
       ...scripts.map((script) => ({ name: script.name, path: script.path, script })),
+      ...layouts.map((layout) => ({ name: layout.name, path: layout.path, layout })),
       ...assets.map((asset) => ({ name: asset.name, path: asset.path, asset })),
     ].filter((file) => !normalizedQuery || matches(file.name, file.path))
     entries.forEach((file) => {
@@ -779,41 +910,44 @@ function FileTree({ documents, scripts, folders, assets, activeTab, inlineEdit, 
     })
     folders.forEach((folder) => { let branch = rootBranch; folder.path.split('/').filter(Boolean).forEach((part) => { if (!branch.folders.has(part)) branch.folders.set(part, { folders: new Map(), files: [] }); branch = branch.folders.get(part)! }) })
     return rootBranch
-  }, [assets, documents, folders, matches, normalizedQuery, scripts])
-  const fileIcon = (file: TreeFile) => file.document ? 'code' : file.script ? 'script' : file.asset?.kind === 'image' ? 'image' : ['audio', 'video'].includes(file.asset?.kind ?? '') ? 'media' : 'file'
+  }, [assets, documents, folders, layouts, matches, normalizedQuery, scripts])
+  const fileIcon = (file: TreeFile) => file.document ? 'code' : file.script ? 'script' : file.layout ? 'fit' : file.asset?.kind === 'image' ? 'image' : ['audio', 'video'].includes(file.asset?.kind ?? '') ? 'media' : 'file'
   const inlineRow = (edit: TreeInlineEdit, depth: number) => <div className={`tree-entry tree-inline-edit ${edit.kind}`} style={{ paddingLeft: 24 + depth * 13 }} data-tree-kind={edit.kind} data-tree-edit={edit.mode}>
-    <Icon name={edit.kind === 'folder' ? 'folder' : edit.kind === 'script' ? 'script' : edit.kind === 'graph' ? 'code' : 'file'} size={13}/>
+    <Icon name={edit.kind === 'folder' ? 'folder' : edit.kind === 'script' ? 'script' : edit.kind === 'layout' ? 'fit' : edit.kind === 'graph' ? 'code' : 'file'} size={13}/>
     <InlineNameInput edit={edit} onChange={onInlineChange} onCommit={onInlineCommit} onCancel={onInlineCancel}/>
   </div>
-  const isScriptDrag = (event: React.DragEvent) => event.dataTransfer.types.includes(SCRIPT_DRAG_TYPE)
-  const acceptScriptDrop = (parentPath: string, event: React.DragEvent) => {
-    if (!isScriptDrag(event)) return false
+  const isTextDocumentDrag = (event: React.DragEvent) => event.dataTransfer.types.includes(SCRIPT_DRAG_TYPE) || event.dataTransfer.types.includes(LAYOUT_UID_DRAG_TYPE)
+  const acceptTextDocumentDrop = (parentPath: string, event: React.DragEvent) => {
+    if (!isTextDocumentDrag(event)) return false
     event.preventDefault()
     event.stopPropagation()
     event.dataTransfer.dropEffect = 'move'
     setScriptDropTarget(parentPath)
     return true
   }
-  const dropScript = (parentPath: string, event: React.DragEvent) => {
-    if (!isScriptDrag(event)) return
+  const dropTextDocument = (parentPath: string, event: React.DragEvent) => {
+    if (!isTextDocumentDrag(event)) return
     event.preventDefault()
     event.stopPropagation()
     const scriptUid = event.dataTransfer.getData(SCRIPT_DRAG_TYPE)
+    const layoutUid = event.dataTransfer.getData(LAYOUT_UID_DRAG_TYPE)
     setScriptDropTarget(null)
     setDraggedScript(null)
+    setDraggedLayout(null)
     if (scriptUid) void onMoveScript(scriptUid, parentPath)
+    else if (layoutUid) void onMoveLayout(layoutUid, parentPath)
   }
   const renderBranch = (branch: TreeBranch, depth: number, parentPath = ''): React.ReactNode => <>
     {inlineEdit?.source === 'tree' && inlineEdit.mode === 'create' && inlineEdit.parentPath === parentPath && inlineRow(inlineEdit, depth)}
     {[...branch.folders.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, child]) => { const path = parentPath ? `${parentPath}/${name}` : name; const containsInlineEdit = inlineEdit?.source === 'tree' && (inlineEdit.parentPath === path || inlineEdit.target?.path === path); return <details className={`tree-folder ${containsInlineEdit ? 'has-inline-edit' : ''}`} open={containsInlineEdit || !collapsedFolders.has(path)} onToggle={(event) => { const shouldCollapse = !event.currentTarget.open; setCollapsedFolders((current) => { if (current.has(path) === shouldCollapse) return current; const next = new Set(current); if (shouldCollapse) next.add(path); else next.delete(path); return next }) }} key={`${depth}-${path}`}>
-      <summary className={scriptDropTarget === path ? 'tree-drop-target' : ''} data-tree-kind="folder" data-tree-path={path} draggable onContextMenu={(event) => onContextMenu({ kind: 'folder', path }, event)} onDragStart={(event) => { const dragPath = getFolderPath(path) || '.'; activeTreeDrag = { label: name, kind: 'folder' }; event.dataTransfer.setData(FOLDER_DRAG_TYPE, dragPath); event.dataTransfer.setData('text/plain', dragPath); event.dataTransfer.effectAllowed = 'copy' }} onDragEnd={() => { activeTreeDrag = null }} onDragOver={(event) => { acceptScriptDrop(path, event) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && scriptDropTarget === path) setScriptDropTarget(null) }} onDrop={(event) => dropScript(path, event)} style={{ paddingLeft: 8 + depth * 13 }}><Icon name="chevron" size={11}/><Icon name="folder" size={13}/><span>{name}</span></summary>
+      <summary className={scriptDropTarget === path ? 'tree-drop-target' : ''} data-tree-kind="folder" data-tree-path={path} draggable onContextMenu={(event) => onContextMenu({ kind: 'folder', path }, event)} onDragStart={(event) => { const dragPath = getFolderPath(path) || '.'; activeTreeDrag = { label: name, kind: 'folder' }; event.dataTransfer.setData(FOLDER_DRAG_TYPE, dragPath); event.dataTransfer.setData('text/plain', dragPath); event.dataTransfer.effectAllowed = 'copy' }} onDragEnd={() => { activeTreeDrag = null }} onDragOver={(event) => { acceptTextDocumentDrop(path, event) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && scriptDropTarget === path) setScriptDropTarget(null) }} onDrop={(event) => dropTextDocument(path, event)} style={{ paddingLeft: 8 + depth * 13 }}><Icon name="chevron" size={11}/><Icon name="folder" size={13}/><span>{name}</span></summary>
       {renderBranch(child, depth + 1, path)}
     </details> })}
-    {[...branch.files].sort((a, b) => a.name.localeCompare(b.name)).map((file) => { const key = file.document ? `graph:${file.document.uid}` : file.script ? `script:${file.script.uid}` : ''; const target: TreeContextTarget = file.document ? { kind: 'graph', path: file.path, uid: file.document.uid } : file.script ? { kind: 'script', path: file.path, uid: file.script.uid } : { kind: 'asset', path: file.path }; const fileParent = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''; if (inlineEdit?.source === 'tree' && inlineEdit.mode === 'rename' && inlineEdit.target?.path === file.path) return <div key={`edit:${file.path}`}>{inlineRow(inlineEdit, depth)}</div>; return <div className={`tree-entry ${key === activeTab ? 'active' : ''} ${file.script ? 'script' : ''} ${file.script?.uid === draggedScript ? 'dragging' : ''}`} style={{ paddingLeft: 24 + depth * 13 }} key={file.path} data-tree-kind={target.kind} data-tree-path={file.path} onContextMenu={(event) => onContextMenu(target, event)} draggable={Boolean(file.asset || file.script)} onDragOver={(event) => { acceptScriptDrop(fileParent, event) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && scriptDropTarget === fileParent) setScriptDropTarget(null) }} onDrop={(event) => dropScript(fileParent, event)} onDragStart={(event) => { if (file.script) { setDraggedScript(file.script.uid); event.dataTransfer.setData(SCRIPT_DRAG_TYPE, file.script.uid); event.dataTransfer.setData('text/plain', file.path); event.dataTransfer.effectAllowed = 'move'; return } if (!file.asset) return; const path = getAssetPath(file.asset); activeTreeDrag = { label: file.name.replace(/\.[^.]+$/, ''), kind: 'media' }; event.dataTransfer.setData(ASSET_DRAG_TYPE, path); event.dataTransfer.setData('text/plain', path); event.dataTransfer.effectAllowed = 'copy' }} onDragEnd={() => { activeTreeDrag = null; setDraggedScript(null); setScriptDropTarget(null) }}>
-      <button className="tree-entry-main" title={file.path} onClick={() => file.document ? onOpenGraph(file.document) : file.script ? onOpenScript(file.script) : file.asset && onPreview(file.asset)}><Icon name={fileIcon(file)} size={13}/><span>{file.name}</span>{(file.document?.dirty || file.script?.dirty) && <i/>}</button>
+    {[...branch.files].sort((a, b) => a.name.localeCompare(b.name)).map((file) => { const key = file.document ? `graph:${file.document.uid}` : file.script ? `script:${file.script.uid}` : file.layout ? `layout:${file.layout.uid}` : ''; const target: TreeContextTarget = file.document ? { kind: 'graph', path: file.path, uid: file.document.uid } : file.script ? { kind: 'script', path: file.path, uid: file.script.uid } : file.layout ? { kind: 'layout', path: file.path, uid: file.layout.uid } : { kind: 'asset', path: file.path }; const fileParent = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''; if (inlineEdit?.source === 'tree' && inlineEdit.mode === 'rename' && inlineEdit.target?.path === file.path) return <div key={`edit:${file.path}`}>{inlineRow(inlineEdit, depth)}</div>; return <div className={`tree-entry ${key === activeTab ? 'active' : ''} ${file.script ? 'script' : file.layout ? 'layout' : ''} ${file.script?.uid === draggedScript || file.layout?.uid === draggedLayout ? 'dragging' : ''}`} style={{ paddingLeft: 24 + depth * 13 }} key={file.path} data-tree-kind={target.kind} data-tree-path={file.path} onContextMenu={(event) => onContextMenu(target, event)} draggable={Boolean(file.asset || file.script || file.layout)} onDragOver={(event) => { acceptTextDocumentDrop(fileParent, event) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && scriptDropTarget === fileParent) setScriptDropTarget(null) }} onDrop={(event) => dropTextDocument(fileParent, event)} onDragStart={(event) => { if (file.script) { setDraggedScript(file.script.uid); event.dataTransfer.setData(SCRIPT_DRAG_TYPE, file.script.uid); event.dataTransfer.setData('text/plain', file.path); event.dataTransfer.effectAllowed = 'move'; return } if (file.layout) { setDraggedLayout(file.layout.uid); activeTreeDrag = { label: file.name, kind: 'layout' }; event.dataTransfer.setData(LAYOUT_UID_DRAG_TYPE, file.layout.uid); event.dataTransfer.setData(LAYOUT_DRAG_TYPE, getLayoutPath(file.layout)); event.dataTransfer.setData('text/plain', file.path); event.dataTransfer.effectAllowed = 'copyMove'; return } if (!file.asset) return; const path = getAssetPath(file.asset); activeTreeDrag = { label: file.name.replace(/\.[^.]+$/, ''), kind: 'media' }; event.dataTransfer.setData(ASSET_DRAG_TYPE, path); event.dataTransfer.setData('text/plain', path); event.dataTransfer.effectAllowed = 'copy' }} onDragEnd={() => { activeTreeDrag = null; setDraggedScript(null); setDraggedLayout(null); setScriptDropTarget(null) }}>
+      <button className="tree-entry-main" title={file.path} onClick={() => file.document ? onOpenGraph(file.document) : file.script ? onOpenScript(file.script) : file.layout ? onOpenLayout(file.layout) : file.asset && onPreview(file.asset)}><Icon name={fileIcon(file)} size={13}/><span>{file.name}</span>{(file.document?.dirty || file.script?.dirty || file.layout?.dirty) && <i/>}</button>
     </div> })}
   </>
-  return <><label className="tree-search"><Icon name="search" size={13}/><input value={query} placeholder="ファイル名を検索" onChange={(event) => setQuery(event.target.value)}/>{query && <button title="検索をクリア" onClick={() => setQuery('')}><Icon name="close" size={11}/></button>}</label><div className={`file-tree ${scriptDropTarget === '' ? 'root-drop-target' : ''}`} data-testid="tree-root-zone" onContextMenu={(event) => { if (event.target === event.currentTarget) onContextMenu({ kind: 'root', path: '' }, event) }} onDragOver={(event) => { if (event.target === event.currentTarget) acceptScriptDrop('', event) }} onDragLeave={(event) => { if (event.target === event.currentTarget && !event.currentTarget.contains(event.relatedTarget as Node | null)) setScriptDropTarget(null) }} onDrop={(event) => { if (event.target === event.currentTarget) dropScript('', event) }}>{matchCount || inlineEdit?.source === 'tree' ? renderBranch(tree, 0) : <div className="tree-empty" onContextMenu={(event) => onContextMenu({ kind: 'root', path: '' }, event)} onDragOver={(event) => { acceptScriptDrop('', event) }} onDrop={(event) => dropScript('', event)}>一致するファイルはありません</div>}</div></>
+  return <><label className="tree-search"><Icon name="search" size={13}/><input value={query} placeholder="ファイル名を検索" onChange={(event) => setQuery(event.target.value)}/>{query && <button title="検索をクリア" onClick={() => setQuery('')}><Icon name="close" size={11}/></button>}</label><div className={`file-tree ${scriptDropTarget === '' ? 'root-drop-target' : ''}`} data-testid="tree-root-zone" onContextMenu={(event) => { if (event.target === event.currentTarget) onContextMenu({ kind: 'root', path: '' }, event) }} onDragOver={(event) => { if (event.target === event.currentTarget) acceptTextDocumentDrop('', event) }} onDragLeave={(event) => { if (event.target === event.currentTarget && !event.currentTarget.contains(event.relatedTarget as Node | null)) setScriptDropTarget(null) }} onDrop={(event) => { if (event.target === event.currentTarget) dropTextDocument('', event) }}>{matchCount || inlineEdit?.source === 'tree' ? renderBranch(tree, 0) : <div className="tree-empty" onContextMenu={(event) => onContextMenu({ kind: 'root', path: '' }, event)} onDragOver={(event) => { acceptTextDocumentDrop('', event) }} onDrop={(event) => dropTextDocument('', event)}>一致するファイルはありません</div>}</div></>
 }
 
 function AssetPreview({ asset, onClose }: { asset: AssetEntry; onClose: () => void }) {
@@ -848,6 +982,7 @@ function App() {
   const [rootName, setRootName] = useState('')
   const [documents, setDocuments] = useState<GraphDocument[]>([])
   const [scripts, setScripts] = useState<ScriptDocument[]>([])
+  const [layouts, setLayouts] = useState<LayoutDocument[]>([])
   const [folders, setFolders] = useState<WorkspaceFolder[]>([])
   const [assets, setAssets] = useState<AssetEntry[]>([])
   const [activeUid, setActiveUid] = useState<string | null>(null)
@@ -859,6 +994,7 @@ function App() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [selectedButton, setSelectedButton] = useState<string | null>(null)
   const [selectedPlayerControl, setSelectedPlayerControl] = useState<string | null>(null)
+  const [selectedGraphLayout, setSelectedGraphLayout] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [weightDisplayMode, setWeightDisplayMode] = useState<'weight' | 'probability' | 'hidden'>('weight')
@@ -867,7 +1003,7 @@ function App() {
   const [previewAsset, setPreviewAsset] = useState<AssetEntry | null>(null)
   const [showProblems, setShowProblems] = useState(false)
   const [showFileMenu, setShowFileMenu] = useState(false)
-  const [tabMenu, setTabMenu] = useState<{ kind: 'graph' | 'script'; uid: string; x: number; y: number } | null>(null)
+  const [tabMenu, setTabMenu] = useState<{ kind: 'graph' | 'script' | 'layout'; uid: string; x: number; y: number } | null>(null)
   const [treeMenu, setTreeMenu] = useState<{ target: TreeContextTarget; x: number; y: number } | null>(null)
   const [treeInlineEdit, setTreeInlineEdit] = useState<TreeInlineEdit | null>(null)
   const [scriptTests, setScriptTests] = useState<Record<string, ScriptTestState>>({})
@@ -877,10 +1013,13 @@ function App() {
   const active = documents.find((document) => document.uid === activeUid)
   const activeScriptUid = activeTab?.startsWith('script:') ? activeTab.slice(7) : null
   const activeScript = scripts.find((script) => script.uid === activeScriptUid)
+  const activeLayoutUid = activeTab?.startsWith('layout:') ? activeTab.slice(7) : null
+  const activeLayout = layouts.find((layout) => layout.uid === activeLayoutUid)
   const probabilityMode = weightDisplayMode === 'probability'
   const docAssets = useMemo(() => active ? relativeAssets(active, assets) : assets, [active, assets])
   const docScripts = useMemo(() => active ? relativeScripts(active, scripts) : scripts, [active, scripts])
-  const issues = useMemo(() => active ? validateGraph(active.graph, docAssets, docScripts) : [], [active, docAssets, docScripts])
+  const docLayouts = useMemo(() => active ? relativeLayouts(active, layouts) : layouts, [active, layouts])
+  const issues = useMemo(() => active ? validateGraph(active.graph, docAssets, docScripts, docLayouts) : [], [active, docAssets, docLayouts, docScripts])
   const statsSessions = useMemo(() => {
     const history = active ? previewHistories[active.uid] ?? [] : []
     return [...new Set(history.map((entry) => entry.runId))].map((runId) => {
@@ -893,16 +1032,20 @@ function App() {
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(null), 3200) }
   const openGraphTab = (document: GraphDocument) => {
     setOpenTabs((tabs) => tabs.some((tab) => tab.kind === 'graph' && tab.uid === document.uid) ? tabs : [...tabs, { kind: 'graph', uid: document.uid }])
-    setActiveTab(`graph:${document.uid}`); setActiveUid(document.uid); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null)
+    setActiveTab(`graph:${document.uid}`); setActiveUid(document.uid); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null)
   }
   const openScriptTab = (script: ScriptDocument) => {
     setOpenTabs((tabs) => tabs.some((tab) => tab.kind === 'script' && tab.uid === script.uid) ? tabs : [...tabs, { kind: 'script', uid: script.uid }])
-    setActiveTab(`script:${script.uid}`); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null)
+    setActiveTab(`script:${script.uid}`); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null)
+  }
+  const openLayoutTab = (layout: LayoutDocument) => {
+    setOpenTabs((tabs) => tabs.some((tab) => tab.kind === 'layout' && tab.uid === layout.uid) ? tabs : [...tabs, { kind: 'layout', uid: layout.uid }])
+    setActiveTab(`layout:${layout.uid}`); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null)
   }
   const activateTab = (tab: EditorTab) => {
     setActiveTab(`${tab.kind}:${tab.uid}`)
     if (tab.kind === 'graph') setActiveUid(tab.uid)
-    setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null)
+    setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null)
   }
   const closeTab = (tab: EditorTab) => {
     const key = `${tab.kind}:${tab.uid}`
@@ -946,11 +1089,12 @@ function App() {
       const result = await readDirectory(handle)
       const restored = restoreDrafts(handle.name, result.documents)
       const restoredScripts = restoreScriptDrafts(handle.name, result.scripts)
+      const restoredLayouts = restoreLayoutDrafts(handle.name, result.layouts)
       const first = restored[0]
       treeInlineCommit.current = null; setTreeInlineEdit(null); setTreeMenu(null); setTabMenu(null)
-      setRoot(handle); setRootName(handle.name); setDocuments(restored); setScripts(restoredScripts); setFolders(result.folders); setAssets(result.assets)
+      setRoot(handle); setRootName(handle.name); setDocuments(restored); setScripts(restoredScripts); setLayouts(restoredLayouts); setFolders(result.folders); setAssets(result.assets)
       setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))
-      setActiveUid(first?.uid ?? null); setOpenTabs(first ? [{ kind: 'graph', uid: first.uid }] : []); setActiveTab(first ? `graph:${first.uid}` : null); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null)
+      setActiveUid(first?.uid ?? null); setOpenTabs(first ? [{ kind: 'graph', uid: first.uid }] : []); setActiveTab(first ? `graph:${first.uid}` : null); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null)
       if (result.errors.length) notify(`${result.errors.length}件のファイルを読み込めませんでした`)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return
@@ -958,7 +1102,7 @@ function App() {
     } finally { setBusy(false) }
   }
   const requestOpenDirectory = () => {
-    if ((documents.some((document) => document.dirty) || scripts.some((script) => script.dirty)) && !window.confirm('未保存の変更があります。保存せずに新しいフォルダを開きますか？')) return
+    if ((documents.some((document) => document.dirty) || scripts.some((script) => script.dirty) || layouts.some((layout) => layout.dirty)) && !window.confirm('未保存の変更があります。保存せずに新しいフォルダを開きますか？')) return
     if (window.showDirectoryPicker) void openDirectory()
     else folderInput.current?.click()
   }
@@ -966,6 +1110,7 @@ function App() {
     setBusy(true)
     const docs: GraphDocument[] = []
     const nextScripts: ScriptDocument[] = []
+    const nextLayouts: LayoutDocument[] = []
     const folderPaths = new Set<string>()
     const nextAssets: AssetEntry[] = []
     const list = Array.from(files)
@@ -977,13 +1122,15 @@ function App() {
       if (path.toLowerCase().endsWith('.wmg.json')) {
         try { docs.push({ uid: uid(), name: file.name, path, graph: normalizeGraph(JSON.parse(await file.text())), dirty: false }) } catch { notify(`${path} を読み込めませんでした`) }
       } else if (path.toLowerCase().endsWith('.star')) nextScripts.push({ uid: uid(), name: file.name, path, content: await file.text(), dirty: false })
+      else if (path.toLowerCase().endsWith(LAYOUT_EXTENSION)) nextLayouts.push({ uid: uid(), name: file.name, path, content: await file.text(), dirty: false })
       else nextAssets.push({ name: file.name, path, kind: fileKind(path), file })
     }
     const restored = restoreDrafts(commonRoot, docs)
     const restoredScripts = restoreScriptDrafts(commonRoot, nextScripts)
+    const restoredLayouts = restoreLayoutDrafts(commonRoot, nextLayouts)
     const first = restored[0]
     treeInlineCommit.current = null; setTreeInlineEdit(null); setTreeMenu(null); setTabMenu(null)
-    setRootName(commonRoot); setDocuments(restored); setScripts(restoredScripts); setFolders([...folderPaths].map((path) => ({ path }))); setAssets(nextAssets); setActiveUid(first?.uid ?? null); setOpenTabs(first ? [{ kind: 'graph', uid: first.uid }] : []); setActiveTab(first ? `graph:${first.uid}` : null); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setBusy(false)
+    setRootName(commonRoot); setDocuments(restored); setScripts(restoredScripts); setLayouts(restoredLayouts); setFolders([...folderPaths].map((path) => ({ path }))); setAssets(nextAssets); setActiveUid(first?.uid ?? null); setOpenTabs(first ? [{ kind: 'graph', uid: first.uid }] : []); setActiveTab(first ? `graph:${first.uid}` : null); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null); setBusy(false)
     setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))
   }
   const updateActive = useCallback((updater: (document: GraphDocument) => GraphDocument) => {
@@ -1106,6 +1253,18 @@ function App() {
     if (node.playerControl === controlId) { notify('このノードには既に接続されています'); return }
     updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [nodeId]: { ...node, playerControl: controlId } } })
   }
+  const attachLayout = (controlId: string, layoutPath?: string) => {
+    if (!active || !active.graph.playerControls[controlId]) return
+    if (layoutPath && !docLayouts.some((layout) => layout.path === layoutPath)) { notify(`レイアウトが見つかりません: ${layoutPath}`); return }
+    const control = active.graph.playerControls[controlId]
+    const layouts = { ...(active.graph.editor?.layouts ?? {}) }
+    if (layoutPath && !layouts[layoutPath]) {
+      const controlX = control.editor?.x ?? 160
+      const controlY = control.editor?.y ?? 120
+      layouts[layoutPath] = { x: controlY < 90 ? controlX + 190 : controlX, y: controlY < 90 ? controlY : Math.max(20, controlY - 90), color: nextLayoutColor(layouts) }
+    }
+    updateGraph({ ...active.graph, playerControls: { ...active.graph.playerControls, [controlId]: { ...control, layout: layoutPath } }, editor: { ...active.graph.editor, layouts } })
+  }
   const detachPlayerControl = (nodeId: string) => {
     if (!active) return
     const node = active.graph.nodes[nodeId]
@@ -1114,7 +1273,7 @@ function App() {
 
   const updateEdgeSet = (edge: GraphEdgeRef, updater: (transitions: Transition[]) => Transition[]) => {
     if (!active) return
-    if (edge.type === 'attachment' || edge.type === 'control') return
+    if (edge.type === 'attachment' || edge.type === 'control' || edge.type === 'layout') return
     if (edge.type === 'end') {
       const source = active.graph.nodes[edge.from]
       if (!source) return
@@ -1127,6 +1286,7 @@ function App() {
   const disconnectEdge = (edge: GraphEdgeRef) => {
     if (edge.type === 'attachment') { detachButton(edge.from, edge.to); return }
     if (edge.type === 'control') { detachPlayerControl(edge.from); return }
+    if (edge.type === 'layout') { attachLayout(edge.to, undefined); return }
     updateEdgeSet(edge, (transitions) => transitions.filter((_, index) => index !== edge.index))
   }
   const changeEdgeWeight = (edge: GraphEdgeRef, value: number, asProbability: boolean) => updateEdgeSet(edge, (transitions) => {
@@ -1142,7 +1302,7 @@ function App() {
     })
   })
   const insertNodeOnEdge = (edge: GraphEdgeRef) => {
-    if (!active || edge.type === 'attachment' || edge.type === 'control') return
+    if (!active || edge.type === 'attachment' || edge.type === 'control' || edge.type === 'layout') return
     const destination = active.graph.nodes[edge.to]
     const sourcePosition = edge.type === 'end' ? active.graph.nodes[edge.from]?.editor : active.graph.buttons[edge.from]?.editor
     if (!sourcePosition || !destination) return
@@ -1169,8 +1329,7 @@ function App() {
     while (active.graph.nodes[`node-${number}`]) number++
     const id = `node-${number}`
     updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { type: 'media', media: [], onEnd: [], buttons: [], editor: { x: Math.max(20, Math.round(x)), y: Math.max(20, Math.round(y)), label: `Node ${number}`, color: nextNodeColor(active.graph.nodes) } } } })
-    setSelectedNode(id)
-    setSelectedButton(null)
+    setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null)
   }
   const addScriptNode = (x = 160, y = 140) => {
     if (!active) return
@@ -1178,7 +1337,7 @@ function App() {
     while (active.graph.nodes[`script-${number}`]) number++
     const id = `script-${number}`
     updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { type: 'script', script: docScripts[0] ? { path: docScripts[0].path, function: 'jump' } : undefined, onEnd: [], editor: { x: Math.max(20, Math.round(x)), y: Math.max(20, Math.round(y)), label: `Script ${number}`, color: '#8d65b5' } } } })
-    setSelectedNode(id); setSelectedButton(null)
+    setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null)
     if (!scripts.length) notify('Script Nodeを作成しました。ファイルツリーの右クリックからStarlarkファイルを作成してください')
   }
   const addButton = (x = 210, y = 240, attachToNode?: string) => {
@@ -1186,20 +1345,37 @@ function App() {
     let number = Object.keys(active.graph.buttons).length + 1
     while (active.graph.buttons[`button-${number}`]) number++
     const id = `button-${number}`
-    const button: WmgButton = { layout: { x: .7, y: .8, width: .2, height: .1, z: 10 }, appearance: { backgroundColor: '#333333', text: `Button ${number}`, textColor: '#ffffff' }, onPress: [], editor: { x: Math.round(x), y: Math.round(y), color: nextButtonColor(active.graph.buttons) } }
+    const button: WmgButton = { targetSlot: 'actions', order: number * 10, zIndex: 0, text: `Button ${number}`, style: { backgroundColor: '#702bc4', textColor: '#ffffff', opacity: 1, borderWidth: 0, borderRadius: 18, fontSize: 16, fontWeight: 600, paddingHorizontal: 20, paddingVertical: 12 }, onPress: [], editor: { x: Math.round(x), y: Math.round(y), color: nextButtonColor(active.graph.buttons) } }
     const nodes = attachToNode && active.graph.nodes[attachToNode] && !active.graph.nodes[attachToNode].terminal ? { ...active.graph.nodes, [attachToNode]: { ...active.graph.nodes[attachToNode], buttons: [...(active.graph.nodes[attachToNode].buttons ?? []), id] } } : active.graph.nodes
     updateGraph({ ...active.graph, nodes, buttons: { ...active.graph.buttons, [id]: button } })
-    setSelectedNode(null)
-    setSelectedButton(id)
+    setSelectedNode(null); setSelectedButton(id); setSelectedPlayerControl(null); setSelectedGraphLayout(null)
+  }
+  const addLayout = (x = 210, y = 80, requestedPath?: string) => {
+    if (!active) return
+    const current = active.graph.editor?.layouts ?? {}
+    const path = requestedPath ?? docLayouts.find((layout) => !current[layout.path])?.path
+    if (!path) { notify(docLayouts.length ? 'すべてのレイアウトがグラフ上に配置済みです' : '先にレイアウトファイルを作成してください'); return }
+    if (!docLayouts.some((layout) => layout.path === path)) { notify(`レイアウトが見つかりません: ${path}`); return }
+    const placement = current[path]
+    const layouts = { ...current, [path]: { ...placement, x: Math.max(20, Math.round(x)), y: Math.max(20, Math.round(y)), color: placement?.color ?? nextLayoutColor(current) } }
+    updateGraph({ ...active.graph, editor: { ...active.graph.editor, layouts } })
+    setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(path)
+  }
+  const removeLayoutNode = (path: string) => {
+    if (!active || !active.graph.editor?.layouts?.[path]) return
+    const layouts = Object.fromEntries(Object.entries(active.graph.editor.layouts).filter(([candidate]) => candidate !== path))
+    const playerControls = Object.fromEntries(Object.entries(active.graph.playerControls).map(([id, control]) => [id, control.layout === path ? { ...control, layout: undefined } : control]))
+    updateGraph({ ...active.graph, playerControls, editor: { ...active.graph.editor, layouts } })
+    if (selectedGraphLayout === path) setSelectedGraphLayout(null)
   }
   const addPlayerControl = (x = 160, y = 40) => {
     if (!active) return
     let number = Object.keys(active.graph.playerControls ?? {}).length + 1
     while (active.graph.playerControls[`controls-${number}`]) number++
     const id = `controls-${number}`
-    const control: PlayerControlSettings = { ...DEFAULT_PLAYER_CONTROLS, editor: { x: Math.max(20, Math.round(x)), y: Math.max(20, Math.round(y)), color: nextPlayerControlColor(active.graph.playerControls) } }
+    const control: PlayerControlSettings = { ...DEFAULT_PLAYER_CONTROLS, layout: docLayouts[0]?.path, editor: { x: Math.max(20, Math.round(x)), y: Math.max(20, Math.round(y)), color: nextPlayerControlColor(active.graph.playerControls) } }
     updateGraph({ ...active.graph, playerControls: { ...active.graph.playerControls, [id]: control } })
-    setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(id)
+    setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(id); setSelectedGraphLayout(null)
   }
   const addNodeAtGraphCenter = () => {
     const rect = document.querySelector('.graph-surface')?.getBoundingClientRect()
@@ -1210,6 +1386,11 @@ function App() {
     const rect = document.querySelector('.graph-surface')?.getBoundingClientRect()
     if (!rect) { addButton(); return }
     addButton((rect.width / 2 - view.x) / view.zoom - 75, (rect.height / 2 - view.y) / view.zoom - 21)
+  }
+  const addLayoutAtGraphCenter = () => {
+    const rect = document.querySelector('.graph-surface')?.getBoundingClientRect()
+    if (!rect) { addLayout(); return }
+    addLayout((rect.width / 2 - view.x) / view.zoom - 82, (rect.height / 2 - view.y) / view.zoom - 25)
   }
   const addScriptNodeAtGraphCenter = () => {
     const rect = document.querySelector('.graph-surface')?.getBoundingClientRect()
@@ -1345,7 +1526,10 @@ function App() {
     let number = documents.length + 1
     while (documents.some((document) => document.name === `graph-${number}.wmg.json`)) number++
     const document: GraphDocument = { uid: uid(), name: `graph-${number}.wmg.json`, path: `graph-${number}.wmg.json`, graph: createGraph(), dirty: true }
-    setDocuments((current) => [...current, document]); setOpenTabs((tabs) => [...tabs, { kind: 'graph', uid: document.uid }]); setActiveTab(`graph:${document.uid}`); setActiveUid(document.uid); setSelectedNode('start'); setSelectedButton(null)
+    if (!layouts.some((layout) => layout.path === `default${LAYOUT_EXTENSION}`)) {
+      setLayouts((current) => [...current, { uid: uid(), name: `default${LAYOUT_EXTENSION}`, path: `default${LAYOUT_EXTENSION}`, content: DEFAULT_LAYOUT_SOURCE, dirty: true }])
+    }
+    setDocuments((current) => [...current, document]); setOpenTabs((tabs) => [...tabs, { kind: 'graph', uid: document.uid }]); setActiveTab(`graph:${document.uid}`); setActiveUid(document.uid); setSelectedNode('start'); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null)
   }
   const duplicateDocument = (target: GraphDocument) => {
     const parent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/') + 1) : ''
@@ -1375,7 +1559,7 @@ function App() {
       setDocuments(remaining)
       closeTab({ kind: 'graph', uid: target.uid })
       localStorage.removeItem(draftKey(rootName, target.path))
-      if (activeUid === target.uid && activeTab === `graph:${target.uid}`) { setActiveUid(remaining[0]?.uid ?? null); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null) }
+      if (activeUid === target.uid && activeTab === `graph:${target.uid}`) { setActiveUid(remaining[0]?.uid ?? null); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }
       notify(`${target.name} を削除しました`)
     } catch (error) {
       notify(error instanceof Error ? error.message : 'グラフを削除できませんでした')
@@ -1412,14 +1596,15 @@ function App() {
     } catch (error) { notify(error instanceof Error ? error.message : 'ファイル名を変更できませんでした'); return false }
   }
   const workspacePathExists = (path: string, except?: string) => [
-    ...documents.map((item) => item.path), ...scripts.map((item) => item.path), ...assets.map((item) => item.path), ...folders.map((item) => item.path),
+    ...documents.map((item) => item.path), ...scripts.map((item) => item.path), ...layouts.map((item) => item.path), ...assets.map((item) => item.path), ...folders.map((item) => item.path),
   ].some((item) => item !== except && item.toLowerCase() === path.toLowerCase())
-  const createWorkspaceEntry = async (parentPath: string, kind: 'file' | 'folder' | 'script', requestedName: string) => {
+  const createWorkspaceEntry = async (parentPath: string, kind: 'file' | 'folder' | 'script' | 'layout', requestedName: string) => {
     let name = requestedName.trim()
     if (!name || name.includes('/') || name.includes('\\')) { notify('有効な名前を入力してください'); return false }
     if (kind === 'script') name = scriptFileName(name)
+    if (kind === 'layout') name = layoutFileName(name)
     if (!name) { notify('有効な名前を入力してください'); return false }
-    if (kind === 'file' && name.toLowerCase().endsWith('.star')) { notify('Starlarkスクリプトは専用メニューから作成してください'); return false }
+    if (kind === 'file' && (name.toLowerCase().endsWith('.star') || name.toLowerCase().endsWith(LAYOUT_EXTENSION))) { notify('スクリプトとレイアウトは専用メニューから作成してください'); return false }
     const path = parentPath ? `${parentPath}/${name}` : name
     if (workspacePathExists(path)) { notify('同じ名前の項目が既にあります'); return false }
     try {
@@ -1431,11 +1616,16 @@ function App() {
         return true
       }
       const handle = directory ? await directory.getFileHandle(name, { create: true }) : undefined
-      if (kind === 'script') {
-        const content = defaultScriptSource(name.replace(/\.star$/i, ''))
+      if (kind === 'script' || kind === 'layout') {
+        const content = kind === 'script' ? defaultScriptSource(name.replace(/\.star$/i, '')) : DEFAULT_LAYOUT_SOURCE
         if (handle) { const writable = await handle.createWritable(); await writable.write(content); await writable.close() }
-        const script: ScriptDocument = { uid: uid(), name, path, content, dirty: !handle, handle }
-        setScripts((items) => [...items, script]); openScriptTab(script)
+        if (kind === 'script') {
+          const script: ScriptDocument = { uid: uid(), name, path, content, dirty: !handle, handle }
+          setScripts((items) => [...items, script]); openScriptTab(script)
+        } else {
+          const layout: LayoutDocument = { uid: uid(), name, path, content, dirty: !handle, handle }
+          setLayouts((items) => [...items, layout]); openLayoutTab(layout)
+        }
       } else {
         if (handle) { const writable = await handle.createWritable(); await writable.write(''); await writable.close() }
         setAssets((items) => [...items, { name, path, kind: fileKind(path), file: new File([''], name, { type: 'text/plain' }) }])
@@ -1462,6 +1652,24 @@ function App() {
       }
     } catch (error) { notify(error instanceof Error ? error.message : 'スクリプトを保存できませんでした') }
   }, [resolveDirectory, root, rootName])
+  const saveLayout = useCallback(async (target: LayoutDocument) => {
+    try {
+      let handle = target.handle
+      if (!handle && root) {
+        const parent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/')) : ''
+        const directory = await resolveDirectory(parent, true)
+        handle = await directory?.getFileHandle(target.name, { create: true })
+      }
+      if (handle) {
+        const writable = await handle.createWritable(); await writable.write(target.content); await writable.close()
+        setLayouts((items) => items.map((item) => item.uid === target.uid ? { ...item, handle, dirty: false } : item))
+        localStorage.removeItem(layoutDraftKey(rootName, target.path)); notify(`${target.name} を保存しました`)
+      } else {
+        const url = URL.createObjectURL(new Blob([target.content], { type: 'text/html' })); const link = document.createElement('a'); link.href = url; link.download = target.name; link.click(); URL.revokeObjectURL(url)
+        setLayouts((items) => items.map((item) => item.uid === target.uid ? { ...item, dirty: false } : item)); localStorage.removeItem(layoutDraftKey(rootName, target.path)); notify(`${target.name} をダウンロードしました`)
+      }
+    } catch (error) { notify(error instanceof Error ? error.message : 'レイアウトを保存できませんでした') }
+  }, [resolveDirectory, root, rootName])
   const updateScriptReferences = (oldPath: string, nextPath: string) => {
     setDocuments((items) => items.map((document) => {
       const graphParent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
@@ -1477,6 +1685,30 @@ function App() {
       }
       return changed ? { ...document, graph: { ...document.graph, nodes, buttons, playbackStats }, dirty: true } : document
     }))
+  }
+  const updateLayoutReferences = (oldPath: string, nextPath: string) => {
+    setDocuments((items) => items.map((document) => {
+      const graphParent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
+      const oldReference = graphParent && oldPath.startsWith(graphParent) ? oldPath.slice(graphParent.length) : oldPath
+      const newReference = graphParent && nextPath.startsWith(graphParent) ? nextPath.slice(graphParent.length) : nextPath
+      let changed = false
+      const playerControls = Object.fromEntries(Object.entries(document.graph.playerControls).map(([id, control]) => {
+        if (control.layout !== oldReference) return [id, control]
+        changed = true
+        return [id, { ...control, layout: newReference }]
+      }))
+      const layoutPlacements = { ...(document.graph.editor?.layouts ?? {}) }
+      if (layoutPlacements[oldReference]) {
+        layoutPlacements[newReference] = layoutPlacements[oldReference]
+        delete layoutPlacements[oldReference]
+        changed = true
+      }
+      return changed ? { ...document, graph: { ...document.graph, playerControls, editor: { ...document.graph.editor, layouts: layoutPlacements } }, dirty: true } : document
+    }))
+    const activeParent = active?.path.includes('/') ? active.path.slice(0, active.path.lastIndexOf('/') + 1) : ''
+    const activeOldReference = activeParent && oldPath.startsWith(activeParent) ? oldPath.slice(activeParent.length) : oldPath
+    const activeNewReference = activeParent && nextPath.startsWith(activeParent) ? nextPath.slice(activeParent.length) : nextPath
+    setSelectedGraphLayout((path) => path === activeOldReference ? activeNewReference : path)
   }
   const relocateScript = async (target: ScriptDocument, destinationParent: string, requestedName: string, action: 'rename' | 'move') => {
     if (requestedName.includes('/') || requestedName.includes('\\')) { notify('有効なファイル名を入力してください'); return false }
@@ -1526,6 +1758,40 @@ function App() {
     if (!target) return false
     return relocateScript(target, destinationParent, target.name, 'move')
   }
+  const relocateLayout = async (target: LayoutDocument, destinationParent: string, requestedName: string, action: 'rename' | 'move') => {
+    if (requestedName.includes('/') || requestedName.includes('\\')) { notify('有効なファイル名を入力してください'); return false }
+    const name = layoutFileName(requestedName)
+    if (!name) { notify('有効なファイル名を入力してください'); return false }
+    const nextPath = destinationParent ? `${destinationParent}/${name}` : name
+    if (nextPath === target.path) return true
+    if (workspacePathExists(nextPath, target.path)) { notify('同じ名前の項目が既にあります'); return false }
+    try {
+      let handle = target.handle
+      let dirty = target.dirty
+      if (root && target.handle) {
+        const oldParent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/')) : ''
+        const sourceDirectory = await resolveDirectory(oldParent)
+        const destinationDirectory = await resolveDirectory(destinationParent, true)
+        const nextHandle = await destinationDirectory?.getFileHandle(name, { create: true })
+        if (!nextHandle || !sourceDirectory) throw new Error('移動先のファイルを作成できませんでした')
+        const writable = await nextHandle.createWritable(); await writable.write(target.content); await writable.close()
+        try { await sourceDirectory.removeEntry(target.name) } catch (error) { try { await destinationDirectory?.removeEntry(name) } catch { /* best effort */ }; throw error }
+        handle = nextHandle
+        dirty = false
+      } else if (!root) dirty = true
+      setLayouts((items) => items.map((item) => item.uid === target.uid ? { ...item, name, path: nextPath, handle, dirty } : item))
+      updateLayoutReferences(target.path, nextPath)
+      localStorage.removeItem(layoutDraftKey(rootName, target.path))
+      if (dirty) try { localStorage.setItem(layoutDraftKey(rootName, nextPath), JSON.stringify({ savedAt: Date.now(), content: target.content })) } catch { /* quota */ }
+      notify(action === 'move' ? `${target.path} を ${destinationParent || rootName} へ移動しました` : `${target.name} を ${name} に変更しました`)
+      return true
+    } catch (error) { notify(error instanceof Error ? error.message : 'レイアウトを移動できませんでした'); return false }
+  }
+  const renameLayout = (target: LayoutDocument, requestedName: string) => relocateLayout(target, target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/')) : '', requestedName, 'rename')
+  const moveLayout = async (layoutUid: string, destinationParent: string) => {
+    const target = layouts.find((layout) => layout.uid === layoutUid)
+    return target ? relocateLayout(target, destinationParent, target.name, 'move') : false
+  }
   const renameAsset = async (target: AssetEntry, requestedName: string) => {
     const name = requestedName.trim()
     if (!name || name.includes('/') || name.includes('\\')) { notify('有効なファイル名を入力してください'); return false }
@@ -1548,14 +1814,14 @@ function App() {
         let changed = false
         const replace = (value?: string) => { if (value !== oldReference) return value; changed = true; return newReference }
         const nodes = Object.fromEntries(Object.entries(document.graph.nodes).map(([id, node]) => [id, { ...node, media: node.media?.map((media) => ({ ...media, source: { ...media.source, audio: replace(media.source.audio), image: replace(media.source.image), video: replace(media.source.video), subtitle: replace(media.source.subtitle) } })) }]))
-        const buttons = Object.fromEntries(Object.entries(document.graph.buttons).map(([id, button]) => [id, { ...button, appearance: button.appearance ? { ...button.appearance, backgroundImage: replace(button.appearance.backgroundImage) } : undefined }]))
+        const buttons = Object.fromEntries(Object.entries(document.graph.buttons).map(([id, button]) => [id, { ...button, style: button.style ? { ...button.style, backgroundImage: replace(button.style.backgroundImage) } : undefined }]))
         return changed ? { ...document, graph: { ...document.graph, nodes, buttons }, dirty: true } : document
       }))
       notify(`${target.name} を ${name} に変更しました`)
       return true
     } catch (error) { notify(error instanceof Error ? error.message : 'ファイル名を変更できませんでした'); return false }
   }
-  const beginTreeCreate = (target: TreeContextTarget, kind: 'file' | 'folder' | 'script') => {
+  const beginTreeCreate = (target: TreeContextTarget, kind: 'file' | 'folder' | 'script' | 'layout') => {
     const parentPath = target.kind === 'folder' ? target.path : ''
     treeInlineCommit.current = null
     setTreeInlineEdit({ mode: 'create', kind, parentPath, name: '', source: 'tree' })
@@ -1566,7 +1832,7 @@ function App() {
     const fileName = target.path.split('/').at(-1) ?? ''
     const parentPath = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/')) : ''
     treeInlineCommit.current = null
-    setTreeInlineEdit({ mode: 'rename', kind: target.kind, parentPath, name: target.kind === 'script' ? scriptStem(fileName) : fileName, source, target })
+    setTreeInlineEdit({ mode: 'rename', kind: target.kind, parentPath, name: target.kind === 'script' ? scriptStem(fileName) : target.kind === 'layout' ? layoutStem(fileName) : fileName, source, target })
     setTreeMenu(null)
     setTabMenu(null)
   }
@@ -1576,7 +1842,7 @@ function App() {
     if (treeInlineCommit.current === edit) return false
     treeInlineCommit.current = edit
     let completed = false
-    if (edit.mode === 'create' && (edit.kind === 'file' || edit.kind === 'folder' || edit.kind === 'script')) {
+    if (edit.mode === 'create' && (edit.kind === 'file' || edit.kind === 'folder' || edit.kind === 'script' || edit.kind === 'layout')) {
       completed = await createWorkspaceEntry(edit.parentPath, edit.kind, edit.name)
     } else if (edit.mode === 'rename' && edit.target) {
       if (edit.target.kind === 'graph') {
@@ -1585,6 +1851,9 @@ function App() {
       } else if (edit.target.kind === 'script') {
         const target = scripts.find((item) => item.uid === edit.target?.uid)
         if (target) completed = await renameScript(target, edit.name)
+      } else if (edit.target.kind === 'layout') {
+        const target = layouts.find((item) => item.uid === edit.target?.uid)
+        if (target) completed = await renameLayout(target, edit.name)
       } else if (edit.target.kind === 'asset') {
         const target = assets.find((item) => item.path === edit.target?.path)
         if (target) completed = await renameAsset(target, edit.name)
@@ -1606,15 +1875,38 @@ function App() {
       if (target.kind === 'script') {
         const script = scripts.find((item) => item.uid === target.uid)
         if (script) { setScripts((items) => items.filter((item) => item.uid !== script.uid)); closeTab({ kind: 'script', uid: script.uid }); localStorage.removeItem(scriptDraftKey(rootName, script.path)) }
+      } else if (target.kind === 'layout') {
+        const layout = layouts.find((item) => item.uid === target.uid)
+        if (layout) {
+          setLayouts((items) => items.filter((item) => item.uid !== layout.uid)); closeTab({ kind: 'layout', uid: layout.uid }); localStorage.removeItem(layoutDraftKey(rootName, layout.path))
+          setDocuments((items) => items.map((document) => {
+            const parent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
+            const reference = parent && layout.path.startsWith(parent) ? layout.path.slice(parent.length) : layout.path
+            const layouts = { ...(document.graph.editor?.layouts ?? {}) }
+            const placed = Boolean(layouts[reference])
+            delete layouts[reference]
+            let changed = placed
+            const playerControls = Object.fromEntries(Object.entries(document.graph.playerControls).map(([id, control]) => {
+              if (control.layout !== reference) return [id, control]
+              changed = true
+              return [id, { ...control, layout: undefined }]
+            }))
+            return changed ? { ...document, graph: { ...document.graph, playerControls, editor: { ...document.graph.editor, layouts } }, dirty: true } : document
+          }))
+          const activeParent = active?.path.includes('/') ? active.path.slice(0, active.path.lastIndexOf('/') + 1) : ''
+          const activeReference = activeParent && layout.path.startsWith(activeParent) ? layout.path.slice(activeParent.length) : layout.path
+          setSelectedGraphLayout((path) => path === activeReference ? null : path)
+        }
       } else if (target.kind === 'asset') setAssets((items) => items.filter((item) => item.path !== target.path))
       else if (target.kind === 'folder') {
         const prefix = `${target.path}/`
         const removedGraphIds = new Set(documents.filter((item) => item.path.startsWith(prefix)).map((item) => item.uid))
         const removedScriptIds = new Set(scripts.filter((item) => item.path.startsWith(prefix)).map((item) => item.uid))
-        setDocuments((items) => items.filter((item) => !item.path.startsWith(prefix))); setScripts((items) => items.filter((item) => !item.path.startsWith(prefix))); setAssets((items) => items.filter((item) => !item.path.startsWith(prefix))); setFolders((items) => items.filter((item) => item.path !== target.path && !item.path.startsWith(prefix)))
-        const remainingTabs = openTabs.filter((tab) => tab.kind === 'graph' ? !removedGraphIds.has(tab.uid) : !removedScriptIds.has(tab.uid))
+        const removedLayoutIds = new Set(layouts.filter((item) => item.path.startsWith(prefix)).map((item) => item.uid))
+        setDocuments((items) => items.filter((item) => !item.path.startsWith(prefix))); setScripts((items) => items.filter((item) => !item.path.startsWith(prefix))); setLayouts((items) => items.filter((item) => !item.path.startsWith(prefix))); setAssets((items) => items.filter((item) => !item.path.startsWith(prefix))); setFolders((items) => items.filter((item) => item.path !== target.path && !item.path.startsWith(prefix)))
+        const remainingTabs = openTabs.filter((tab) => tab.kind === 'graph' ? !removedGraphIds.has(tab.uid) : tab.kind === 'script' ? !removedScriptIds.has(tab.uid) : !removedLayoutIds.has(tab.uid))
         setOpenTabs(remainingTabs)
-        const activeRemoved = activeTab ? (activeTab.startsWith('graph:') ? removedGraphIds.has(activeTab.slice(6)) : removedScriptIds.has(activeTab.slice(7))) : false
+        const activeRemoved = activeTab ? (activeTab.startsWith('graph:') ? removedGraphIds.has(activeTab.slice(6)) : activeTab.startsWith('script:') ? removedScriptIds.has(activeTab.slice(7)) : removedLayoutIds.has(activeTab.slice(7))) : false
         if (activeRemoved) { const next = remainingTabs[0]; setActiveTab(next ? `${next.kind}:${next.uid}` : null); if (next?.kind === 'graph') setActiveUid(next.uid) }
       }
       notify(`${label} を削除しました`)
@@ -1636,9 +1928,11 @@ function App() {
   }, [active, root, rootName, updateActive])
   const saveCurrent = useCallback(async () => {
     if (activeScript && activeTab?.startsWith('script:')) await saveScript(activeScript)
+    else if (activeLayout && activeTab?.startsWith('layout:')) await saveLayout(activeLayout)
     else await save()
-  }, [activeScript, activeTab, save, saveScript])
+  }, [activeLayout, activeScript, activeTab, save, saveLayout, saveScript])
   const updateScriptContent = (script: ScriptDocument, content: string) => setScripts((items) => items.map((item) => item.uid === script.uid ? { ...item, content, dirty: true } : item))
+  const updateLayoutContent = (layout: LayoutDocument, content: string) => setLayouts((items) => items.map((item) => item.uid === layout.uid ? { ...item, content, dirty: true } : item))
   const testScript = async (script: ScriptDocument, functionName: string, sessionRunId?: string) => {
     setScriptTests((items) => ({ ...items, [script.uid]: { status: 'running', functionName } }))
     try {
@@ -1725,6 +2019,7 @@ function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); newDocument() }
       if ((event.key === 'Delete' || event.key === 'Backspace') && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) {
         if (selectedButton) deleteButtonById(selectedButton)
+        else if (selectedGraphLayout) removeLayoutNode(selectedGraphLayout)
         else if (selectedPlayerControl) deletePlayerControlById(selectedPlayerControl)
         else if (selectedNode) deleteNode()
       }
@@ -1763,65 +2058,96 @@ function App() {
     }, 1200)
     return () => window.clearTimeout(timer)
   }, [rootName, scripts])
+  useEffect(() => {
+    if (!rootName) return
+    const timer = window.setTimeout(() => {
+      layouts.forEach((layout) => {
+        const key = layoutDraftKey(rootName, layout.path)
+        try {
+          if (layout.dirty) localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), content: layout.content }))
+          else localStorage.removeItem(key)
+        } catch { /* Storage quota errors must not interrupt editing. */ }
+      })
+    }, 1200)
+    return () => window.clearTimeout(timer)
+  }, [layouts, rootName])
 
   if (!rootName) return <><Welcome busy={busy} onOpen={() => void openDirectory()} onFallback={(files) => void openFallback(files)}/>{toast && <div className="toast">{toast}</div>}</>
   return <div className="app-shell" onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' } }} onDrop={(event) => { if (!event.dataTransfer.types.includes('Files')) return; event.preventDefault(); const promises = Array.from(event.dataTransfer.items).map((item) => (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> }).getAsFileSystemHandle?.() ?? Promise.resolve(null)); void importDroppedHandles(promises) }}>
     <header className="titlebar"><div className="brand"><div className="brand-mark"><span/><span/><span/></div><strong>WMGF</strong><span>Editor</span></div><nav><div className="menu-anchor"><button onPointerDown={(event) => event.stopPropagation()} onClick={() => setShowFileMenu(!showFileMenu)}>ファイル</button>{showFileMenu && <div className="app-menu" onPointerDown={(event) => event.stopPropagation()}><button disabled={!activeTab} onClick={() => { void saveCurrent(); setShowFileMenu(false) }}><Icon name="save" size={13}/><span>保存</span><kbd>Ctrl+S</kbd></button><div className="menu-separator"/><button onClick={() => { setShowFileMenu(false); requestOpenDirectory() }}><Icon name="folder" size={13}/><span>新しいフォルダを開く</span></button></div>}</div></nav><div className="title-actions"><span className="workspace-name"><Icon name="folder" size={13}/>{rootName}</span><button className="toolbar-button" disabled={!activeTab} onClick={() => void saveCurrent()}><Icon name="save" size={14}/>保存</button><button className="primary-button compact" disabled={!active} onClick={() => setShowPreview(true)}><Icon name="play" size={13}/>プレビュー</button></div></header>
     <div className="workspace" style={{ gridTemplateColumns: `${leftWidth}px 4px minmax(360px, 1fr) 4px ${rightWidth}px` }}><Suspense fallback={<div className="workspace-loading">エディタを読み込み中…</div>}>
       <aside className="explorer"><div className="panel-title"><span>ファイル</span><div><button className="icon-button" data-testid="tree-expand-all" title="すべて展開" onClick={() => setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))}><Icon name="expandAll" size={13}/></button><button className="icon-button" data-testid="tree-collapse-all" title="すべて折りたたむ" onClick={() => setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: false }))}><Icon name="collapseAll" size={13}/></button><button className="icon-button" title="新規グラフ" onClick={newDocument}><Icon name="plus" size={14}/></button><button className="icon-button" title="新しいフォルダを開く" onClick={requestOpenDirectory}><Icon name="folder" size={14}/></button></div></div><div className="explorer-scroll">
-        <FileTree documents={documents} scripts={scripts} folders={folders} assets={assets} activeTab={activeTab} inlineEdit={treeInlineEdit} expansionCommand={treeExpansionCommand} getAssetPath={(asset) => docAssets.find((item) => item.file === asset.file)?.path ?? asset.path} getFolderPath={(path) => { const parent = active?.path.includes('/') ? active.path.slice(0, active.path.lastIndexOf('/') + 1) : ''; return parent && path.startsWith(parent) ? path.slice(parent.length) : path }} onOpenGraph={openGraphTab} onOpenScript={openScriptTab} onPreview={setPreviewAsset} onContextMenu={(target, event) => { event.preventDefault(); event.stopPropagation(); setTreeMenu({ target, x: Math.min(event.clientX, window.innerWidth - 250), y: Math.min(event.clientY, window.innerHeight - 210) }) }} onInlineChange={(name) => setTreeInlineEdit((edit) => edit ? { ...edit, name } : edit)} onInlineCommit={commitTreeInlineEdit} onInlineCancel={() => { treeInlineCommit.current = null; setTreeInlineEdit(null) }} onMoveScript={moveScript}/>
+        <FileTree documents={documents} scripts={scripts} layouts={layouts} folders={folders} assets={assets} activeTab={activeTab} inlineEdit={treeInlineEdit} expansionCommand={treeExpansionCommand} getAssetPath={(asset) => docAssets.find((item) => item.file === asset.file)?.path ?? asset.path} getLayoutPath={(layout) => docLayouts.find((item) => item.uid === layout.uid)?.path ?? layout.path} getFolderPath={(path) => { const parent = active?.path.includes('/') ? active.path.slice(0, active.path.lastIndexOf('/') + 1) : ''; return parent && path.startsWith(parent) ? path.slice(parent.length) : path }} onOpenGraph={openGraphTab} onOpenScript={openScriptTab} onOpenLayout={openLayoutTab} onPreview={setPreviewAsset} onContextMenu={(target, event) => { event.preventDefault(); event.stopPropagation(); setTreeMenu({ target, x: Math.min(event.clientX, window.innerWidth - 250), y: Math.min(event.clientY, window.innerHeight - 210) }) }} onInlineChange={(name) => setTreeInlineEdit((edit) => edit ? { ...edit, name } : edit)} onInlineCommit={commitTreeInlineEdit} onInlineCancel={() => { treeInlineCommit.current = null; setTreeInlineEdit(null) }} onMoveScript={moveScript} onMoveLayout={moveLayout}/>
       </div><button className="add-file" onClick={(event) => setTreeMenu({ target: { kind: 'root', path: '' }, x: event.clientX, y: event.clientY - 120 })}><Icon name="plus" size={13}/>新規作成</button></aside>
       <div className="resize-handle left" title="ファイルペインの幅を変更" onPointerDown={(event) => beginResize('left', event)}/>
       <main className="editor-area">
         <div className="tabs" data-testid="editor-tabs" onDragOver={(event) => { if (event.target === event.currentTarget && event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); setTabDropTarget(null) } }} onDrop={(event) => { if (event.target === event.currentTarget && event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '') } }}>{openTabs.flatMap((tab) => {
-          const item = tab.kind === 'graph' ? documents.find((document) => document.uid === tab.uid) : scripts.find((script) => script.uid === tab.uid)
+          const item = tab.kind === 'graph' ? documents.find((document) => document.uid === tab.uid) : tab.kind === 'script' ? scripts.find((script) => script.uid === tab.uid) : layouts.find((layout) => layout.uid === tab.uid)
           if (!item) return []
           const key = `${tab.kind}:${tab.uid}`
           const renaming = treeInlineEdit?.source === 'tab' && treeInlineEdit.mode === 'rename' && treeInlineEdit.target?.uid === tab.uid
           const dropSide = tabDropTarget?.key === key ? tabDropTarget.side : null
-          return [<div className={`tab ${key === activeTab ? 'active' : ''} ${tab.kind} ${renaming ? 'renaming' : ''} ${draggedTab === key ? 'dragging' : ''} ${dropSide ? `drop-${dropSide}` : ''}`} key={key} data-tab-key={key} draggable={!renaming} onDragStart={(event) => { event.dataTransfer.setData(TAB_DRAG_TYPE, key); event.dataTransfer.setData('text/plain', item.name); event.dataTransfer.effectAllowed = 'move'; setDraggedTab(key) }} onDragEnd={() => { setDraggedTab(null); setTabDropTarget(null) }} onDragOver={(event) => { if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE) || draggedTab === key) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; const rect = event.currentTarget.getBoundingClientRect(); setTabDropTarget({ key, side: event.clientX < rect.left + rect.width / 2 ? 'before' : 'after' }) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && tabDropTarget?.key === key) setTabDropTarget(null) }} onDrop={(event) => { if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return; event.preventDefault(); event.stopPropagation(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '', key, tabDropTarget?.key === key ? tabDropTarget.side : 'before') }} onClick={() => { if (!renaming) activateTab(tab) }} onContextMenu={(event) => { event.preventDefault(); if (!renaming) setTabMenu({ kind: tab.kind, uid: tab.uid, x: Math.min(event.clientX, window.innerWidth - 260), y: Math.min(event.clientY, window.innerHeight - 180) }) }}><Icon name={tab.kind === 'script' ? 'script' : 'code'} size={13}/>{renaming && treeInlineEdit ? <InlineNameInput edit={treeInlineEdit} testId="tab-rename-input" onChange={(name) => setTreeInlineEdit((edit) => edit ? { ...edit, name } : edit)} onCommit={commitTreeInlineEdit} onCancel={() => { treeInlineCommit.current = null; setTreeInlineEdit(null) }}/> : <><span>{item.name}</span>{item.dirty && <i/>}<button draggable={false} aria-label={`${item.name}を閉じる`} title="閉じる（ファイルは削除しません）" onDragStart={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); closeTab(tab) }}><Icon name="close" size={11}/></button></>}</div>]
+          return [<div className={`tab ${key === activeTab ? 'active' : ''} ${tab.kind} ${renaming ? 'renaming' : ''} ${draggedTab === key ? 'dragging' : ''} ${dropSide ? `drop-${dropSide}` : ''}`} key={key} data-tab-key={key} draggable={!renaming} onDragStart={(event) => { event.dataTransfer.setData(TAB_DRAG_TYPE, key); event.dataTransfer.setData('text/plain', item.name); event.dataTransfer.effectAllowed = 'move'; setDraggedTab(key) }} onDragEnd={() => { setDraggedTab(null); setTabDropTarget(null) }} onDragOver={(event) => { if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE) || draggedTab === key) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; const rect = event.currentTarget.getBoundingClientRect(); setTabDropTarget({ key, side: event.clientX < rect.left + rect.width / 2 ? 'before' : 'after' }) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && tabDropTarget?.key === key) setTabDropTarget(null) }} onDrop={(event) => { if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return; event.preventDefault(); event.stopPropagation(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '', key, tabDropTarget?.key === key ? tabDropTarget.side : 'before') }} onClick={() => { if (!renaming) activateTab(tab) }} onContextMenu={(event) => { event.preventDefault(); if (!renaming) setTabMenu({ kind: tab.kind, uid: tab.uid, x: Math.min(event.clientX, window.innerWidth - 260), y: Math.min(event.clientY, window.innerHeight - 180) }) }}><Icon name={tab.kind === 'script' ? 'script' : tab.kind === 'layout' ? 'fit' : 'code'} size={13}/>{renaming && treeInlineEdit ? <InlineNameInput edit={treeInlineEdit} testId="tab-rename-input" onChange={(name) => setTreeInlineEdit((edit) => edit ? { ...edit, name } : edit)} onCommit={commitTreeInlineEdit} onCancel={() => { treeInlineCommit.current = null; setTreeInlineEdit(null) }}/> : <><span>{item.name}</span>{item.dirty && <i/>}<button draggable={false} aria-label={`${item.name}を閉じる`} title="閉じる（ファイルは削除しません）" onDragStart={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); closeTab(tab) }}><Icon name="close" size={11}/></button></>}</div>]
         })}<button className={`new-tab ${draggedTab && !tabDropTarget ? 'drop-end' : ''}`} title="新規グラフ" onDragOver={(event) => { if (event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); setTabDropTarget(null) } }} onDrop={(event) => { if (event.dataTransfer.types.includes(TAB_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); reorderTab(event.dataTransfer.getData(TAB_DRAG_TYPE) || draggedTab || '') } }} onClick={newDocument}><Icon name="plus" size={14}/></button></div>
-        {activeScript ? <ScriptEditor key={activeScript.uid} script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }} statsSessions={statsSessions} onChange={(content) => updateScriptContent(activeScript, content)} onSave={() => void saveScript(activeScript)} onTest={(functionName, sessionRunId) => void testScript(activeScript, functionName, sessionRunId)}/> : active && activeTab?.startsWith('graph:') ? <><div className="graph-toolbar"><div><button className="tool-button" onClick={addNodeAtGraphCenter}><Icon name="plus" size={14}/>メディアNode</button><button className="tool-button" onClick={addButtonAtGraphCenter}><span className="button-glyph">B</span>ボタン</button><button className="tool-button script-tool" onClick={addScriptNodeAtGraphCenter}><Icon name="script" size={14}/>Script Node</button><button className="tool-button control-tool" onClick={addPlayerControlAtGraphCenter}><Icon name="controls" size={14}/>再生設定</button><span className="toolbar-separator"/><button className={`segmented ${weightDisplayMode === 'weight' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('weight')}>重み</button><button className={`segmented ${weightDisplayMode === 'probability' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('probability')}>確率</button><button className={`segmented ${weightDisplayMode === 'hidden' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('hidden')}>非表示</button></div><div><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.max(.5, view.zoom - .1) })}>−</button><button className="zoom-value" onClick={() => setView({ zoom: 1, x: 80, y: 65 })}>{Math.round(view.zoom * 100)}%</button><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.min(1.6, view.zoom + .1) })}>＋</button><span className="toolbar-separator"/><button className="tool-button icon-only" title="JSONをエクスポート" onClick={exportJson}><Icon name="code" size={14}/></button></div></div>
+        {activeScript ? <ScriptEditor key={activeScript.uid} script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }} statsSessions={statsSessions} onChange={(content) => updateScriptContent(activeScript, content)} onSave={() => void saveScript(activeScript)} onTest={(functionName, sessionRunId) => void testScript(activeScript, functionName, sessionRunId)}/> : activeLayout ? <LayoutEditor key={activeLayout.uid} layout={activeLayout} onChange={(content) => updateLayoutContent(activeLayout, content)} onSave={() => void saveLayout(activeLayout)}/> : active && activeTab?.startsWith('graph:') ? <><div className="graph-toolbar"><div><button className="tool-button" onClick={addNodeAtGraphCenter}><Icon name="plus" size={14}/>メディアNode</button><button className="tool-button" onClick={addButtonAtGraphCenter}><span className="button-glyph">B</span>ボタン</button><button className="tool-button layout-tool" data-testid="add-layout-node" onClick={addLayoutAtGraphCenter}><Icon name="fit" size={14}/>レイアウト</button><button className="tool-button script-tool" onClick={addScriptNodeAtGraphCenter}><Icon name="script" size={14}/>Script Node</button><button className="tool-button control-tool" onClick={addPlayerControlAtGraphCenter}><Icon name="controls" size={14}/>再生設定</button><span className="toolbar-separator"/><button className={`segmented ${weightDisplayMode === 'weight' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('weight')}>重み</button><button className={`segmented ${weightDisplayMode === 'probability' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('probability')}>確率</button><button className={`segmented ${weightDisplayMode === 'hidden' ? 'active' : ''}`} onClick={() => setWeightDisplayMode('hidden')}>非表示</button></div><div><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.max(.5, view.zoom - .1) })}>−</button><button className="zoom-value" onClick={() => setView({ zoom: 1, x: 80, y: 65 })}>{Math.round(view.zoom * 100)}%</button><button className="zoom-button" onClick={() => setView({ ...view, zoom: Math.min(1.6, view.zoom + .1) })}>＋</button><span className="toolbar-separator"/><button className="tool-button icon-only" title="JSONをエクスポート" onClick={exportJson}><Icon name="code" size={14}/></button></div></div>
           <GraphCanvas
             graph={active.graph}
+            layouts={docLayouts}
             selectedNode={selectedNode}
             selectedButton={selectedButton}
             selectedPlayerControl={selectedPlayerControl}
+            selectedLayout={selectedGraphLayout}
             probabilityMode={probabilityMode}
             showWeights={weightDisplayMode !== 'hidden'}
             view={view}
             onView={setView}
-            onSelectNode={(id) => { setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null) }}
-            onSelectButton={(id) => { setSelectedButton(id); setSelectedNode(null); setSelectedPlayerControl(null) }}
-            onSelectPlayerControl={(id) => { setSelectedPlayerControl(id); setSelectedNode(null); setSelectedButton(null) }}
+            onSelectNode={(id) => { setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }}
+            onSelectButton={(id) => { setSelectedButton(id); setSelectedNode(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }}
+            onSelectPlayerControl={(id) => { setSelectedPlayerControl(id); setSelectedNode(null); setSelectedButton(null); setSelectedGraphLayout(null) }}
+            onSelectLayout={(path) => { setSelectedGraphLayout(path); setSelectedNode(null); setSelectedButton(null); setSelectedPlayerControl(null) }}
             onMoveNode={(id, x, y) => { const node = active.graph.nodes[id]; updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [id]: { ...node, editor: { ...node.editor, x: Math.round(x), y: Math.round(y) } } } }) }}
             onMoveButton={(id, x, y) => { const button = active.graph.buttons[id]; updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [id]: { ...button, editor: { ...button.editor, x: Math.round(x), y: Math.round(y) } } } }) }}
             onMovePlayerControl={(id, x, y) => { const control = active.graph.playerControls[id]; updateGraph({ ...active.graph, playerControls: { ...active.graph.playerControls, [id]: { ...control, editor: { ...control.editor, x: Math.round(x), y: Math.round(y) } } } }) }}
+            onMoveLayout={(path, x, y) => { const placement = active.graph.editor?.layouts?.[path]; if (placement) updateGraph({ ...active.graph, editor: { ...active.graph.editor, layouts: { ...active.graph.editor?.layouts, [path]: { ...placement, x: Math.round(x), y: Math.round(y) } } } }) }}
             onAddNode={addNode}
             onAddScriptNode={addScriptNode}
             onAddButton={(x, y) => addButton(x, y)}
+            onAddLayout={addLayout}
             onAddPlayerControl={addPlayerControl}
             onConnectNode={(from, to) => { const source = active.graph.nodes[from]; if (!source || source.terminal) return; if ((source.onEnd ?? []).some((transition) => transition.to === to)) { notify('このノード間は既に接続されています'); return } updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [from]: { ...source, onEnd: [...(source.onEnd ?? []), { to, weight: 1 }] } } }) }}
             onConnectButton={(buttonId, to) => { const button = active.graph.buttons[buttonId]; if (!button) return; if ((button.onPress ?? []).some((transition) => transition.to === to)) { notify('このボタンから既に接続されています'); return } updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [buttonId]: { ...button, onPress: [...(button.onPress ?? []), { to, weight: 1 }] } } }) }}
             onAttachButton={attachButton}
             onAttachPlayerControl={attachPlayerControl}
+            onAttachLayout={attachLayout}
             onAssetDrop={dropAssetOnGraph}
             onFolderDrop={dropFolderOnGraph}
+            onLayoutDrop={(path, x, y) => addLayout(x - 82, y - 25, path)}
             onExternalDrop={(promises, x, y) => void importDroppedHandles(promises, { forceNew: true, x, y })}
             onWeightChange={changeEdgeWeight}
             onDisconnect={disconnectEdge}
             onInsertNode={insertNodeOnEdge}
             onDeleteNode={deleteNodeById}
             onDeleteButton={deleteButtonById}
+            onDeleteLayout={removeLayoutNode}
             onDeletePlayerControl={deletePlayerControlById}
+            onOpenLayout={(path) => { const layout = layouts.find((item) => docLayouts.find((relative) => relative.path === path)?.uid === item.uid); if (layout) openLayoutTab(layout); else notify(`レイアウトが見つかりません: ${path}`) }}
             onSave={() => void save()}
           />
         </> : <div className="no-document"><Icon name="code" size={42}/><strong>開いているタブがありません</strong><span>ファイルツリーからグラフまたはスクリプトを開いてください</span><button className="primary-button" onClick={newDocument}><Icon name="plus" size={14}/>新規グラフ</button></div>}
       </main>
       <div className="resize-handle right" title="インスペクターの幅を変更" onPointerDown={(event) => beginResize('right', event)}/>
-      {activeScript ? <ScriptInspector script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }} assets={docAssets}/> : active && activeTab?.startsWith('graph:') ? selectedPlayerControl && active.graph.playerControls[selectedPlayerControl] ? <PlayerControlInspector
+      {activeScript ? <ScriptInspector script={activeScript} test={scriptTests[activeScript.uid] ?? { status: 'idle' }} assets={docAssets}/> : activeLayout ? <LayoutInspector layout={activeLayout}/> : active && activeTab?.startsWith('graph:') ? selectedGraphLayout && active.graph.editor?.layouts?.[selectedGraphLayout] ? <GraphLayoutInspector
+        path={selectedGraphLayout}
+        placement={active.graph.editor.layouts[selectedGraphLayout]}
+        layout={docLayouts.find((layout) => layout.path === selectedGraphLayout)}
+        connectedControls={Object.entries(active.graph.playerControls).filter(([, control]) => control.layout === selectedGraphLayout).map(([id]) => id)}
+        onChange={(placement) => updateGraph({ ...active.graph, editor: { ...active.graph.editor, layouts: { ...active.graph.editor?.layouts, [selectedGraphLayout]: placement } } })}
+        onOpen={() => { const relative = docLayouts.find((layout) => layout.path === selectedGraphLayout); const original = relative && layouts.find((layout) => layout.uid === relative.uid); if (original) openLayoutTab(original) }}
+        onRemove={() => removeLayoutNode(selectedGraphLayout)}
+      /> : selectedPlayerControl && active.graph.playerControls[selectedPlayerControl] ? <PlayerControlInspector
         controlId={selectedPlayerControl}
         control={active.graph.playerControls[selectedPlayerControl]}
+        layouts={docLayouts}
         issues={issues.filter((issue) => issue.playerControlId === selectedPlayerControl)}
         global={active.graph.globalPlayerControl === selectedPlayerControl}
         usedBy={Object.entries(active.graph.nodes).filter(([, node]) => node.playerControl === selectedPlayerControl).map(([id, node]) => node.editor?.label || id)}
@@ -1829,14 +2155,15 @@ function App() {
         onRename={renamePlayerControl}
         onGlobal={(enabled) => updateGraph({ ...active.graph, globalPlayerControl: enabled ? selectedPlayerControl : active.graph.globalPlayerControl === selectedPlayerControl ? undefined : active.graph.globalPlayerControl })}
         onDelete={() => deletePlayerControlById(selectedPlayerControl)}
-      /> : <Inspector nodeId={selectedNode} buttonId={selectedButton} graph={active.graph} graphName={active.name} assets={docAssets} scripts={docScripts} probabilityMode={probabilityMode} issues={issues} onChangeGraph={updateGraph} onChange={updateNode} onChangeButton={updateSelectedButton} onSetStart={setSelectedNodeStart} onSetTerminal={setSelectedNodeTerminal} onRename={renameNode} onRenameButton={renameButton} onDelete={deleteNode} onDeleteButton={() => selectedButton && deleteButtonById(selectedButton)} onPick={(id) => { setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null) }} onPickButton={(id) => { setSelectedButton(id); setSelectedNode(null); setSelectedPlayerControl(null) }} onAddButton={(nodeId) => { const node = active.graph.nodes[nodeId]; addButton((node.editor?.x ?? 0) + 17, (node.editor?.y ?? 0) + 110, nodeId) }} onDetachButton={detachButton} onAssetDrop={(path) => selectedNode && bindAssetToNode(selectedNode, path)} onFolderDrop={(path) => selectedNode && appendFolderToNode(selectedNode, path)} onOpenScript={openScriptTab}/> : <aside className="inspector"><div className="panel-title"><span>インスペクター</span></div><div className="blank-panel"><Icon name="target" size={30}/></div></aside>}
+        onOpenLayout={(layout) => { const original = layouts.find((item) => item.uid === layout.uid); if (original) openLayoutTab(original) }}
+      /> : <Inspector nodeId={selectedNode} buttonId={selectedButton} graph={active.graph} graphName={active.name} assets={docAssets} scripts={docScripts} probabilityMode={probabilityMode} issues={issues} onChangeGraph={updateGraph} onChange={updateNode} onChangeButton={updateSelectedButton} onSetStart={setSelectedNodeStart} onSetTerminal={setSelectedNodeTerminal} onRename={renameNode} onRenameButton={renameButton} onDelete={deleteNode} onDeleteButton={() => selectedButton && deleteButtonById(selectedButton)} onPick={(id) => { setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }} onPickButton={(id) => { setSelectedButton(id); setSelectedNode(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }} onAddButton={(nodeId) => { const node = active.graph.nodes[nodeId]; addButton((node.editor?.x ?? 0) + 17, (node.editor?.y ?? 0) + 110, nodeId) }} onDetachButton={detachButton} onAssetDrop={(path) => selectedNode && bindAssetToNode(selectedNode, path)} onFolderDrop={(path) => selectedNode && appendFolderToNode(selectedNode, path)} onOpenScript={openScriptTab}/> : <aside className="inspector"><div className="panel-title"><span>インスペクター</span></div><div className="blank-panel"><Icon name="target" size={30}/></div></aside>}
     </Suspense></div>
-    <footer className="statusbar"><button className={issues.some((issue) => issue.severity === 'error') ? 'has-error' : ''} onClick={() => setShowProblems(!showProblems)}>{issues.length ? <Icon name="warning" size={12}/> : <Icon name="check" size={12}/>} {issues.filter((issue) => issue.severity === 'error').length} エラー　{issues.filter((issue) => issue.severity === 'warning').length} 警告</button><div><span>WMGF v1</span><span>{active ? `${Object.keys(active.graph.nodes).length} Node · ${Object.keys(active.graph.buttons).length} Button · ${Object.keys(active.graph.playerControls).length} Controls` : 'グラフなし'}</span><span>{scripts.length} Script · {assets.length} Assets</span></div></footer>
-    {showProblems && <div className="problems-panel" style={{ left: leftWidth + 4, right: rightWidth + 4 }}><header><strong>問題</strong><button className="icon-button" onClick={() => setShowProblems(false)}><Icon name="close" size={13}/></button></header>{issues.length ? issues.map((issue, index) => <button key={index} onClick={() => { const script = issue.scriptPath ? docScripts.find((item) => item.path === issue.scriptPath) : undefined; if (script) openScriptTab(script); else { if (active) openGraphTab(active); if (issue.nodeId) { setSelectedNode(issue.nodeId); setSelectedButton(null); setSelectedPlayerControl(null) } else if (issue.buttonId) { setSelectedButton(issue.buttonId); setSelectedNode(null); setSelectedPlayerControl(null) } else if (issue.playerControlId) { setSelectedPlayerControl(issue.playerControlId); setSelectedNode(null); setSelectedButton(null) } } setShowProblems(false) }}><Icon name="warning" size={13}/><span>{issue.message}</span><small>{issue.scriptPath ?? issue.nodeId ?? issue.buttonId ?? issue.playerControlId ?? 'グラフ'}</small></button>) : <div className="problems-empty"><Icon name="check" size={15}/>問題は見つかりませんでした</div>}</div>}
-    {showPreview && active && <Preview graph={active.graph} graphId={active.path} assets={docAssets} scripts={docScripts} initialHistory={previewHistories[active.uid] ?? []} onHistoryChange={(history) => setPreviewHistories((current) => ({ ...current, [active.uid]: history }))} onClose={() => setShowPreview(false)}/>}
+    <footer className="statusbar"><button className={issues.some((issue) => issue.severity === 'error') ? 'has-error' : ''} onClick={() => setShowProblems(!showProblems)}>{issues.length ? <Icon name="warning" size={12}/> : <Icon name="check" size={12}/>} {issues.filter((issue) => issue.severity === 'error').length} エラー　{issues.filter((issue) => issue.severity === 'warning').length} 警告</button><div><span>WMGF v1</span><span>{active ? `${Object.keys(active.graph.nodes).length} Node · ${Object.keys(active.graph.buttons).length} Button · ${Object.keys(active.graph.playerControls).length} Controls` : 'グラフなし'}</span><span>{scripts.length} Script · {layouts.length} Layout · {assets.length} Assets</span></div></footer>
+    {showProblems && <div className="problems-panel" style={{ left: leftWidth + 4, right: rightWidth + 4 }}><header><strong>問題</strong><button className="icon-button" onClick={() => setShowProblems(false)}><Icon name="close" size={13}/></button></header>{issues.length ? issues.map((issue, index) => <button key={index} onClick={() => { const script = issue.scriptPath ? docScripts.find((item) => item.path === issue.scriptPath) : undefined; const layout = issue.layoutPath ? docLayouts.find((item) => item.path === issue.layoutPath) : undefined; if (script) openScriptTab(script); else if (layout) { const original = layouts.find((item) => item.uid === layout.uid); if (original) openLayoutTab(original) } else { if (active) openGraphTab(active); if (issue.nodeId) { setSelectedNode(issue.nodeId); setSelectedButton(null); setSelectedPlayerControl(null) } else if (issue.buttonId) { setSelectedButton(issue.buttonId); setSelectedNode(null); setSelectedPlayerControl(null) } else if (issue.playerControlId) { setSelectedPlayerControl(issue.playerControlId); setSelectedNode(null); setSelectedButton(null) } } setShowProblems(false) }}><Icon name="warning" size={13}/><span>{issue.message}</span><small>{issue.scriptPath ?? issue.layoutPath ?? issue.nodeId ?? issue.buttonId ?? issue.playerControlId ?? 'グラフ'}</small></button>) : <div className="problems-empty"><Icon name="check" size={15}/>問題は見つかりませんでした</div>}</div>}
+    {showPreview && active && <Preview graph={active.graph} graphId={active.path} assets={docAssets} scripts={docScripts} layouts={docLayouts} initialHistory={previewHistories[active.uid] ?? []} onHistoryChange={(history) => setPreviewHistories((current) => ({ ...current, [active.uid]: history }))} onClose={() => setShowPreview(false)}/>}
     {previewAsset && <AssetPreview asset={previewAsset} onClose={() => setPreviewAsset(null)}/>}
-    {tabMenu && <div className="tab-context-menu" style={{ left: tabMenu.x, top: tabMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { closeTab({ kind: tabMenu.kind, uid: tabMenu.uid }); setTabMenu(null) }}><Icon name="close" size={13}/>タブを閉じる</button>{tabMenu.kind === 'graph' && <button onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) duplicateDocument(target); setTabMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => { const target = tabMenu.kind === 'graph' ? documents.find((item) => item.uid === tabMenu.uid) : scripts.find((item) => item.uid === tabMenu.uid); if (target) beginTreeRename({ kind: tabMenu.kind, uid: target.uid, path: target.path }, 'tab') }}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (tabMenu.kind === 'graph') { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) void deleteDocument(target) } else { const target = scripts.find((script) => script.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'script', uid: target.uid, path: target.path }) } setTabMenu(null) }}><Icon name="trash" size={13}/>ファイルを削除</button></div>}
-    {treeMenu && <div className="tab-context-menu tree-context-menu" style={{ left: treeMenu.x, top: treeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{treeMenu.target.kind === 'root' || treeMenu.target.kind === 'folder' ? <><label>{treeMenu.target.path || rootName}</label><button onClick={() => beginTreeCreate(treeMenu.target, 'file')}><Icon name="file" size={13}/>ファイルを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'folder')}><Icon name="folder" size={13}/>フォルダを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'script')}><Icon name="script" size={13}/>Starlarkスクリプトを作成</button>{treeMenu.target.kind === 'folder' && <button className="danger" onClick={() => { void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>フォルダを削除</button>}</> : <>{treeMenu.target.kind === 'graph' && <button onClick={() => { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) duplicateDocument(target); setTreeMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => beginTreeRename(treeMenu.target, 'tree')}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (treeMenu.target.kind === 'graph') { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) void deleteDocument(target) } else void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>削除</button></>}</div>}
+    {tabMenu && <div className="tab-context-menu" style={{ left: tabMenu.x, top: tabMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { closeTab({ kind: tabMenu.kind, uid: tabMenu.uid }); setTabMenu(null) }}><Icon name="close" size={13}/>タブを閉じる</button>{tabMenu.kind === 'graph' && <button onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) duplicateDocument(target); setTabMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => { const target = tabMenu.kind === 'graph' ? documents.find((item) => item.uid === tabMenu.uid) : tabMenu.kind === 'script' ? scripts.find((item) => item.uid === tabMenu.uid) : layouts.find((item) => item.uid === tabMenu.uid); if (target) beginTreeRename({ kind: tabMenu.kind, uid: target.uid, path: target.path }, 'tab') }}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (tabMenu.kind === 'graph') { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) void deleteDocument(target) } else if (tabMenu.kind === 'script') { const target = scripts.find((script) => script.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'script', uid: target.uid, path: target.path }) } else { const target = layouts.find((layout) => layout.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'layout', uid: target.uid, path: target.path }) } setTabMenu(null) }}><Icon name="trash" size={13}/>ファイルを削除</button></div>}
+    {treeMenu && <div className="tab-context-menu tree-context-menu" style={{ left: treeMenu.x, top: treeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{treeMenu.target.kind === 'root' || treeMenu.target.kind === 'folder' ? <><label>{treeMenu.target.path || rootName}</label><button onClick={() => beginTreeCreate(treeMenu.target, 'file')}><Icon name="file" size={13}/>ファイルを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'folder')}><Icon name="folder" size={13}/>フォルダを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'script')}><Icon name="script" size={13}/>Starlarkスクリプトを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'layout')}><Icon name="fit" size={13}/>レイアウトファイルを作成</button>{treeMenu.target.kind === 'folder' && <button className="danger" onClick={() => { void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>フォルダを削除</button>}</> : <>{treeMenu.target.kind === 'graph' && <button onClick={() => { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) duplicateDocument(target); setTreeMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => beginTreeRename(treeMenu.target, 'tree')}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (treeMenu.target.kind === 'graph') { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) void deleteDocument(target) } else void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>削除</button></>}</div>}
     <input ref={folderInput} type="file" multiple hidden onChange={(event) => event.target.files && void openFallback(event.target.files)}/>
     {toast && <div className="toast">{toast}</div>}
   </div>

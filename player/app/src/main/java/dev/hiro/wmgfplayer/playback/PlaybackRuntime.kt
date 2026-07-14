@@ -33,6 +33,7 @@ data class PlaybackUiState(
     val visualUri: String? = null,
     val fit: String = "contain",
     val imageTransitionMs: Int = 300,
+    val layoutSource: String? = null,
     val buttons: List<RenderedButton> = emptyList(),
     val controls: PlayerControlSettings = PlayerControlSettings.Default,
     val contentId: String? = null,

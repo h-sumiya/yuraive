@@ -38,6 +38,7 @@ data class SocialLink(
 @Serializable
 data class PlayerControlSettings(
     val accentColor: String? = null,
+    val layout: String? = null,
     val allowStop: Boolean = true,
     val showSeekBar: Boolean = true,
     val showPlaybackTime: Boolean = true,
@@ -109,8 +110,11 @@ data class Transition(val to: String, val weight: Double)
 @Serializable
 data class WmgButton(
     val visibility: List<VisibilityRange> = emptyList(),
-    val layout: ButtonLayout? = null,
-    val appearance: ButtonAppearance? = null,
+    val targetSlot: String? = null,
+    val order: Int = 0,
+    val zIndex: Int = 0,
+    val text: String? = null,
+    val style: ButtonRenderStyle = ButtonRenderStyle(),
     val render: ScriptCall? = null,
     val onPress: List<Transition> = emptyList(),
     val editor: JsonObject? = null,
@@ -118,23 +122,6 @@ data class WmgButton(
 
 @Serializable
 data class VisibilityRange(val fromMs: Long, val toMs: Long? = null)
-
-@Serializable
-data class ButtonLayout(
-    val x: Float,
-    val y: Float,
-    val width: Float,
-    val height: Float,
-    val z: Int = 0,
-)
-
-@Serializable
-data class ButtonAppearance(
-    val backgroundColor: String? = null,
-    val backgroundImage: String? = null,
-    val text: String? = null,
-    val textColor: String? = null,
-)
 
 @Serializable
 data class ButtonRenderStyle(
@@ -145,6 +132,10 @@ data class ButtonRenderStyle(
     val borderColor: String? = null,
     val borderWidth: Float? = null,
     val borderRadius: Float? = null,
+    val fontSize: Float? = null,
+    val fontWeight: Int? = null,
+    val paddingHorizontal: Float? = null,
+    val paddingVertical: Float? = null,
 )
 
 @Serializable
@@ -152,16 +143,6 @@ data class ButtonRenderResult(
     val visible: Boolean? = null,
     val text: String? = null,
     val style: ButtonRenderStyle? = null,
-    val layout: ButtonLayoutOverride? = null,
-)
-
-@Serializable
-data class ButtonLayoutOverride(
-    val x: Float? = null,
-    val y: Float? = null,
-    val width: Float? = null,
-    val height: Float? = null,
-    val z: Int? = null,
 )
 
 @Serializable
@@ -223,10 +204,13 @@ data class ValidationIssue(
     enum class Severity { ERROR, WARNING }
 }
 
+@Serializable
 data class RenderedButton(
     val id: String,
     val visible: Boolean,
-    val layout: ButtonLayout,
+    val targetSlot: String? = null,
+    val order: Int = 0,
+    val zIndex: Int = 0,
     val text: String,
     val style: ButtonRenderStyle,
 )
@@ -303,9 +287,10 @@ object GraphValidator {
             }
         }
         graph.buttons.values.forEach { button ->
-            button.appearance?.backgroundImage?.let(::add)
+            button.style.backgroundImage?.let(::add)
             button.render?.path?.let(::add)
         }
+        graph.playerControls.values.forEach { control -> control.layout?.let(::add) }
     }
 
     fun isSafeRelativePath(path: String): Boolean = path.isNotBlank() &&
