@@ -1,4 +1,4 @@
-//! Platform-neutral interpreter for the safe `.wmg-layout.html` subset.
+//! Platform-neutral interpreter for the safe `.yuraive-layout.html` subset.
 //!
 //! The runtime intentionally produces geometry and appearance data only.  Android and Windows
 //! turn that render model into native controls; no browser DOM or JavaScript is involved.
@@ -155,7 +155,7 @@ impl Element {
     }
 
     fn tag(&self) -> &'static str {
-        match self.kind { ElementKind::Root => "wmg-canvas", ElementKind::Div => "div", ElementKind::Slot => "slot", ElementKind::Button => "button" }
+        match self.kind { ElementKind::Root => "yuraive-canvas", ElementKind::Div => "div", ElementKind::Slot => "slot", ElementKind::Button => "button" }
     }
 }
 
@@ -356,7 +356,7 @@ fn inject_buttons(nodes: &mut Vec<Element>, buttons: &[LayoutButton], issues: &m
             continue;
         };
         let mut node = Element::new(ElementKind::Button, Some(parent));
-        node.classes.push("wmg-button".into());
+        node.classes.push("yuraive-button".into());
         node.attrs.insert("data-button-id".into(), button.id.clone());
         node.button = Some(button_index);
         let index = nodes.len();
@@ -626,14 +626,14 @@ fn is_ident(ch: char) -> bool { ch.is_alphanumeric() || matches!(ch, '-' | '_') 
 
 fn substitute_variables(value: &str, canvas: &LayoutCanvas) -> String {
     let variables = [
-        ("--wmg-canvas-width", format!("{}px", canvas.width)),
-        ("--wmg-canvas-height", format!("{}px", canvas.height)),
-        ("--wmg-safe-top", format!("{}px", canvas.safe_top)),
-        ("--wmg-safe-right", format!("{}px", canvas.safe_right)),
-        ("--wmg-safe-bottom", format!("{}px", canvas.safe_bottom)),
-        ("--wmg-safe-left", format!("{}px", canvas.safe_left)),
-        ("--wmg-density", canvas.density.to_string()),
-        ("--wmg-font-scale", canvas.font_scale.to_string()),
+        ("--yuraive-canvas-width", format!("{}px", canvas.width)),
+        ("--yuraive-canvas-height", format!("{}px", canvas.height)),
+        ("--yuraive-safe-top", format!("{}px", canvas.safe_top)),
+        ("--yuraive-safe-right", format!("{}px", canvas.safe_right)),
+        ("--yuraive-safe-bottom", format!("{}px", canvas.safe_bottom)),
+        ("--yuraive-safe-left", format!("{}px", canvas.safe_left)),
+        ("--yuraive-density", canvas.density.to_string()),
+        ("--yuraive-font-scale", canvas.font_scale.to_string()),
     ];
     let mut result = value.to_owned();
     for (name, replacement) in variables { result = result.replace(&format!("var({name})"), &replacement); }
@@ -1333,8 +1333,8 @@ mod tests {
         <style>
         .stage { position:absolute; inset:0; display:grid; grid-template-rows:1fr auto; padding:clamp(14px,4cqw,28px); }
         slot[name="actions"] { display:grid; grid-row:2; grid-template-columns:repeat(2,minmax(0,1fr)); gap:clamp(8px,2cqw,14px); }
-        .wmg-button { display:grid; place-items:center; min-height:52px; padding:12px 18px; border:0; border-radius:18px; background:#702bc4; color:white; font:600 16px/1.3 system-ui; }
-        @container wmg-canvas (max-width:360px) { slot[name="actions"] { grid-template-columns:1fr; } }
+        .yuraive-button { display:grid; place-items:center; min-height:52px; padding:12px 18px; border:0; border-radius:18px; background:#574de5; color:white; font:600 16px/1.3 system-ui; }
+        @container yuraive-canvas (max-width:360px) { slot[name="actions"] { grid-template-columns:1fr; } }
         </style><div class="stage"><slot name="actions"></slot><slot></slot></div>
     "#;
 
@@ -1358,7 +1358,7 @@ mod tests {
         let b = output.buttons.iter().find(|b| b.id == "b").unwrap();
         assert!(b.x < a.x);
         assert!((a.height - 52.0).abs() < 0.1);
-        assert_eq!(a.style.background_color, "#702bc4");
+        assert_eq!(a.style.background_color, "#574de5");
     }
 
     #[test]

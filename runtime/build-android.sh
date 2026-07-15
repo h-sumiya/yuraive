@@ -26,7 +26,7 @@ if [[ ! -d "$toolchain" ]]; then
 fi
 
 mkdir -p "$output_dir"
-find "$output_dir" -type f -name 'libwmgf_validator.so' -delete
+find "$output_dir" -type f -name 'lib*.so' -delete
 
 build_abi() {
     local target="$1"
@@ -48,8 +48,8 @@ build_abi() {
         --target "$target"
 
     mkdir -p "$output_dir/$abi"
-    local output="$output_dir/$abi/libwmgf_runtime.so"
-    cp "$crate_dir/target/$target/release/libwmgf_runtime.so" "$output"
+    local output="$output_dir/$abi/libyuraive_runtime.so"
+    cp "$crate_dir/target/$target/release/libyuraive_runtime.so" "$output"
     "$toolchain/llvm-strip" --strip-unneeded "$output"
 }
 

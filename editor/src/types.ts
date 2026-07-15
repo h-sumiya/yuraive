@@ -52,7 +52,7 @@ export type ButtonRenderResult = {
   style?: ButtonRenderStyle
 }
 
-export type WmgButton = {
+export type YuraiveButton = {
   visibility?: Array<{ fromMs: number; toMs: number | null }>
   targetSlot?: string
   order?: number
@@ -68,7 +68,7 @@ export type WmgButton = {
   }
 }
 
-export type WmgNode = {
+export type YuraiveNode = {
   type: 'media' | 'script'
   start?: boolean
   terminal?: boolean
@@ -86,7 +86,7 @@ export type WmgNode = {
   }
 }
 
-export type WmgMetadata = {
+export type YuraiveMetadata = {
   contentId?: string
   displayName?: string
   description?: string
@@ -125,11 +125,11 @@ export type GraphLayoutPlacement = {
   color?: string
 }
 
-export type WmgGraph = {
+export type YuraiveGraph = {
   version: 1
-  metadata?: WmgMetadata
-  nodes: Record<string, WmgNode>
-  buttons: Record<string, WmgButton>
+  metadata?: YuraiveMetadata
+  nodes: Record<string, YuraiveNode>
+  buttons: Record<string, YuraiveButton>
   playerControls: Record<string, PlayerControlSettings>
   globalPlayerControl?: string
   playbackStats?: ScriptCall
@@ -249,7 +249,7 @@ export type GraphDocument = {
   uid: string
   name: string
   path: string
-  graph: WmgGraph
+  graph: YuraiveGraph
   dirty: boolean
   handle?: FileSystemFileHandle
 }

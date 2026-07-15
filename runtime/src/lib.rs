@@ -524,7 +524,7 @@ fn validate_graph(graph: &Graph) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
     if graph.version != 1 {
         issues.push(ValidationIssue::error(
-            "対応している WMGF バージョンは 1 です",
+            "対応している Yuraive バージョンは 1 です",
         ));
     }
     let starts = graph.nodes.values().filter(|node| node.start).count();
@@ -813,9 +813,9 @@ fn validate_graph(graph: &Graph) -> Vec<ValidationIssue> {
             }
         }
         if let Some(layout) = &control.layout {
-            if !layout.to_ascii_lowercase().ends_with(".wmg-layout.html") {
+            if !layout.to_ascii_lowercase().ends_with(".yuraive-layout.html") {
                 issues.push(ValidationIssue::error(format!(
-                    "{id}: layout は .wmg-layout.html ファイルを指定してください"
+                    "{id}: layout は .yuraive-layout.html ファイルを指定してください"
                 )));
             }
         }
@@ -947,13 +947,13 @@ fn ffi_output(value: String) -> *mut c_char {
         .into_raw()
 }
 
-/// Validate WMGF JSON for native desktop hosts.
+/// Validate Yuraive JSON for native desktop hosts.
 ///
 /// The returned UTF-8 string belongs to the caller and must be released with
-/// `wmgf_string_free`.
+/// `yuraive_string_free`.
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "C" fn wmgf_validate_json(input: *const c_char) -> *mut c_char {
+pub extern "C" fn yuraive_validate_json(input: *const c_char) -> *mut c_char {
     let output = catch_unwind(AssertUnwindSafe(|| match ffi_input(input) {
         Ok(value) => validation_json(value),
         Err(error) => serde_json::to_string(&vec![ValidationIssue::error(error)])
@@ -968,7 +968,7 @@ pub extern "C" fn wmgf_validate_json(input: *const c_char) -> *mut c_char {
 /// Read the optional metadata object from a bounded JSON prefix.
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "C" fn wmgf_extract_metadata_prefix(input: *const c_char) -> *mut c_char {
+pub extern "C" fn yuraive_extract_metadata_prefix(input: *const c_char) -> *mut c_char {
     let output = catch_unwind(AssertUnwindSafe(|| match ffi_input(input) {
         Ok(value) => metadata_prefix_json(value),
         Err(error) => serde_json::to_string(&MetadataPrefixResult::invalid(error))
@@ -984,7 +984,7 @@ pub extern "C" fn wmgf_extract_metadata_prefix(input: *const c_char) -> *mut c_c
 /// Execute a Starlark request for native desktop hosts.
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "C" fn wmgf_run_starlark_json(input: *const c_char) -> *mut c_char {
+pub extern "C" fn yuraive_run_starlark_json(input: *const c_char) -> *mut c_char {
     let output = catch_unwind(AssertUnwindSafe(|| match ffi_input(input) {
         Ok(value) => run_starlark_json(value),
         Err(error) => {
@@ -999,10 +999,10 @@ pub extern "C" fn wmgf_run_starlark_json(input: *const c_char) -> *mut c_char {
     ffi_output(output)
 }
 
-/// Interpret a safe WMGF button layout and return a platform-neutral native render model.
+/// Interpret a safe Yuraive button layout and return a platform-neutral native render model.
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "C" fn wmgf_resolve_button_layout_json(input: *const c_char) -> *mut c_char {
+pub extern "C" fn yuraive_resolve_button_layout_json(input: *const c_char) -> *mut c_char {
     let output = catch_unwind(AssertUnwindSafe(|| match ffi_input(input) {
         Ok(value) => resolve_button_layout_json(value),
         Err(error) => format!(r#"{{"buttons":[],"issues":[{}]}}"#, serde_json::to_string(&error).unwrap_or_default()),
@@ -1011,11 +1011,11 @@ pub extern "C" fn wmgf_resolve_button_layout_json(input: *const c_char) -> *mut 
     ffi_output(output)
 }
 
-/// Decode a WMGF binary player bundle and return its graph and embedded text
+/// Decode a Yuraive binary player bundle and return its graph and embedded text
 /// files as JSON. The input buffer only needs to remain valid for this call.
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "C" fn wmgf_decode_bundle(input: *const u8, length: usize) -> *mut c_char {
+pub extern "C" fn yuraive_decode_bundle(input: *const u8, length: usize) -> *mut c_char {
     let output = catch_unwind(AssertUnwindSafe(|| {
         if input.is_null() {
             return serde_json::json!({ "error": "バンドル入力がnullです" }).to_string();
@@ -1032,7 +1032,7 @@ pub extern "C" fn wmgf_decode_bundle(input: *const u8, length: usize) -> *mut c_
 /// Release a string returned by one of the native desktop entry points.
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "C" fn wmgf_string_free(value: *mut c_char) {
+pub extern "C" fn yuraive_string_free(value: *mut c_char) {
     if !value.is_null() {
         // SAFETY: The pointer was allocated by CString::into_raw in
         // `ffi_output` and ownership is transferred back exactly once.
@@ -1042,7 +1042,7 @@ pub extern "C" fn wmgf_string_free(value: *mut c_char) {
 
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeGraphValidator_validateJsonNative<
+pub extern "system" fn Java_com_yuraive_player_model_NativeGraphValidator_validateJsonNative<
     'local,
 >(
     mut env: JNIEnv<'local>,
@@ -1067,7 +1067,7 @@ pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeGraphValidator_valid
 
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeGraphMetadataExtractor_extractNative<
+pub extern "system" fn Java_com_yuraive_player_model_NativeGraphMetadataExtractor_extractNative<
     'local,
 >(
     mut env: JNIEnv<'local>,
@@ -1093,7 +1093,7 @@ pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeGraphMetadataExtract
 
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeBundleDecoder_decodeNative<'local>(
+pub extern "system" fn Java_com_yuraive_player_model_NativeBundleDecoder_decodeNative<'local>(
     env: JNIEnv<'local>,
     _this: JObject<'local>,
     input: JByteArray<'local>,
@@ -1111,7 +1111,7 @@ pub extern "system" fn Java_dev_hiro_wmgfplayer_model_NativeBundleDecoder_decode
 
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "system" fn Java_dev_hiro_wmgfplayer_playback_NativeStarlarkEngine_runJsonNative<
+pub extern "system" fn Java_com_yuraive_player_playback_NativeStarlarkEngine_runJsonNative<
     'local,
 >(
     mut env: JNIEnv<'local>,
@@ -1136,7 +1136,7 @@ pub extern "system" fn Java_dev_hiro_wmgfplayer_playback_NativeStarlarkEngine_ru
 
 #[no_mangle]
 #[cfg(not(target_arch = "wasm32"))]
-pub extern "system" fn Java_dev_hiro_wmgfplayer_ui_NativeButtonLayoutEngine_resolveJsonNative<
+pub extern "system" fn Java_com_yuraive_player_ui_NativeButtonLayoutEngine_resolveJsonNative<
     'local,
 >(
     mut env: JNIEnv<'local>,
@@ -1252,7 +1252,7 @@ mod tests {
               "end":{"type":"media","terminal":true}
             },
             "buttons":{"continue":{"targetSlot":"actions","order":10,"zIndex":2,"text":"Continue","style":{"opacity":0.8},"onPress":[{"to":"end","weight":1}]}},
-            "playerControls":{"default":{"layout":"default.wmg-layout.html"}},
+            "playerControls":{"default":{"layout":"default.yuraive-layout.html"}},
             "globalPlayerControl":"default"
         }"#,
         );
@@ -1268,7 +1268,7 @@ mod tests {
             "playbackStats":{"path":"scripts/stats.star"},
             "nodes":{"start":{"type":"media","start":true,"terminal":true}},
             "buttons":{},
-            "playerControls":{"default":{"accentColor":"#8065C4"}},
+            "playerControls":{"default":{"accentColor":"#574de5"}},
             "globalPlayerControl":"default"
         }"##,
         );

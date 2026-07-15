@@ -17,13 +17,13 @@ type RuntimeResponse = {
   error?: string
 }
 
-let runtimeModule: Promise<typeof import('./wasm/wmgf-runtime/wmgf_runtime')> | undefined
+let runtimeModule: Promise<typeof import('./wasm/yuraive-runtime/yuraive_runtime')> | undefined
 let ready: Promise<unknown> | undefined
 
 self.onmessage = async (event: MessageEvent<RunRequest>) => {
   const request = event.data
   try {
-    runtimeModule ??= import('./wasm/wmgf-runtime/wmgf_runtime')
+    runtimeModule ??= import('./wasm/yuraive-runtime/yuraive_runtime')
     const runtime = await runtimeModule
     ready ??= runtime.default()
     await ready

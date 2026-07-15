@@ -9,7 +9,7 @@ import { createStarlarkContext } from './scriptContext'
 import ScriptInspector from './ScriptInspector'
 import type { ScriptTestState } from './ScriptEditor'
 import { parseStarlarkErrorLocation, runStarlark } from './starlark'
-import type { AssetEntry, EditorTab, GraphDocument, GraphLayoutPlacement, LayoutDocument, MediaCandidate, PlaybackHistoryEntry, PlayerControlSettings, ScriptDocument, Transition, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode, WorkspaceFolder } from './types'
+import type { AssetEntry, EditorTab, GraphDocument, GraphLayoutPlacement, LayoutDocument, MediaCandidate, PlaybackHistoryEntry, PlayerControlSettings, ScriptDocument, Transition, ValidationIssue, YuraiveButton, YuraiveGraph, YuraiveMetadata, YuraiveNode, WorkspaceFolder } from './types'
 
 const ScriptEditor = lazy(() => import('./ScriptEditor').then((module) => ({ default: module.ScriptEditor })))
 
@@ -46,24 +46,24 @@ const Icon = ({ name, size = 16 }: { name: string; size?: number }) => {
 }
 
 const uid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
-const ASSET_DRAG_TYPE = 'application/x-wmgf-asset-path'
-const FOLDER_DRAG_TYPE = 'application/x-wmgf-folder-path'
-const SCRIPT_DRAG_TYPE = 'application/x-wmgf-script-uid'
-const LAYOUT_DRAG_TYPE = 'application/x-wmgf-layout-path'
-const LAYOUT_UID_DRAG_TYPE = 'application/x-wmgf-layout-uid'
-const TAB_DRAG_TYPE = 'application/x-wmgf-editor-tab'
+const ASSET_DRAG_TYPE = 'application/x-yuraive-asset-path'
+const FOLDER_DRAG_TYPE = 'application/x-yuraive-folder-path'
+const SCRIPT_DRAG_TYPE = 'application/x-yuraive-script-uid'
+const LAYOUT_DRAG_TYPE = 'application/x-yuraive-layout-path'
+const LAYOUT_UID_DRAG_TYPE = 'application/x-yuraive-layout-uid'
+const TAB_DRAG_TYPE = 'application/x-yuraive-editor-tab'
 let activeTreeDrag: { label: string; kind: 'folder' | 'media' | 'layout' } | null = null
-const draftKey = (workspace: string, path: string) => `wmgf-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
-const scriptDraftKey = (workspace: string, path: string) => `wmgf-script-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
-const layoutDraftKey = (workspace: string, path: string) => `wmgf-layout-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
-const BUNDLE_NOTICE_HIDDEN_KEY = 'wmgf-bundle-distribution-notice-hidden'
+const draftKey = (workspace: string, path: string) => `yuraive-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
+const scriptDraftKey = (workspace: string, path: string) => `yuraive-script-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
+const layoutDraftKey = (workspace: string, path: string) => `yuraive-layout-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
+const BUNDLE_NOTICE_HIDDEN_KEY = 'yuraive-bundle-distribution-notice-hidden'
 const defaultScriptSource = (name = 'script') => `# ${name}\n# ctx["history"]: 確定済み再生履歴（最大1000件）\n# ctx["current"]: 現在の再生状態 / ctx["totalActivePlayMs"]: 実再生時間の合計\n# random(), randint(start, end), choice(items), shuffled(items) が利用できます。\n\ndef jump(ctx):\n    """Script Nodeから遷移するNode IDを返します。"""\n    return None\n\ndef render(ctx):\n    """Buttonの表示内容を上書きします。"""\n    return {\n        "visible": True,\n        "text": "Continue",\n        "style": {},\n    }\n\ndef render_stats(ctx):\n    """1セッション分の再生統計を返します。"""\n    minutes = ctx["session"]["activePlayMs"] // 60000\n    return {\n        "sortValue": minutes,\n        "display": {\n            "schemaVersion": 1,\n            "fallbackText": "%s分再生" % minutes,\n            "root": {"type": "text", "text": "%s分再生" % minutes},\n        },\n    }\n`
 const scriptStem = (value: string) => value.trim().replace(/(?:\.star)+$/i, '')
 const scriptFileName = (value: string) => {
   const stem = scriptStem(value)
   return stem ? `${stem}.star` : ''
 }
-const layoutStem = (value: string) => value.trim().replace(/(?:\.wmg-layout\.html)+$/i, '')
+const layoutStem = (value: string) => value.trim().replace(/(?:\.yuraive-layout\.html)+$/i, '')
 const layoutFileName = (value: string) => {
   const stem = layoutStem(value)
   return stem ? `${stem}${LAYOUT_EXTENSION}` : ''
@@ -79,7 +79,7 @@ const restoreDrafts = (workspace: string, documents: GraphDocument[]) => documen
   const stored = localStorage.getItem(key)
   if (!stored) return document
   try {
-    const draft = JSON.parse(stored) as { graph?: WmgGraph; savedAt?: number }
+    const draft = JSON.parse(stored) as { graph?: YuraiveGraph; savedAt?: number }
     if (!draft.graph || !window.confirm(`「${document.path}」にブラウザへ自動保存された未保存データがあります。\n復元しますか？`)) {
       localStorage.removeItem(key)
       return document
@@ -138,7 +138,7 @@ const relativeLayouts = (document: GraphDocument, layouts: LayoutDocument[]) => 
   return layouts.map((layout) => ({ ...layout, path: parent && layout.path.startsWith(parent) ? layout.path.slice(parent.length) : layout.path }))
 }
 
-const serialize = (graph: WmgGraph) => `${JSON.stringify(graph, null, 2)}\n`
+const serialize = (graph: YuraiveGraph) => `${JSON.stringify(graph, null, 2)}\n`
 
 const mediaForAsset = (asset: AssetEntry, path: string, index: number): MediaCandidate | undefined => {
   const baseId = asset.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]+/g, '-') || `media-${index + 1}`
@@ -163,7 +163,7 @@ async function readDirectory(root: FileSystemDirectoryHandle) {
         await walk(entry, `${path}/`)
       } else {
         const file = await entry.getFile()
-        if (name.toLowerCase().endsWith('.wmg.json')) {
+        if (name.toLowerCase().endsWith('.yuraive.json')) {
           try {
             documents.push({ uid: uid(), name, path, graph: normalizeGraph(JSON.parse(await file.text())), dirty: false, handle: entry })
           } catch (error) {
@@ -354,7 +354,7 @@ function MediaEditor({ media, index, probabilityMode, assets, onChange, onRemove
   </details>
 }
 
-function ButtonEditor({ buttonId, button, nodes, nodeLabels, assets, scripts, onChange, onRename, onRemove, onPick, onOpenScript }: { buttonId: string; button: WmgButton; nodes: string[]; nodeLabels: Record<string, string>; assets: AssetEntry[]; scripts: ScriptDocument[]; onChange: (button: WmgButton) => void; onRename: (next: string) => void; onRemove: () => void; onPick: (id: string) => void; onOpenScript: (script: ScriptDocument) => void }) {
+function ButtonEditor({ buttonId, button, nodes, nodeLabels, assets, scripts, onChange, onRename, onRemove, onPick, onOpenScript }: { buttonId: string; button: YuraiveButton; nodes: string[]; nodeLabels: Record<string, string>; assets: AssetEntry[]; scripts: ScriptDocument[]; onChange: (button: YuraiveButton) => void; onRename: (next: string) => void; onRemove: () => void; onPick: (id: string) => void; onOpenScript: (script: ScriptDocument) => void }) {
   const details = useRef<HTMLDetailsElement>(null)
   const style = button.style ?? {}
   const intervals = button.visibility ?? []
@@ -369,7 +369,7 @@ function ButtonEditor({ buttonId, button, nodes, nodeLabels, assets, scripts, on
       <div className="two-col"><Field label="注入順 order"><NumberInput step={1} value={button.order ?? 0} onChange={(order) => onChange({ ...button, order })}/></Field><Field label="重なり z-index"><NumberInput step={1} value={button.zIndex ?? 0} onChange={(zIndex) => onChange({ ...button, zIndex })}/></Field></div>
       <div className="subheading">外観</div>
       <Field label="表示テキスト"><input value={button.text ?? ''} onChange={(event) => onChange({ ...button, text: event.target.value || undefined })}/></Field>
-      <div className="two-col"><Field label="背景色"><DebouncedColorInput value={style.backgroundColor?.slice(0, 7) ?? '#702bc4'} onCommit={(backgroundColor) => onChange({ ...button, style: { ...style, backgroundColor } })}/></Field><Field label="文字色"><DebouncedColorInput value={style.textColor?.slice(0, 7) ?? '#ffffff'} onCommit={(textColor) => onChange({ ...button, style: { ...style, textColor } })}/></Field></div>
+      <div className="two-col"><Field label="背景色"><DebouncedColorInput value={style.backgroundColor?.slice(0, 7) ?? '#574de5'} onCommit={(backgroundColor) => onChange({ ...button, style: { ...style, backgroundColor } })}/></Field><Field label="文字色"><DebouncedColorInput value={style.textColor?.slice(0, 7) ?? '#ffffff'} onCommit={(textColor) => onChange({ ...button, style: { ...style, textColor } })}/></Field></div>
       <Field label="背景画像"><PathPicker value={style.backgroundImage ?? ''} assets={assets} kinds={['image']} placeholder="レイアウトCSSを使用" onChange={(value) => onChange({ ...button, style: { ...style, backgroundImage: value || undefined } })}/></Field>
       <div className="three-col"><Field label="不透明度"><NumberInput min={0} max={1} step={.05} value={style.opacity ?? 1} onChange={(opacity) => onChange({ ...button, style: { ...style, opacity } })}/></Field><Field label="枠線幅"><NumberInput min={0} step={1} value={style.borderWidth ?? 0} onChange={(borderWidth) => onChange({ ...button, style: { ...style, borderWidth } })}/></Field><Field label="角丸"><NumberInput min={0} step={1} value={style.borderRadius ?? 0} onChange={(borderRadius) => onChange({ ...button, style: { ...style, borderRadius } })}/></Field></div>
       <div className="two-col"><Field label="文字サイズ"><NumberInput min={1} step={1} value={style.fontSize ?? 16} onChange={(fontSize) => onChange({ ...button, style: { ...style, fontSize } })}/></Field><Field label="文字ウェイト"><NumberInput min={1} max={1000} step={100} value={style.fontWeight ?? 600} onChange={(fontWeight) => onChange({ ...button, style: { ...style, fontWeight } })}/></Field></div>
@@ -395,7 +395,7 @@ function MetadataTagsInput({ tags, onCommit }: { tags?: string[]; onCommit: (tag
   return <input aria-label="グラフのタグ" value={draft} placeholder="ASMR, 睡眠" onChange={(event) => setDraft(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}/>
 }
 
-function SocialLinksEditor({ links, onChange }: { links: NonNullable<WmgMetadata['socialLinks']>; onChange: (links: NonNullable<WmgMetadata['socialLinks']>) => void }) {
+function SocialLinksEditor({ links, onChange }: { links: NonNullable<YuraiveMetadata['socialLinks']>; onChange: (links: NonNullable<YuraiveMetadata['socialLinks']>) => void }) {
   return <div className="social-links-editor">
     {links.map((link, index) => <div className="social-link-row" key={index}>
       <input aria-label={`ソーシャルリンク${index + 1}の名前`} value={link.label} placeholder="X / Web" onChange={(event) => onChange(links.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))}/>
@@ -406,24 +406,24 @@ function SocialLinksEditor({ links, onChange }: { links: NonNullable<WmgMetadata
   </div>
 }
 
-function GraphMetadataInspector({ graph, graphName, assets, scripts, onChange, onExportBundle }: { graph: WmgGraph; graphName: string; assets: AssetEntry[]; scripts: ScriptDocument[]; onChange: (graph: WmgGraph) => void; onExportBundle: () => void }) {
+function GraphMetadataInspector({ graph, graphName, assets, scripts, onChange, onExportBundle }: { graph: YuraiveGraph; graphName: string; assets: AssetEntry[]; scripts: ScriptDocument[]; onChange: (graph: YuraiveGraph) => void; onExportBundle: () => void }) {
   const metadata = graph.metadata ?? {}
-  const commit = (next: WmgMetadata) => {
-    const compact = Object.fromEntries(Object.entries(next).filter(([, value]) => Array.isArray(value) ? value.length > 0 : typeof value === 'string' ? value.trim().length > 0 : value !== undefined)) as WmgMetadata
+  const commit = (next: YuraiveMetadata) => {
+    const compact = Object.fromEntries(Object.entries(next).filter(([, value]) => Array.isArray(value) ? value.length > 0 : typeof value === 'string' ? value.trim().length > 0 : value !== undefined)) as YuraiveMetadata
     const nextGraph = { ...graph }
     delete nextGraph.metadata
     if (Object.keys(compact).length) nextGraph.metadata = compact
     onChange(nextGraph)
   }
-  const text = (key: keyof Pick<WmgMetadata, 'contentId' | 'displayName' | 'description' | 'author' | 'createdAt' | 'updatedAt'>, value: string) => commit({ ...metadata, [key]: value })
+  const text = (key: keyof Pick<YuraiveMetadata, 'contentId' | 'displayName' | 'description' | 'author' | 'createdAt' | 'updatedAt'>, value: string) => commit({ ...metadata, [key]: value })
   const dateField = (key: 'createdAt' | 'updatedAt', label: string) => <Field label={label} hint="RFC 3339 / ISO 8601"><div className="metadata-date-field"><input value={metadata[key] ?? ''} placeholder="2026-07-13T12:00:00+09:00" onChange={(event) => text(key, event.target.value)}/><button type="button" className="mini-button" onClick={() => text(key, new Date().toISOString())}>現在</button></div></Field>
   return <aside className="inspector graph-metadata-inspector" data-testid="graph-metadata-inspector">
-    <div className="panel-title"><span>グラフ情報</span><small>WMGF v1</small></div>
+    <div className="panel-title"><span>グラフ情報</span><small>Yuraive v1</small></div>
     <div className="inspector-scroll">
       <div className="graph-file-card"><span><Icon name="code" size={15}/></span><div><strong>{metadata.displayName || graphName}</strong><small>{graphName}</small></div></div>
       <Section title="一般情報">
-        <Field label="コンテンツID" hint="同じIDのWMGFは同じ作品の統計として集計されます。com.example.groupId形式を推奨します"><div className="metadata-date-field"><input aria-label="コンテンツID" value={metadata.contentId ?? ''} placeholder="com.example.work" onChange={(event) => text('contentId', event.target.value)}/><button type="button" className="mini-button" onClick={() => text('contentId', crypto.randomUUID?.() ?? uid())}>新規ID</button></div></Field>
-        <Field label="表示名"><input aria-label="グラフの表示名" value={metadata.displayName ?? ''} placeholder={graphName.replace(/\.wmg\.json$/i, '')} onChange={(event) => text('displayName', event.target.value)}/></Field>
+        <Field label="コンテンツID" hint="同じIDのYuraiveは同じ作品の統計として集計されます。com.example.groupId形式を推奨します"><div className="metadata-date-field"><input aria-label="コンテンツID" value={metadata.contentId ?? ''} placeholder="com.example.work" onChange={(event) => text('contentId', event.target.value)}/><button type="button" className="mini-button" onClick={() => text('contentId', crypto.randomUUID?.() ?? uid())}>新規ID</button></div></Field>
+        <Field label="表示名"><input aria-label="グラフの表示名" value={metadata.displayName ?? ''} placeholder={graphName.replace(/\.yuraive\.json$/i, '')} onChange={(event) => text('displayName', event.target.value)}/></Field>
         <Field label="説明"><textarea aria-label="グラフの説明" rows={5} value={metadata.description ?? ''} placeholder="このグラフの用途や内容" onChange={(event) => text('description', event.target.value)}/></Field>
         <Field label="作者"><input aria-label="グラフの作者" value={metadata.author ?? ''} placeholder="作者名" onChange={(event) => text('author', event.target.value)}/></Field>
         <Field label="サムネイル"><PathPicker value={metadata.thumbnail ?? ''} assets={assets} kinds={['image']} placeholder="任意" onChange={(thumbnail) => commit({ ...metadata, thumbnail: thumbnail || undefined })}/></Field>
@@ -471,7 +471,7 @@ function PlayerControlInspector({ controlId, control, layouts, issues, global, u
         <Field label="グラフカラー"><div className="color-field"><DebouncedColorInput value={control.editor?.color ?? '#4f8c78'} onCommit={(color) => onChange({ ...control, editor: { ...control.editor, color } })}/><input value={control.editor?.color ?? '#4f8c78'} onChange={(event) => onChange({ ...control, editor: { ...control.editor, color: event.target.value } })}/></div></Field>
         <Field label="ボタンレイアウト" hint="ファイルツリーからノード上部のポートへドロップしても接続できます"><div className="script-reference"><select value={control.layout ?? ''} onChange={(event) => onChange({ ...control, layout: event.target.value || undefined })}><option value="">未接続</option>{layouts.map((layout) => <option value={layout.path} key={layout.uid}>{layout.path}</option>)}</select>{control.layout && <button className="icon-button" title="レイアウトを開く" onClick={() => { const layout = layouts.find((item) => item.path === control.layout); if (layout) onOpenLayout(layout) }}><Icon name="fit" size={13}/></button>}</div></Field>
         <label className="check-row global-control-check"><input type="checkbox" checked={global} onChange={(event) => onGlobal(event.target.checked)}/><span><strong>グローバル設定</strong><small>個別設定がない全Media Nodeへ適用</small></span></label>
-        <label className="check-row"><input type="checkbox" checked={Boolean(control.accentColor)} onChange={(event) => onChange({ ...control, accentColor: event.target.checked ? '#8065c4' : undefined })}/><span><strong>プレイヤーのアクセント色</strong><small>白・黒に近すぎない#RRGGBBのみ使用できます</small></span></label>
+        <label className="check-row"><input type="checkbox" checked={Boolean(control.accentColor)} onChange={(event) => onChange({ ...control, accentColor: event.target.checked ? '#574de5' : undefined })}/><span><strong>プレイヤーのアクセント色</strong><small>白・黒に近すぎない#RRGGBBのみ使用できます</small></span></label>
         {control.accentColor && <Field label="アクセントカラー"><div className="color-field"><DebouncedColorInput value={control.accentColor} onCommit={(accentColor) => onChange({ ...control, accentColor })}/><input aria-label="アクセントカラー" value={control.accentColor} onChange={(event) => onChange({ ...control, accentColor: event.target.value })}/></div></Field>}
       </Section>
       <Section title="表示">{section('visibility')}</Section>
@@ -499,7 +499,7 @@ function GraphLayoutInspector({ path, placement, layout, connectedControls, onCh
   </aside>
 }
 
-function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probabilityMode, issues, onChangeGraph, onChange, onChangeButton, onSetStart, onSetTerminal, onRename, onRenameButton, onDelete, onDeleteButton, onPick, onPickButton, onAddButton, onDetachButton, onAssetDrop, onFolderDrop, onOpenScript, onExportBundle }: { nodeId: string | null; buttonId: string | null; graph: WmgGraph; graphName: string; assets: AssetEntry[]; scripts: ScriptDocument[]; probabilityMode: boolean; issues: ValidationIssue[]; onChangeGraph: (graph: WmgGraph) => void; onChange: (node: WmgNode) => void; onChangeButton: (button: WmgButton) => void; onSetStart: (enabled: boolean) => void; onSetTerminal: (enabled: boolean) => void; onRename: (next: string) => void; onRenameButton: (next: string) => void; onDelete: () => void; onDeleteButton: () => void; onPick: (id: string) => void; onPickButton: (id: string) => void; onAddButton: (nodeId: string) => void; onDetachButton: (nodeId: string, buttonId: string) => void; onAssetDrop: (path: string) => void; onFolderDrop: (path: string) => void; onOpenScript: (script: ScriptDocument) => void; onExportBundle: () => void }) {
+function Inspector({ nodeId, buttonId, graph, graphName, assets, scripts, probabilityMode, issues, onChangeGraph, onChange, onChangeButton, onSetStart, onSetTerminal, onRename, onRenameButton, onDelete, onDeleteButton, onPick, onPickButton, onAddButton, onDetachButton, onAssetDrop, onFolderDrop, onOpenScript, onExportBundle }: { nodeId: string | null; buttonId: string | null; graph: YuraiveGraph; graphName: string; assets: AssetEntry[]; scripts: ScriptDocument[]; probabilityMode: boolean; issues: ValidationIssue[]; onChangeGraph: (graph: YuraiveGraph) => void; onChange: (node: YuraiveNode) => void; onChangeButton: (button: YuraiveButton) => void; onSetStart: (enabled: boolean) => void; onSetTerminal: (enabled: boolean) => void; onRename: (next: string) => void; onRenameButton: (next: string) => void; onDelete: () => void; onDeleteButton: () => void; onPick: (id: string) => void; onPickButton: (id: string) => void; onAddButton: (nodeId: string) => void; onDetachButton: (nodeId: string, buttonId: string) => void; onAssetDrop: (path: string) => void; onFolderDrop: (path: string) => void; onOpenScript: (script: ScriptDocument) => void; onExportBundle: () => void }) {
   const node = nodeId ? graph.nodes[nodeId] : undefined
   const button = buttonId ? graph.buttons[buttonId] : undefined
   const nodeIds = Object.keys(graph.nodes)
@@ -576,7 +576,7 @@ type GraphEdgeRef = { from: string; to: string; index: number; type: 'end' | 'bu
 type ConnectionDraft = { from: string; type: 'end' | 'button' | 'attachment' | 'control' | 'layout'; x: number; y: number }
 
 type GraphCanvasProps = {
-  graph: WmgGraph; layouts: LayoutDocument[]; selectedNode: string | null; selectedButton: string | null; selectedPlayerControl: string | null; selectedLayout: string | null; probabilityMode: boolean; showWeights: boolean; view: View
+  graph: YuraiveGraph; layouts: LayoutDocument[]; selectedNode: string | null; selectedButton: string | null; selectedPlayerControl: string | null; selectedLayout: string | null; probabilityMode: boolean; showWeights: boolean; view: View
   onView: (view: View) => void; onSelectNode: (id: string | null) => void; onSelectButton: (id: string) => void; onSelectPlayerControl: (id: string) => void; onSelectLayout: (path: string) => void
   onMoveNode: (id: string, x: number, y: number) => void; onMoveButton: (id: string, x: number, y: number) => void; onMovePlayerControl: (id: string, x: number, y: number) => void; onMoveLayout: (path: string, x: number, y: number) => void
   onAddNode: (x: number, y: number) => void; onAddScriptNode: (x: number, y: number) => void; onAddButton: (x: number, y: number) => void; onAddLayout: (x: number, y: number, path?: string) => void; onAddPlayerControl: (x: number, y: number) => void
@@ -616,7 +616,7 @@ function GraphCanvas({ graph, layouts, selectedNode, selectedButton, selectedPla
   const layoutEdges = playerControlEntries.flatMap(([to, control]) => control.layout && graph.editor?.layouts?.[control.layout] ? [{ from: control.layout, to, index: 0, type: 'layout' as const }] : [])
   const edges = [...transitionEdges, ...attachmentEdges, ...controlEdges, ...layoutEdges]
   const edgeRef = (edge: typeof edges[number]): GraphEdgeRef => ({ from: edge.from, to: edge.to, index: edge.index, type: edge.type })
-  const isCompactNode = (node: WmgNode) => node.type === 'script' || !(node.media?.length)
+  const isCompactNode = (node: YuraiveNode) => node.type === 'script' || !(node.media?.length)
   const point = (id: string, side: 'in' | 'out') => {
     const node = graph.nodes[id]
     const compact = isCompactNode(node)
@@ -831,13 +831,13 @@ function Welcome({ busy, onOpen, onFallback }: { busy: boolean; onOpen: () => vo
   const [showHelp, setShowHelp] = useState(false)
   useEffect(() => { input.current?.setAttribute('webkitdirectory', '') }, [])
   return <main className="welcome">
-    <div className="welcome-mark"><span/><span/><span/></div>
-    <h1>WMGF Editor</h1>
+    <img className="welcome-logo" src="/favicon.svg" alt="" />
+    <h1>Yuraive Editor</h1>
     <button className="open-folder" onClick={window.showDirectoryPicker ? onOpen : () => input.current?.click()} disabled={busy}><Icon name="folder" size={19}/>{busy ? 'フォルダを読み込み中…' : 'コンテンツフォルダを開く'}</button>
     <button className="welcome-help-button" aria-label="ヘルプ" title="ヘルプ" onClick={() => setShowHelp(!showHelp)}>?</button>
     {showHelp && <div className="welcome-help" role="dialog" aria-label="ヘルプ">
       <header><strong>ヘルプ</strong><button className="icon-button" aria-label="閉じる" onClick={() => setShowHelp(false)}><Icon name="close" size={13}/></button></header>
-      <p>WMGFファイルを含むコンテンツフォルダを選択してください。</p>
+      <p>Yuraiveファイルを含むコンテンツフォルダを選択してください。</p>
       <p>{window.showDirectoryPicker ? 'グラフとメディアを読み込み、変更をフォルダへ保存します。' : 'このブラウザでは保存時にJSONファイルをダウンロードします。'}</p>
     </div>}
     <input ref={input} type="file" multiple hidden onChange={(event) => event.target.files && onFallback(event.target.files)}/>
@@ -871,7 +871,7 @@ function InlineNameInput({ edit, testId = 'tree-name-input', onChange, onCommit,
     if (!completed) window.requestAnimationFrame(() => { input.current?.focus(); input.current?.select() })
   }
   return <label className="tree-inline-control" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
-    <input ref={input} data-testid={testId} aria-label={edit.mode === 'create' ? '新しい項目の名前' : '新しいファイル名'} autoFocus value={edit.name} spellCheck={false} onChange={(event) => onChange(edit.kind === 'script' ? event.target.value.replace(/(?:\.star)+$/i, '') : edit.kind === 'layout' ? event.target.value.replace(/(?:\.wmg-layout\.html)+$/i, '') : event.target.value)} onFocus={(event) => event.currentTarget.select()} onBlur={() => void commit()} onKeyDown={(event) => {
+    <input ref={input} data-testid={testId} aria-label={edit.mode === 'create' ? '新しい項目の名前' : '新しいファイル名'} autoFocus value={edit.name} spellCheck={false} onChange={(event) => onChange(edit.kind === 'script' ? event.target.value.replace(/(?:\.star)+$/i, '') : edit.kind === 'layout' ? event.target.value.replace(/(?:\.yuraive-layout\.html)+$/i, '') : event.target.value)} onFocus={(event) => event.currentTarget.select()} onBlur={() => void commit()} onKeyDown={(event) => {
       event.stopPropagation()
       if (event.key === 'Escape') { event.preventDefault(); cancelled.current = true; onCancel() }
       if (event.key === 'Enter') { event.preventDefault(); void commit() }
@@ -986,7 +986,7 @@ function BundleExportNotice({ onClose }: { onClose: (hidePermanently: boolean) =
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose(hidePermanently)}>
     <section className="bundle-export-notice" role="dialog" aria-modal="true" aria-labelledby="bundle-export-title">
       <header><div><Icon name="check" size={15}/><strong id="bundle-export-title">プレイヤー用バイナリを出力しました</strong></div><button className="icon-button" aria-label="閉じる" onClick={() => onClose(hidePermanently)}><Icon name="close" size={13}/></button></header>
-      <div><p><code>.wmg</code> にはグラフ、Starlarkスクリプト、ボタンレイアウトが含まれています。配布時に元の <code>.wmg.json</code>、<code>.star</code>、<code>.wmg-layout.html</code> を添える必要はありません。</p><p>音声・動画・画像・字幕はバンドルに含まれません。相対パスを保ったまま一緒に配布してください。</p></div>
+      <div><p><code>.yuraive</code> にはグラフ、Starlarkスクリプト、ボタンレイアウトが含まれています。配布時に元の <code>.yuraive.json</code>、<code>.star</code>、<code>.yuraive-layout.html</code> を添える必要はありません。</p><p>音声・動画・画像・字幕はバンドルに含まれません。相対パスを保ったまま一緒に配布してください。</p></div>
       <footer><label className="check-row"><input type="checkbox" checked={hidePermanently} onChange={(event) => setHidePermanently(event.target.checked)}/>今後この案内を表示しない</label><button className="primary-button compact" onClick={() => onClose(hidePermanently)}>閉じる</button></footer>
     </section>
   </div>
@@ -1027,8 +1027,8 @@ function App() {
   const [treeInlineEdit, setTreeInlineEdit] = useState<TreeInlineEdit | null>(null)
   const [scriptTests, setScriptTests] = useState<Record<string, ScriptTestState>>({})
   const [previewHistories, setPreviewHistories] = useState<Record<string, PlaybackHistoryEntry[]>>({})
-  const [leftWidth, setLeftWidth] = useState(() => Number(localStorage.getItem('wmgf-left-width')) || 220)
-  const [rightWidth, setRightWidth] = useState(() => Number(localStorage.getItem('wmgf-right-width')) || 330)
+  const [leftWidth, setLeftWidth] = useState(() => Number(localStorage.getItem('yuraive-left-width')) || 220)
+  const [rightWidth, setRightWidth] = useState(() => Number(localStorage.getItem('yuraive-right-width')) || 330)
   const active = documents.find((document) => document.uid === activeUid)
   const activeScriptUid = activeTab?.startsWith('script:') ? activeTab.slice(7) : null
   const activeScript = scripts.find((script) => script.uid === activeScriptUid)
@@ -1174,7 +1174,7 @@ function App() {
       const rawPath = file.webkitRelativePath || file.name
       const path = rawPath.startsWith(`${commonRoot}/`) ? rawPath.slice(commonRoot.length + 1) : rawPath
       const parts = path.split('/'); parts.pop(); let folder = ''; parts.forEach((part) => { folder = folder ? `${folder}/${part}` : part; if (folder) folderPaths.add(folder) })
-      if (path.toLowerCase().endsWith('.wmg.json')) {
+      if (path.toLowerCase().endsWith('.yuraive.json')) {
         try { docs.push({ uid: uid(), name: file.name, path, graph: normalizeGraph(JSON.parse(await file.text())), dirty: false }) } catch { notify(`${path} を読み込めませんでした`) }
       } else if (path.toLowerCase().endsWith('.star')) nextScripts.push({ uid: uid(), name: file.name, path, content: await file.text(), dirty: false })
       else if (path.toLowerCase().endsWith(LAYOUT_EXTENSION)) nextLayouts.push({ uid: uid(), name: file.name, path, content: await file.text(), dirty: false })
@@ -1191,8 +1191,8 @@ function App() {
   const updateActive = useCallback((updater: (document: GraphDocument) => GraphDocument) => {
     setDocuments((current) => current.map((document) => document.uid === activeUid ? updater(document) : document))
   }, [activeUid])
-  const updateGraph = useCallback((graph: WmgGraph) => updateActive((document) => ({ ...document, graph, dirty: true })), [updateActive])
-  const updateNode = (node: WmgNode) => {
+  const updateGraph = useCallback((graph: YuraiveGraph) => updateActive((document) => ({ ...document, graph, dirty: true })), [updateActive])
+  const updateNode = (node: YuraiveNode) => {
     if (!active || !selectedNode) return
     const nodes = Object.fromEntries(Object.entries(active.graph.nodes).map(([id, current]) => [id, node.start && id !== selectedNode ? { ...current, start: false } : current]))
     nodes[selectedNode] = node
@@ -1223,7 +1223,7 @@ function App() {
   const renameNode = (next: string) => {
     if (!active || !selectedNode || next === selectedNode) return
     if (!next || active.graph.nodes[next]) { notify(!next ? 'ノードIDは空にできません' : '同じノードIDが既にあります'); return }
-    const nodes: Record<string, WmgNode> = {}
+    const nodes: Record<string, YuraiveNode> = {}
     Object.entries(active.graph.nodes).forEach(([id, node]) => { nodes[id === selectedNode ? next : id] = { ...node, onEnd: node.onEnd?.map((transition) => transition.to === selectedNode ? { ...transition, to: next } : transition) } })
     const buttons = Object.fromEntries(Object.entries(active.graph.buttons).map(([id, button]) => [id, { ...button, onPress: button.onPress?.map((transition) => transition.to === selectedNode ? { ...transition, to: next } : transition) }]))
     updateGraph({ ...active.graph, nodes, buttons }); setSelectedNode(next)
@@ -1250,7 +1250,7 @@ function App() {
     if (selectedNode === nodeId) setSelectedNode(null)
   }
   const deleteNode = () => { if (selectedNode) deleteNodeById(selectedNode) }
-  const updateSelectedButton = (button: WmgButton) => {
+  const updateSelectedButton = (button: YuraiveButton) => {
     if (!active || !selectedButton || !active.graph.buttons[selectedButton]) return
     updateGraph({ ...active.graph, buttons: { ...active.graph.buttons, [selectedButton]: button } })
   }
@@ -1367,7 +1367,7 @@ function App() {
     const replace = (transitions: Transition[]) => transitions.map((transition, index) => index === edge.index ? { ...transition, to: id } : transition)
     const x = ((sourcePosition.x ?? 0) + (destination.editor?.x ?? 0)) / 2
     const y = ((sourcePosition.y ?? 0) + (destination.editor?.y ?? 0)) / 2
-    const node: WmgNode = { type: 'media', media: [], onEnd: [{ to: edge.to, weight: 1 }], buttons: [], editor: { x: Math.round(x), y: Math.round(y), label: `Node ${number}`, color: nextNodeColor(active.graph.nodes) } }
+    const node: YuraiveNode = { type: 'media', media: [], onEnd: [{ to: edge.to, weight: 1 }], buttons: [], editor: { x: Math.round(x), y: Math.round(y), label: `Node ${number}`, color: nextNodeColor(active.graph.nodes) } }
     if (edge.type === 'end') {
       const source = active.graph.nodes[edge.from]
       updateGraph({ ...active.graph, nodes: { ...active.graph.nodes, [edge.from]: { ...source, onEnd: replace(source.onEnd ?? []) }, [id]: node } })
@@ -1400,7 +1400,7 @@ function App() {
     let number = Object.keys(active.graph.buttons).length + 1
     while (active.graph.buttons[`button-${number}`]) number++
     const id = `button-${number}`
-    const button: WmgButton = { targetSlot: 'actions', order: number * 10, zIndex: 0, text: `Button ${number}`, style: { backgroundColor: '#702bc4', textColor: '#ffffff', opacity: 1, borderWidth: 0, borderRadius: 18, fontSize: 16, fontWeight: 600, paddingHorizontal: 20, paddingVertical: 12 }, onPress: [], editor: { x: Math.round(x), y: Math.round(y), color: nextButtonColor(active.graph.buttons) } }
+    const button: YuraiveButton = { targetSlot: 'actions', order: number * 10, zIndex: 0, text: `Button ${number}`, style: { backgroundColor: '#574de5', textColor: '#ffffff', opacity: 1, borderWidth: 0, borderRadius: 18, fontSize: 16, fontWeight: 600, paddingHorizontal: 20, paddingVertical: 12 }, onPress: [], editor: { x: Math.round(x), y: Math.round(y), color: nextButtonColor(active.graph.buttons) } }
     const nodes = attachToNode && active.graph.nodes[attachToNode] && !active.graph.nodes[attachToNode].terminal ? { ...active.graph.nodes, [attachToNode]: { ...active.graph.nodes[attachToNode], buttons: [...(active.graph.nodes[attachToNode].buttons ?? []), id] } } : active.graph.nodes
     updateGraph({ ...active.graph, nodes, buttons: { ...active.graph.buttons, [id]: button } })
     setSelectedNode(null); setSelectedButton(id); setSelectedPlayerControl(null); setSelectedGraphLayout(null)
@@ -1579,8 +1579,8 @@ function App() {
   }
   const newDocument = () => {
     let number = documents.length + 1
-    while (documents.some((document) => document.name === `graph-${number}.wmg.json`)) number++
-    const document: GraphDocument = { uid: uid(), name: `graph-${number}.wmg.json`, path: `graph-${number}.wmg.json`, graph: createGraph(), dirty: true }
+    while (documents.some((document) => document.name === `graph-${number}.yuraive.json`)) number++
+    const document: GraphDocument = { uid: uid(), name: `graph-${number}.yuraive.json`, path: `graph-${number}.yuraive.json`, graph: createGraph(), dirty: true }
     if (!layouts.some((layout) => layout.path === `default${LAYOUT_EXTENSION}`)) {
       setLayouts((current) => [...current, { uid: uid(), name: `default${LAYOUT_EXTENSION}`, path: `default${LAYOUT_EXTENSION}`, content: DEFAULT_LAYOUT_SOURCE, dirty: true }])
     }
@@ -1588,10 +1588,10 @@ function App() {
   }
   const duplicateDocument = (target: GraphDocument) => {
     const parent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/') + 1) : ''
-    const stem = target.name.replace(/\.wmg\.json$/i, '')
+    const stem = target.name.replace(/\.yuraive\.json$/i, '')
     let number = 1
-    let name = `${stem}-copy.wmg.json`
-    while (documents.some((document) => document.path.toLowerCase() === `${parent}${name}`.toLowerCase())) name = `${stem}-copy-${++number}.wmg.json`
+    let name = `${stem}-copy.yuraive.json`
+    while (documents.some((document) => document.path.toLowerCase() === `${parent}${name}`.toLowerCase())) name = `${stem}-copy-${++number}.yuraive.json`
     const copy: GraphDocument = { uid: uid(), name, path: `${parent}${name}`, graph: structuredClone(target.graph), dirty: true }
     setDocuments((current) => current.flatMap((document) => document.uid === target.uid ? [document, copy] : [document]))
     setOpenTabs((tabs) => [...tabs, { kind: 'graph', uid: copy.uid }]); setActiveTab(`graph:${copy.uid}`); setActiveUid(copy.uid)
@@ -1624,7 +1624,7 @@ function App() {
     let name = requestedName.trim()
     if (!name) { notify('ファイル名は空にできません'); return false }
     if (name.includes('/') || name.includes('\\')) { notify('ファイル名にパス区切りは使用できません'); return false }
-    if (!name.toLowerCase().endsWith('.wmg.json')) name = `${name.replace(/\.json$/i, '')}.wmg.json`
+    if (!name.toLowerCase().endsWith('.yuraive.json')) name = `${name.replace(/\.json$/i, '')}.yuraive.json`
     if (name === target.name) return true
     const parent = target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/') + 1) : ''
     const nextPath = `${parent}${name}`
@@ -1997,7 +1997,7 @@ function App() {
         schemaVersion: 1,
         id: 'sample-history-1',
         runId: 'test-run',
-        graphId: active?.path ?? 'preview.wmg.json',
+        graphId: active?.path ?? 'preview.yuraive.json',
         nodeId: 'previous-node',
         mediaId: 'previous-media',
         source: 'audio/sample.mp3',
@@ -2015,7 +2015,7 @@ function App() {
       const contextHistory = selectedHistory.length ? previewHistory : sampleHistory
       const runStartedAt = sampleHistory[0]?.startedAt ?? fallbackRunStartedAt
       const baseContext = createStarlarkContext({
-        graphId: active?.path ?? 'preview.wmg.json',
+        graphId: active?.path ?? 'preview.yuraive.json',
         runId: sampleHistory[0]?.runId ?? 'test-run',
         runStartedAt,
         history: contextHistory,
@@ -2059,7 +2059,7 @@ function App() {
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
-      localStorage.setItem(`wmgf-${side}-width`, String(latestWidth))
+      localStorage.setItem(`yuraive-${side}-width`, String(latestWidth))
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -2088,7 +2088,7 @@ function App() {
         setAssets((items) => [...items.filter((item) => item.path !== path), { name, path, kind: fileKind(path), file }])
         notify(`${name} を出力しました`)
       } else {
-        const blob = new Blob([bytes], { type: 'application/vnd.wmgf.bundle' })
+        const blob = new Blob([bytes], { type: 'application/vnd.yuraive.bundle' })
         const url = URL.createObjectURL(blob)
         const link = document.createElement('a')
         link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url)
@@ -2161,7 +2161,7 @@ function App() {
 
   if (!rootName) return <><Welcome busy={busy} onOpen={() => void openDirectory()} onFallback={(files) => void openFallback(files)}/>{toast && <div className="toast">{toast}</div>}</>
   return <div className="app-shell" onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' } }} onDrop={(event) => { if (!event.dataTransfer.types.includes('Files')) return; event.preventDefault(); const promises = Array.from(event.dataTransfer.items).map((item) => (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> }).getAsFileSystemHandle?.() ?? Promise.resolve(null)); void importDroppedHandles(promises) }}>
-    <header className="titlebar"><div className="brand"><div className="brand-mark"><span/><span/><span/></div><strong>WMGF</strong><span>Editor</span></div><nav><div className="menu-anchor"><button onPointerDown={(event) => event.stopPropagation()} onClick={() => setShowFileMenu(!showFileMenu)}>ファイル</button>{showFileMenu && <div className="app-menu" onPointerDown={(event) => event.stopPropagation()}><button disabled={!activeTab} onClick={() => { void saveCurrent(); setShowFileMenu(false) }}><Icon name="save" size={13}/><span>保存</span><kbd>Ctrl+S</kbd></button><div className="menu-separator"/><button onClick={() => { setShowFileMenu(false); requestOpenDirectory() }}><Icon name="folder" size={13}/><span>新しいフォルダを開く</span></button></div>}</div></nav><div className="title-actions"><span className="workspace-name"><Icon name="folder" size={13}/>{rootName}</span><button className="toolbar-button" disabled={!activeTab} onClick={() => void saveCurrent()}><Icon name="save" size={14}/>保存</button><button className="primary-button compact" disabled={!active} onClick={() => setShowPreview(true)}><Icon name="play" size={13}/>プレビュー</button></div></header>
+    <header className="titlebar"><div className="brand"><img className="brand-logo" src="/favicon.svg" alt=""/><strong>Yuraive</strong><span>Editor</span></div><nav><div className="menu-anchor"><button onPointerDown={(event) => event.stopPropagation()} onClick={() => setShowFileMenu(!showFileMenu)}>ファイル</button>{showFileMenu && <div className="app-menu" onPointerDown={(event) => event.stopPropagation()}><button disabled={!activeTab} onClick={() => { void saveCurrent(); setShowFileMenu(false) }}><Icon name="save" size={13}/><span>保存</span><kbd>Ctrl+S</kbd></button><div className="menu-separator"/><button onClick={() => { setShowFileMenu(false); requestOpenDirectory() }}><Icon name="folder" size={13}/><span>新しいフォルダを開く</span></button></div>}</div></nav><div className="title-actions"><span className="workspace-name"><Icon name="folder" size={13}/>{rootName}</span><button className="toolbar-button" disabled={!activeTab} onClick={() => void saveCurrent()}><Icon name="save" size={14}/>保存</button><button className="primary-button compact" disabled={!active} onClick={() => setShowPreview(true)}><Icon name="play" size={13}/>プレビュー</button></div></header>
     <div className="workspace" style={{ gridTemplateColumns: `${leftWidth}px 4px minmax(360px, 1fr) 4px ${rightWidth}px` }}><Suspense fallback={<div className="workspace-loading">エディタを読み込み中…</div>}>
       <aside className="explorer"><div className="panel-title"><span>ファイル</span><div><button className="icon-button" data-testid="tree-reload" title="ファイルツリーを再読み込み" disabled={!root || busy} onClick={() => void reloadDirectory()}><Icon name="refresh" size={13}/></button><button className="icon-button" data-testid="tree-expand-all" title="すべて展開" onClick={() => setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: true }))}><Icon name="expandAll" size={13}/></button><button className="icon-button" data-testid="tree-collapse-all" title="すべて折りたたむ" onClick={() => setTreeExpansionCommand((command) => ({ id: command.id + 1, expanded: false }))}><Icon name="collapseAll" size={13}/></button><button className="icon-button" title="新規グラフ" onClick={newDocument}><Icon name="plus" size={14}/></button><button className="icon-button" title="新しいフォルダを開く" onClick={requestOpenDirectory}><Icon name="folder" size={14}/></button></div></div><div className="explorer-scroll">
         <FileTree documents={documents} scripts={scripts} layouts={layouts} folders={folders} assets={assets} activeTab={activeTab} inlineEdit={treeInlineEdit} expansionCommand={treeExpansionCommand} getAssetPath={(asset) => docAssets.find((item) => item.file === asset.file)?.path ?? asset.path} getLayoutPath={(layout) => docLayouts.find((item) => item.uid === layout.uid)?.path ?? layout.path} getFolderPath={(path) => { const parent = active?.path.includes('/') ? active.path.slice(0, active.path.lastIndexOf('/') + 1) : ''; return parent && path.startsWith(parent) ? path.slice(parent.length) : path }} onOpenGraph={openGraphTab} onOpenScript={openScriptTab} onOpenLayout={openLayoutTab} onPreview={setPreviewAsset} onContextMenu={(target, event) => { event.preventDefault(); event.stopPropagation(); setTreeMenu({ target, x: Math.min(event.clientX, window.innerWidth - 250), y: Math.min(event.clientY, window.innerHeight - 210) }) }} onInlineChange={(name) => setTreeInlineEdit((edit) => edit ? { ...edit, name } : edit)} onInlineCommit={commitTreeInlineEdit} onInlineCancel={() => { treeInlineCommit.current = null; setTreeInlineEdit(null) }} onMoveScript={moveScript} onMoveLayout={moveLayout}/>
@@ -2245,7 +2245,7 @@ function App() {
         onOpenLayout={(layout) => { const original = layouts.find((item) => item.uid === layout.uid); if (original) openLayoutTab(original) }}
       /> : <Inspector nodeId={selectedNode} buttonId={selectedButton} graph={active.graph} graphName={active.name} assets={docAssets} scripts={docScripts} probabilityMode={probabilityMode} issues={issues} onChangeGraph={updateGraph} onChange={updateNode} onChangeButton={updateSelectedButton} onSetStart={setSelectedNodeStart} onSetTerminal={setSelectedNodeTerminal} onRename={renameNode} onRenameButton={renameButton} onDelete={deleteNode} onDeleteButton={() => selectedButton && deleteButtonById(selectedButton)} onPick={(id) => { setSelectedNode(id); setSelectedButton(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }} onPickButton={(id) => { setSelectedButton(id); setSelectedNode(null); setSelectedPlayerControl(null); setSelectedGraphLayout(null) }} onAddButton={(nodeId) => { const node = active.graph.nodes[nodeId]; addButton((node.editor?.x ?? 0) + 17, (node.editor?.y ?? 0) + 110, nodeId) }} onDetachButton={detachButton} onAssetDrop={(path) => selectedNode && bindAssetToNode(selectedNode, path)} onFolderDrop={(path) => selectedNode && appendFolderToNode(selectedNode, path)} onOpenScript={openScriptTab} onExportBundle={() => void exportBundle()}/> : <aside className="inspector"><div className="panel-title"><span>インスペクター</span></div><div className="blank-panel"><Icon name="target" size={30}/></div></aside>}
     </Suspense></div>
-    <footer className="statusbar"><button className={issues.some((issue) => issue.severity === 'error') ? 'has-error' : ''} onClick={() => setShowProblems(!showProblems)}>{issues.length ? <Icon name="warning" size={12}/> : <Icon name="check" size={12}/>} {issues.filter((issue) => issue.severity === 'error').length} エラー　{issues.filter((issue) => issue.severity === 'warning').length} 警告</button><div><span>WMGF v1</span><span>{active ? `${Object.keys(active.graph.nodes).length} Node · ${Object.keys(active.graph.buttons).length} Button · ${Object.keys(active.graph.playerControls).length} Controls` : 'グラフなし'}</span><span>{scripts.length} Script · {layouts.length} Layout · {assets.length} Assets</span></div></footer>
+    <footer className="statusbar"><button className={issues.some((issue) => issue.severity === 'error') ? 'has-error' : ''} onClick={() => setShowProblems(!showProblems)}>{issues.length ? <Icon name="warning" size={12}/> : <Icon name="check" size={12}/>} {issues.filter((issue) => issue.severity === 'error').length} エラー　{issues.filter((issue) => issue.severity === 'warning').length} 警告</button><div><span>Yuraive v1</span><span>{active ? `${Object.keys(active.graph.nodes).length} Node · ${Object.keys(active.graph.buttons).length} Button · ${Object.keys(active.graph.playerControls).length} Controls` : 'グラフなし'}</span><span>{scripts.length} Script · {layouts.length} Layout · {assets.length} Assets</span></div></footer>
     {showProblems && <div className="problems-panel" style={{ left: leftWidth + 4, right: rightWidth + 4 }}><header><strong>問題</strong><button className="icon-button" onClick={() => setShowProblems(false)}><Icon name="close" size={13}/></button></header>{issues.length ? issues.map((issue, index) => <button key={index} onClick={() => { const script = issue.scriptPath ? docScripts.find((item) => item.path === issue.scriptPath) : undefined; const layout = issue.layoutPath ? docLayouts.find((item) => item.path === issue.layoutPath) : undefined; if (script) openScriptTab(script); else if (layout) { const original = layouts.find((item) => item.uid === layout.uid); if (original) openLayoutTab(original) } else { if (active) openGraphTab(active); if (issue.nodeId) { setSelectedNode(issue.nodeId); setSelectedButton(null); setSelectedPlayerControl(null) } else if (issue.buttonId) { setSelectedButton(issue.buttonId); setSelectedNode(null); setSelectedPlayerControl(null) } else if (issue.playerControlId) { setSelectedPlayerControl(issue.playerControlId); setSelectedNode(null); setSelectedButton(null) } } setShowProblems(false) }}><Icon name="warning" size={13}/><span>{issue.message}</span><small>{issue.scriptPath ?? issue.layoutPath ?? issue.nodeId ?? issue.buttonId ?? issue.playerControlId ?? 'グラフ'}</small></button>) : <div className="problems-empty"><Icon name="check" size={15}/>問題は見つかりませんでした</div>}</div>}
     {showPreview && active && <Preview graph={active.graph} graphId={active.path} assets={docAssets} scripts={docScripts} layouts={docLayouts} initialHistory={previewHistories[active.uid] ?? []} onHistoryChange={(history) => setPreviewHistories((current) => ({ ...current, [active.uid]: history }))} onClose={() => setShowPreview(false)}/>}
     {previewAsset && <AssetPreview asset={previewAsset} onClose={() => setPreviewAsset(null)}/>}

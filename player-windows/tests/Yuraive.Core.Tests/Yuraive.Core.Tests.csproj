@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <EnableWindowsTargeting Condition="'$(OS)' != 'Windows_NT'">true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <ProjectReference Include="..\..\src\Yuraive.Core\Yuraive.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RustManifest>$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.toml</RustManifest>
+    <RustDll Condition="'$(OS)' == 'Windows_NT'">$(MSBuildProjectDirectory)\..\..\..\runtime\target\release\yuraive_runtime.dll</RustDll>
+    <RustDll Condition="'$(OS)' != 'Windows_NT'">$(MSBuildProjectDirectory)/../../../runtime/target/release/libyuraive_runtime.so</RustDll>
+  </PropertyGroup>
+
+  <Target Name="BuildRustRuntime" BeforeTargets="CoreCompile"
+          Inputs="$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.toml;$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.lock;$(MSBuildProjectDirectory)\..\..\..\runtime\src\lib.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\bundle.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\layout_engine.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\script_engine.rs"
+          Outputs="$(RustDll)">
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)\..\..\..\runtime"
+          Command="cargo build --release --locked" />
+  </Target>
+
+  <Target Name="CopyRustRuntime" AfterTargets="Build">
+    <Copy SourceFiles="$(RustDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

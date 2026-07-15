@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Yuraive icon</title>
+  <desc id="desc">A flowing Y with clean branch colors, a contained crossover curve, and a balanced play cutout.</desc>
+  <defs>
+    <linearGradient id="left-ribbon" x1="0" y1="179" x2="0" y2="844" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#944BF8"/>
+      <stop offset=".12" stop-color="#934EF7"/>
+      <stop offset=".3" stop-color="#574DE5"/>
+      <stop offset=".7" stop-color="#2F47DB"/>
+      <stop offset="1" stop-color="#3F47DE"/>
+    </linearGradient>
+    <linearGradient id="right-ribbon" x1="0" y1="179" x2="0" y2="610" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#02A5FE"/>
+      <stop offset=".4" stop-color="#089BFD"/>
+      <stop offset=".68" stop-color="#1C8AFD"/>
+      <stop offset="1" stop-color="#3147D4"/>
+    </linearGradient>
+    <path id="y-silhouette" d="M247 179h129c24 0 45 13 57 35l78 153 81-153c13-22 33-35 57-35h127c23 0 34 25 21 46L604 548c-6 12-8 39-8 62v184c0 28-23 50-51 50h-67c-28 0-51-22-51-50V610c0-25-4-49-12-70L228 225c-13-21-3-46 19-46Z"/>
+    <clipPath id="y-boundary">
+      <use href="#y-silhouette"/>
+    </clipPath>
+    <path id="play-shape" d="M469 404c-11-6-22 2-22 15v168c0 16 18 25 32 16l122-75c17-10 17-32 0-42L469 404Z"/>
+    <mask id="play-cutout" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="white"/>
+      <use href="#play-shape" fill="black"/>
+    </mask>
+    <filter id="mark-shadow" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#737A84" flood-opacity=".08"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="#FFFFFF"/>
+  <g clip-path="url(#y-boundary)" mask="url(#play-cutout)" filter="url(#mark-shadow)">
+    <use href="#y-silhouette" fill="url(#left-ribbon)"/>
+    <path fill="url(#right-ribbon)" d="M511 367 592 214c13-22 33-35 57-35h127c23 0 34 25 21 46L627.3 509c3.5-5.8-6.3-27-19.3-35-46-30-76-67-97-107Z"/>
+  </g>
+  <use href="#play-shape" fill="none" stroke="#314DCE" stroke-width="4" stroke-opacity=".2"/>
+</svg>

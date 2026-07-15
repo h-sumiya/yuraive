@@ -1,0 +1,377 @@
+<Window
+    x:Class="Yuraive.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:Yuraive.App"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" IsTabStop="True">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="46" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid x:Name="AppTitleBar" Background="{ThemeResource LayerFillColorDefaultBrush}">
+            <StackPanel Margin="16,0" Orientation="Horizontal" VerticalAlignment="Center" Spacing="10">
+                <Border Width="28" Height="28" CornerRadius="7" Background="White">
+                    <Image Source="ms-appx:///Assets/Square44x44Logo.png" Stretch="Uniform" />
+                </Border>
+                <TextBlock FontWeight="SemiBold" Text="Yuraive" VerticalAlignment="Center" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="LibraryColumn" Width="*" MinWidth="0" />
+                <ColumnDefinition x:Name="DividerColumn" Width="0" />
+                <ColumnDefinition x:Name="PlayerColumn" Width="0" MinWidth="0" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Library/main shell. The mini player belongs to this shell, just as on Android. -->
+            <Grid x:Name="LibraryPane" Grid.Column="0" Background="{ThemeResource LayerFillColorDefaultBrush}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid x:Name="LibraryScreen">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="64" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid x:Name="LibraryTopBar" Margin="12,4">
+                        <Grid x:Name="HomeHeaderPanel">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="SearchButton" HorizontalAlignment="Left" Style="{StaticResource RoundIconButtonStyle}" Click="SearchButton_Click" ToolTipService.ToolTip="検索">
+                                <FontIcon Glyph="&#xE721;" />
+                            </Button>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
+                                <Image Width="32" Height="32" Source="ms-appx:///Assets/Square44x44Logo.png" Stretch="Uniform" />
+                                <TextBlock VerticalAlignment="Center" FontSize="22" FontWeight="Bold" Text="Yuraive" />
+                            </StackPanel>
+                            <StackPanel x:Name="HomeTopActions" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="2">
+                                <Button Style="{StaticResource RoundIconButtonStyle}" Click="HistoryNavButton_Click" ToolTipService.ToolTip="履歴"><FontIcon Glyph="&#xE81C;" /></Button>
+                                <Button Style="{StaticResource RoundIconButtonStyle}" Click="SettingsNavButton_Click" ToolTipService.ToolTip="設定"><FontIcon Glyph="&#xE713;" /></Button>
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid x:Name="DetailHeaderPanel" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <Button x:Name="TopBackButton" Style="{StaticResource RoundIconButtonStyle}" Click="TopBackButton_Click" ToolTipService.ToolTip="戻る">
+                                <FontIcon Glyph="&#xE72B;" />
+                            </Button>
+                            <TextBlock x:Name="TopTitle" Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" FontSize="22" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
+                        </Grid>
+
+                        <Grid x:Name="SearchPanel" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <Button Style="{StaticResource RoundIconButtonStyle}" Click="SearchBackButton_Click" ToolTipService.ToolTip="検索を閉じる"><FontIcon Glyph="&#xE72B;" /></Button>
+                            <TextBox x:Name="SearchBox" Grid.Column="1" Height="44" Margin="8,2,8,2" Padding="12,0" VerticalContentAlignment="Center" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" FontSize="16" PlaceholderText="ライブラリを検索" TextChanged="SearchBox_TextChanged" />
+                        </Grid>
+                    </Grid>
+
+                    <Grid Grid.Row="1">
+                        <GridView
+                            x:Name="LibraryList"
+                            Margin="10,0,10,10"
+                            HorizontalContentAlignment="Stretch"
+                            IsItemClickEnabled="True"
+                            ItemClick="LibraryList_ItemClick"
+                            RightTapped="LibraryList_RightTapped"
+                            ItemContainerStyle="{StaticResource LibraryGridItemStyle}"
+                            Loaded="LibraryList_Loaded"
+                            SelectionMode="None">
+                            <GridView.Header>
+                                <StackPanel x:Name="LibraryHomeHeader" Margin="8,4,8,12" Spacing="22">
+                                    <Grid x:Name="QuickActionsGrid" HorizontalAlignment="Left" ColumnSpacing="12" RowSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" /><ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" /><ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="86" /><RowDefinition Height="0" /></Grid.RowDefinitions>
+                                        <Button x:Name="PlayedQuickButton" Tag="played" MinHeight="86" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" CornerRadius="18" Background="{ThemeResource ControlFillColorSecondaryBrush}" Click="QuickActionButton_Click" HorizontalContentAlignment="Stretch">
+                                            <Grid Margin="16,0" ColumnSpacing="13"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><FontIcon VerticalAlignment="Center" Glyph="&#xE81C;" Foreground="{StaticResource PlayerAccentBrush}" /><TextBlock Grid.Column="1" VerticalAlignment="Center" Text="再生した作品" FontWeight="SemiBold" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" /></Grid>
+                                        </Button>
+                                        <Button x:Name="RecentQuickButton" Grid.Column="1" Tag="recent" MinHeight="86" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" CornerRadius="18" Background="{ThemeResource ControlFillColorSecondaryBrush}" Click="QuickActionButton_Click" HorizontalContentAlignment="Stretch">
+                                            <Grid Margin="16,0" ColumnSpacing="13"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><FontIcon VerticalAlignment="Center" Glyph="&#xE823;" Foreground="{StaticResource PlayerAccentBrush}" /><TextBlock Grid.Column="1" VerticalAlignment="Center" Text="最近追加" FontWeight="SemiBold" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" /></Grid>
+                                        </Button>
+                                        <Button x:Name="FavoritesQuickButton" Grid.Column="2" Tag="favorites" MinHeight="86" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" CornerRadius="18" Background="{ThemeResource ControlFillColorSecondaryBrush}" Click="QuickActionButton_Click" HorizontalContentAlignment="Stretch">
+                                            <Grid Margin="16,0" ColumnSpacing="13"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><FontIcon VerticalAlignment="Center" Glyph="&#xE735;" Foreground="{StaticResource PlayerAccentBrush}" /><TextBlock Grid.Column="1" VerticalAlignment="Center" Text="最近のお気に入り" FontWeight="SemiBold" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" /></Grid>
+                                        </Button>
+                                        <Button x:Name="ShuffleQuickButton" Grid.Column="3" Tag="shuffle" MinHeight="86" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" CornerRadius="18" Background="{ThemeResource ControlFillColorSecondaryBrush}" Click="QuickActionButton_Click" HorizontalContentAlignment="Stretch">
+                                            <Grid Margin="16,0" ColumnSpacing="13"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><FontIcon VerticalAlignment="Center" Glyph="&#xE8B1;" Foreground="{StaticResource PlayerAccentBrush}" /><TextBlock Grid.Column="1" VerticalAlignment="Center" Text="シャッフル" FontWeight="SemiBold" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" /></Grid>
+                                        </Button>
+                                    </Grid>
+
+                                    <Grid x:Name="LibrarySectionHeader">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="SectionTitle" VerticalAlignment="Center" FontSize="28" FontWeight="Bold" Text="ライブラリ" />
+                                        <StackPanel x:Name="LibraryHeaderActions" Grid.Column="1" Margin="18,0,0,0" Orientation="Horizontal" Spacing="4">
+                                            <Button x:Name="RefreshButton" Style="{StaticResource RoundIconButtonStyle}" Click="RefreshButton_Click" ToolTipService.ToolTip="再読み込み"><FontIcon Glyph="&#xE72C;" /></Button>
+                                            <Button x:Name="AddFolderButton" Style="{StaticResource RoundIconButtonStyle}" Click="AddFolderButton_Click" ToolTipService.ToolTip="フォルダを追加"><FontIcon Glyph="&#xE710;" /></Button>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </GridView.Header>
+                            <GridView.ItemsPanel>
+                                <ItemsPanelTemplate><ItemsWrapGrid Orientation="Horizontal" ItemWidth="190" ItemHeight="190" /></ItemsPanelTemplate>
+                            </GridView.ItemsPanel>
+                            <GridView.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                    <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="60" /></Grid.RowDefinitions>
+                                        <Border CornerRadius="18,18,0,0" Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                                            <Grid>
+                                                <FontIcon FontSize="48" Glyph="{Binding Glyph}" Foreground="{StaticResource PlayerAccentBrush}" />
+                                                <Image Source="{Binding BlurredThumbnail}" Stretch="UniformToFill" Opacity="0.82" RenderTransformOrigin="0.5,0.5">
+                                                    <Image.RenderTransform><ScaleTransform ScaleX="1.12" ScaleY="1.12" /></Image.RenderTransform>
+                                                </Image>
+                                                <Border Background="#2E000000" />
+                                                <Image Source="{Binding Thumbnail}" Stretch="Uniform" />
+                                            </Grid>
+                                        </Border>
+                                        <Border Grid.Row="1" CornerRadius="0,0,18,18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="13,8">
+                                            <StackPanel VerticalAlignment="Center" Spacing="3">
+                                                <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="Bold" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding Subtitle}" Visibility="{Binding SubtitleVisibility}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                        </Border>
+                                        <Button Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8" Width="42" Height="42" Padding="0" CornerRadius="21" Background="#D81A1820" Visibility="{Binding ActionVisibility}" Click="LibraryItemAction_Click" ToolTipService.ToolTip="項目の操作">
+                                            <FontIcon Glyph="{Binding ActionGlyph}" Foreground="{Binding ActionForeground}" />
+                                        </Button>
+                                    </Grid>
+                                </DataTemplate>
+                            </GridView.ItemTemplate>
+                        </GridView>
+
+                        <ProgressRing x:Name="LibraryProgress" Width="36" Height="36" Margin="0,24,0,0" VerticalAlignment="Top" IsActive="False" Visibility="Collapsed" />
+                        <StackPanel x:Name="EmptyLibraryPanel" Width="360" Margin="0,96,0,0" HorizontalAlignment="Center" VerticalAlignment="Top" Spacing="10" Visibility="Collapsed">
+                            <FontIcon FontSize="42" Glyph="&#xE8B7;" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Name="EmptyLibraryTitle" HorizontalAlignment="Center" FontSize="19" FontWeight="SemiBold" Text="作品はまだありません" />
+                            <TextBlock x:Name="EmptyLibraryText" TextAlignment="Center" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <Button x:Name="EmptyAddFolderButton" HorizontalAlignment="Center" Click="AddFolderButton_Click" Content="フォルダを追加" Visibility="Collapsed" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+
+                <Grid x:Name="HistoryPanel" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="64" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                    <Grid Margin="12,4">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <Button Style="{StaticResource RoundIconButtonStyle}" Click="TopBackButton_Click" ToolTipService.ToolTip="戻る"><FontIcon Glyph="&#xE72B;" /></Button>
+                        <TextBlock Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" FontSize="22" FontWeight="Bold" Text="再生履歴" />
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
+                            <Button Style="{StaticResource RoundIconButtonStyle}" Click="ExportHistoryButton_Click" ToolTipService.ToolTip="JSONLを保存"><FontIcon Glyph="&#xE896;" /></Button>
+                            <Button Style="{StaticResource RoundIconButtonStyle}" Click="ClearHistoryButton_Click" ToolTipService.ToolTip="履歴を消去"><FontIcon Glyph="&#xE74D;" /></Button>
+                        </StackPanel>
+                    </Grid>
+                    <ListView x:Name="HistoryList" Grid.Row="1" Margin="16,0,16,16" IsItemClickEnabled="True" ItemClick="HistoryList_ItemClick" SelectionMode="None">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid MinHeight="106" Padding="10,8" ColumnSpacing="14">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="90" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <Border Width="90" Height="90" CornerRadius="14" Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                                        <Grid><FontIcon Glyph="&#xE8D6;" Foreground="{StaticResource PlayerAccentBrush}" /><Image Source="{Binding Thumbnail}" Stretch="UniformToFill" /></Grid>
+                                    </Border>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="5">
+                                        <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="16" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Subtitle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" MaxLines="2" />
+                                    </StackPanel>
+                                    <Border Grid.Column="2" VerticalAlignment="Center" Padding="10,5" CornerRadius="12" Background="{StaticResource PlayerAccentLowBrush}">
+                                        <TextBlock Text="{Binding Badge}" FontWeight="SemiBold" />
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+
+                <Grid x:Name="SettingsPanel" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="64" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                    <Grid Margin="12,4">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Button Style="{StaticResource RoundIconButtonStyle}" Click="TopBackButton_Click" ToolTipService.ToolTip="戻る"><FontIcon Glyph="&#xE72B;" /></Button>
+                        <TextBlock Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" FontSize="22" FontWeight="Bold" Text="設定" />
+                    </Grid>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
+                        <StackPanel MaxWidth="680" Margin="20,4,20,28" HorizontalAlignment="Stretch" Spacing="28">
+                            <StackPanel Spacing="12">
+                                <TextBlock FontSize="18" FontWeight="Bold" Text="テーマ" />
+                                <Grid ColumnSpacing="10">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <Button x:Name="ThemeSystemButton" Tag="0" Style="{StaticResource SettingsChoiceButtonStyle}" Click="ThemeChoiceButton_Click">
+                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="9"><FontIcon x:Name="ThemeSystemIcon" FontSize="28" Glyph="&#xE713;" Foreground="{StaticResource PlayerAccentBrush}" /><TextBlock Text="システム" FontWeight="SemiBold" /></StackPanel>
+                                    </Button>
+                                    <Button x:Name="ThemeLightButton" Grid.Column="1" Tag="1" Style="{StaticResource SettingsChoiceButtonStyle}" Click="ThemeChoiceButton_Click">
+                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="9"><FontIcon x:Name="ThemeLightIcon" FontSize="28" Glyph="&#xE706;" Foreground="{StaticResource PlayerAccentBrush}" /><TextBlock Text="ライト" FontWeight="SemiBold" /></StackPanel>
+                                    </Button>
+                                    <Button x:Name="ThemeDarkButton" Grid.Column="2" Tag="2" Style="{StaticResource SettingsChoiceButtonStyle}" Click="ThemeChoiceButton_Click">
+                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="9"><FontIcon x:Name="ThemeDarkIcon" FontSize="28" Glyph="&#xE708;" Foreground="{StaticResource PlayerAccentBrush}" /><TextBlock Text="ダーク" FontWeight="SemiBold" /></StackPanel>
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+
+                            <StackPanel Spacing="12">
+                                <TextBlock FontSize="18" FontWeight="Bold" Text="アクセント" />
+                                <StackPanel Orientation="Horizontal" Spacing="16">
+                                    <Button x:Name="Accent0Button" Tag="0" Width="44" Height="44" Padding="0" CornerRadius="22" Background="#574DE5" BorderBrush="{ThemeResource TextFillColorPrimaryBrush}" Click="AccentChoiceButton_Click"><FontIcon x:Name="Accent0Check" Glyph="&#xE73E;" Foreground="White" /></Button>
+                                    <Button x:Name="Accent1Button" Tag="1" Width="44" Height="44" Padding="0" CornerRadius="22" Background="#944BF8" BorderBrush="{ThemeResource TextFillColorPrimaryBrush}" Click="AccentChoiceButton_Click"><FontIcon x:Name="Accent1Check" Glyph="&#xE73E;" Foreground="White" /></Button>
+                                    <Button x:Name="Accent2Button" Tag="2" Width="44" Height="44" Padding="0" CornerRadius="22" Background="#02A5FE" BorderBrush="{ThemeResource TextFillColorPrimaryBrush}" Click="AccentChoiceButton_Click"><FontIcon x:Name="Accent2Check" Glyph="&#xE73E;" Foreground="White" /></Button>
+                                    <Button x:Name="Accent3Button" Tag="3" Width="44" Height="44" Padding="0" CornerRadius="22" Background="#314DCE" BorderBrush="{ThemeResource TextFillColorPrimaryBrush}" Click="AccentChoiceButton_Click"><FontIcon x:Name="Accent3Check" Glyph="&#xE73E;" Foreground="White" /></Button>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel Spacing="0">
+                                <TextBlock Margin="0,0,0,12" FontSize="18" FontWeight="Bold" Text="プレイヤーコントロール" />
+                                <Grid MinHeight="82" ColumnSpacing="20">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center" Spacing="4">
+                                        <TextBlock FontWeight="SemiBold" Text="すべて表示・許可" />
+                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="13" Text="作品側の表示・操作制限を一時的に無視します" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="ForceControlsToggle" Grid.Column="1" MinWidth="0" HorizontalAlignment="Right" VerticalAlignment="Center" OnContent="{x:Null}" OffContent="{x:Null}" Toggled="ForceControlsToggle_Toggled" />
+                                </Grid>
+                                <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                                <Grid MinHeight="82" ColumnSpacing="20">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center" Spacing="4">
+                                        <TextBlock FontWeight="SemiBold" Text="画面を消灯しない" />
+                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="13" Text="再生画面を表示している間、画面を点灯したままにします" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="KeepScreenToggle" Grid.Column="1" MinWidth="0" HorizontalAlignment="Right" VerticalAlignment="Center" OnContent="{x:Null}" OffContent="{x:Null}" Toggled="KeepScreenToggle_Toggled" />
+                                </Grid>
+                            </StackPanel>
+
+                            <StackPanel Spacing="8">
+                                <Grid><TextBlock FontSize="18" FontWeight="Bold" Text="スクリプトのタイムアウト" /><TextBlock x:Name="ScriptTimeoutText" HorizontalAlignment="Right" Foreground="{StaticResource PlayerAccentBrush}" FontWeight="SemiBold" /></Grid>
+                                <Slider x:Name="ScriptTimeoutSlider" Minimum="100" Maximum="5000" StepFrequency="100" ValueChanged="ScriptTimeoutSlider_ValueChanged" />
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
+                <Border x:Name="MiniPlayer" Grid.Row="1" Height="76" Background="{StaticResource PlayerAccentContainerBrush}" Visibility="Collapsed">
+                    <Grid>
+                        <Button x:Name="MiniPlayerOpenButton" Padding="0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" BorderThickness="0" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" Click="MiniPlayer_Click">
+                            <Grid Margin="14,8,72,8" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="58" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Width="58" Height="58" CornerRadius="14" Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                                    <Grid><FontIcon Glyph="&#xE768;" Foreground="{StaticResource PlayerAccentBrush}" /><Image x:Name="MiniArtworkImage" Stretch="UniformToFill" /></Grid>
+                                </Border>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
+                                    <TextBlock x:Name="MiniTitle" FontWeight="Bold" FontSize="16" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="MiniSecondary" Foreground="{ThemeResource TextFillColorSecondaryBrush}" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </Grid>
+                        </Button>
+                        <Button x:Name="MiniPlayPauseButton" Width="50" Height="50" Margin="0,0,14,0" HorizontalAlignment="Right" VerticalAlignment="Center" Padding="0" CornerRadius="25" Background="Transparent" Click="PlayPauseButton_Click" ToolTipService.ToolTip="再生/一時停止">
+                            <FontIcon x:Name="MiniPlayPauseIcon" FontSize="22" Glyph="&#xE768;" />
+                        </Button>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <Rectangle x:Name="PaneDivider" Grid.Column="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Visibility="Collapsed" />
+
+            <!-- Full player: no ScrollViewer. Its contents are reflowed by viewport shape. -->
+            <Grid x:Name="PlayerPane" Grid.Column="2" Background="{StaticResource PlayerSurfaceBrush}" Visibility="Collapsed" SizeChanged="PlayerPane_SizeChanged">
+                <Grid x:Name="PlayerEmptyState" Width="320" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <StackPanel Spacing="12">
+                        <Border Width="72" Height="72" CornerRadius="24" Background="{StaticResource PlayerCardBrush}" HorizontalAlignment="Center"><FontIcon FontSize="30" Glyph="&#xE8D6;" Foreground="{StaticResource PlayerMutedBrush}" /></Border>
+                        <TextBlock FontSize="21" FontWeight="SemiBold" Text="選択されていません" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid x:Name="PlayerContent" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="62" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                    <Grid Margin="14,6">
+                        <Button x:Name="PlayerBackButton" Style="{StaticResource PlayerIconButtonStyle}" Click="PlayerBackButton_Click" ToolTipService.ToolTip="ライブラリへ戻る"><FontIcon Glyph="&#xE72B;" /></Button>
+                        <Button x:Name="StopButton" HorizontalAlignment="Right" Style="{StaticResource PlayerIconButtonStyle}" Click="StopButton_Click" ToolTipService.ToolTip="停止" Visibility="Collapsed"><FontIcon Glyph="&#xE71A;" /></Button>
+                    </Grid>
+
+                    <Grid x:Name="PlayerResponsiveGrid" Grid.Row="1">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="0" /><RowDefinition Height="0" /></Grid.RowDefinitions>
+
+                        <StackPanel x:Name="PortraitPlayerHeader" Grid.ColumnSpan="2" Margin="24,0" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2" Visibility="Collapsed">
+                            <TextBlock x:Name="PortraitPlayerStatusText" HorizontalAlignment="Center" Foreground="{StaticResource PlayerMutedBrush}" FontSize="15" Text="再生中" />
+                            <TextBlock x:Name="PortraitPlayerTitle" HorizontalAlignment="Center" Foreground="White" FontSize="27" FontWeight="SemiBold" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+
+                        <Border x:Name="ArtworkBorder" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{StaticResource PlayerCardBrush}" CornerRadius="26">
+                            <Grid>
+                                <Grid x:Name="ArtworkImageLayer">
+                                    <FontIcon x:Name="PlayerArtworkFallback" FontSize="42" Glyph="&#xE768;" Foreground="{StaticResource PlayerAccentBrush}" />
+                                    <Image x:Name="ArtworkBackgroundImage" Stretch="UniformToFill" Opacity="0.82" RenderTransformOrigin="0.5,0.5">
+                                        <Image.RenderTransform><ScaleTransform ScaleX="1.12" ScaleY="1.12" /></Image.RenderTransform>
+                                    </Image>
+                                    <Border Background="#2E000000" />
+                                    <Image x:Name="ArtworkImage" Stretch="Uniform" />
+                                </Grid>
+                                <MediaPlayerElement x:Name="MediaElement" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" AreTransportControlsEnabled="False" />
+                                <local:ButtonLayoutView x:Name="ButtonLayout" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                                <ProgressRing x:Name="PlayerProgress" Width="42" Height="42" IsActive="False" Visibility="Collapsed" Foreground="{StaticResource PlayerAccentBrush}" />
+                                <InfoBar x:Name="PlayerErrorBar" Margin="12" VerticalAlignment="Bottom" Severity="Error" IsClosable="True" IsOpen="False" />
+                            </Grid>
+                        </Border>
+
+                        <Grid x:Name="ControlsPanel" Grid.Column="1" Width="520" MaxWidth="560" Margin="20" HorizontalAlignment="Center">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <StackPanel x:Name="LandscapePlayerHeader" Margin="8,0" HorizontalAlignment="Stretch" Spacing="2">
+                                <TextBlock x:Name="PlayerStatusText" HorizontalAlignment="Center" Foreground="{StaticResource PlayerMutedBrush}" FontSize="15" Text="再生中" />
+                                <TextBlock x:Name="PlayerTitle" HorizontalAlignment="Center" Foreground="White" FontSize="27" FontWeight="SemiBold" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+
+                            <Grid x:Name="PlayerMetadataRow" Grid.Row="1" Margin="8,16,8,0">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center" Spacing="3">
+                                    <TextBlock x:Name="PlayerSceneName" Foreground="White" FontSize="21" FontWeight="Bold" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="PlayerFileName" Foreground="{StaticResource PlayerMutedBrush}" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <Button x:Name="FavoriteButton" Grid.Column="1" Margin="8,0,0,0" Style="{StaticResource PlayerIconButtonStyle}" Click="FavoriteButton_Click" ToolTipService.ToolTip="お気に入り"><FontIcon x:Name="FavoriteIcon" Glyph="&#xE734;" /></Button>
+                                <Button x:Name="StatsButton" Grid.Column="2" Margin="8,0,0,0" Style="{StaticResource PlayerIconButtonStyle}" Click="StatsButton_Click" ToolTipService.ToolTip="再生統計"><FontIcon Glyph="&#xE9D9;" /></Button>
+                            </Grid>
+
+                            <Grid x:Name="PlayerProgressRow" Grid.Row="2" Margin="8,12,8,0">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                <Grid>
+                                    <Slider x:Name="PositionSlider" Minimum="0" Maximum="1" ValueChanged="PositionSlider_ValueChanged" />
+                                    <Canvas x:Name="PlaybackWaveform" Height="40" Margin="4,0" VerticalAlignment="Center" Visibility="Collapsed" />
+                                </Grid>
+                                <Grid Grid.Row="1" Margin="5,-2,5,0">
+                                    <TextBlock x:Name="PositionText" FontSize="12" Foreground="{StaticResource PlayerMutedBrush}" Text="0:00" />
+                                    <TextBlock x:Name="DurationText" HorizontalAlignment="Right" FontSize="12" Foreground="{StaticResource PlayerMutedBrush}" Text="0:00" />
+                                </Grid>
+                            </Grid>
+
+                            <Grid x:Name="PlayerTransportRow" Grid.Row="3" Margin="8,14,8,0" HorizontalAlignment="Stretch">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Button x:Name="PreviousButton" HorizontalAlignment="Center" Style="{StaticResource PlayerIconButtonStyle}" Click="PreviousButton_Click"><FontIcon FontSize="21" Glyph="&#xE892;" /></Button>
+                                <Button x:Name="PlayPauseButton" Grid.Column="1" HorizontalAlignment="Center" Width="72" Height="72" Padding="0" CornerRadius="36" Background="{StaticResource PlayerAccentBrush}" Foreground="White" Click="PlayPauseButton_Click"><FontIcon x:Name="PlayPauseIcon" FontSize="34" Glyph="&#xE768;" /></Button>
+                                <Button x:Name="NextButton" Grid.Column="2" HorizontalAlignment="Center" Style="{StaticResource PlayerIconButtonStyle}" Click="NextButton_Click"><FontIcon FontSize="21" Glyph="&#xE893;" /></Button>
+                            </Grid>
+
+                            <Grid x:Name="PlayerBottomActionsRow" Grid.Row="5" Margin="8,12,8,0" ColumnSpacing="10">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="48" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Button Style="{StaticResource PlayerPillButtonStyle}" Click="InfoButton_Click"><StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE946;" /><TextBlock Text="情報" FontWeight="SemiBold" /></StackPanel></Button>
+                                <Button Grid.Column="1" Width="48" Height="48" Padding="0" CornerRadius="24" Background="#16FFFFFF" Foreground="White" Click="ThemePlayerButton_Click" ToolTipService.ToolTip="テーマ"><FontIcon Glyph="&#xE790;" /></Button>
+                                <Button Grid.Column="2" Style="{StaticResource PlayerPillButtonStyle}" IsEnabled="False"><StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE8D6;" /><TextBlock Text="歌詞" FontWeight="SemiBold" /></StackPanel></Button>
+                            </Grid>
+                        </Grid>
+                    </Grid>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

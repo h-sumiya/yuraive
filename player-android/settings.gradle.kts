@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WMGF Player"
+rootProject.name = "Yuraive"
 include(":app")

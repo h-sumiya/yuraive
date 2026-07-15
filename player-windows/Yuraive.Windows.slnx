@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/Yuraive.Core/Yuraive.Core.csproj" />
+  <Project Path="src/Yuraive.App/Yuraive.App.csproj" />
+  <Project Path="tests/Yuraive.Core.Tests/Yuraive.Core.Tests.csproj" />
+</Solution>

@@ -1,9 +1,9 @@
-# WMGF Rust Runtime
+# Yuraive Rust Runtime
 
-`wmgf-runtime` contains the platform-independent WMGF v1 validator and Starlark engine.
+`yuraive-runtime` contains the platform-independent Yuraive v1 validator and Starlark engine.
 The same Rust Starlark implementation is exposed through JNI to the Android player and
 through WebAssembly to the editor.
-It also decodes the header-prefixed protobuf used by `.wmg` player bundles for
+It also decodes the header-prefixed protobuf used by `.yuraive` player bundles for
 the Android and Windows storage layers. Bundle encoding stays in TypeScript so
 exporting does not need to load WebAssembly.
 The wire format is documented in [BUNDLE_FORMAT.md](./BUNDLE_FORMAT.md).

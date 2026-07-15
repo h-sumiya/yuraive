@@ -1,0 +1,18 @@
+{
+  "name": "Yuraive Editor",
+  "short_name": "Yuraive",
+  "description": "メディアの再生フローを視覚的に構築する Yuraive 公式エディタ",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#111418",
+  "theme_color": "#171b20",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

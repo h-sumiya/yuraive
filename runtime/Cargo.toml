@@ -1,10 +1,10 @@
 [package]
-name = "wmgf-runtime"
+name = "yuraive-runtime"
 version = "1.0.0"
 edition = "2021"
 
 [lib]
-name = "wmgf_runtime"
+name = "yuraive_runtime"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

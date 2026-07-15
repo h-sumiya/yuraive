@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.hiro.wmgfplayer"
+    namespace = "com.yuraive.player"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.hiro.wmgfplayer"
+        applicationId = "com.yuraive.player"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
@@ -34,7 +34,7 @@ android {
             "META-INF/NOTICE*",
         )
         // build-android.sh already strips these with the matching NDK toolchain.
-        jniLibs.keepDebugSymbols += "**/libwmgf_runtime.so"
+        jniLibs.keepDebugSymbols += "**/libyuraive_runtime.so"
     }
 
     buildTypes {

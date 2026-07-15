@@ -1,7 +1,7 @@
-import type { LayoutDocument, ScriptDocument, WmgGraph } from './types'
+import type { LayoutDocument, ScriptDocument, YuraiveGraph } from './types'
 
 const encoder = new TextEncoder()
-const MAGIC = encoder.encode('WMGFBNDL')
+const MAGIC = encoder.encode('YURAIVE1')
 const HEADER_SIZE = 16
 const FORMAT_VERSION = 1
 const BUNDLE_VERSION = 1
@@ -46,7 +46,7 @@ const isSafeTextPath = (path: string) => Boolean(path)
   && !path.includes('\\')
   && path.split('/').every((part) => Boolean(part) && part !== '.' && part !== '..')
 
-const stripEditorState = (graph: WmgGraph): WmgGraph => JSON.parse(JSON.stringify(graph, (key, value) => key === 'editor' ? undefined : value)) as WmgGraph
+const stripEditorState = (graph: YuraiveGraph): YuraiveGraph => JSON.parse(JSON.stringify(graph, (key, value) => key === 'editor' ? undefined : value)) as YuraiveGraph
 
 const textFilesForGraph = (graphPath: string, scripts: ScriptDocument[], layouts: LayoutDocument[]): BundleTextFile[] => {
   const parent = graphPath.includes('/') ? graphPath.slice(0, graphPath.lastIndexOf('/') + 1) : ''
@@ -57,9 +57,9 @@ const textFilesForGraph = (graphPath: string, scripts: ScriptDocument[], layouts
   ].sort((left, right) => left.path.localeCompare(right.path))
 }
 
-export const playerBundleName = (jsonName: string) => jsonName.replace(/\.wmg\.json$/i, '') + '.wmg'
+export const playerBundleName = (jsonName: string) => jsonName.replace(/\.yuraive\.json$/i, '') + '.yuraive'
 
-export const createPlayerBundle = (graphPath: string, graph: WmgGraph, scripts: ScriptDocument[], layouts: LayoutDocument[]) => {
+export const createPlayerBundle = (graphPath: string, graph: YuraiveGraph, scripts: ScriptDocument[], layouts: LayoutDocument[]) => {
   const graphBytes = encoder.encode(JSON.stringify(stripEditorState(graph)))
   if (graphBytes.length > MAX_GRAPH_SIZE) throw new Error('グラフがバンドル上限の8 MiBを超えています')
 

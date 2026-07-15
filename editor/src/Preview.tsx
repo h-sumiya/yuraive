@@ -3,7 +3,7 @@ import { chooseWeighted } from './graph'
 import { LayoutFrame } from './LayoutFrame'
 import { createStarlarkContext } from './scriptContext'
 import { resetStarlarkRuntime, runStarlark } from './starlark'
-import type { AssetEntry, ButtonRenderResult, LayoutDocument, MediaCandidate, PlaybackHistoryEntry, PreviewTraceEntry, ScriptDocument, StarlarkCurrent, WmgButton, WmgGraph } from './types'
+import type { AssetEntry, ButtonRenderResult, LayoutDocument, MediaCandidate, PlaybackHistoryEntry, PreviewTraceEntry, ScriptDocument, StarlarkCurrent, YuraiveButton, YuraiveGraph } from './types'
 
 const PreviewIcon = ({ name }: { name: 'play' | 'close' | 'debug' | 'trash' | 'export' }) => {
   const path = name === 'play' ? 'm7 4 13 8-13 8z' : name === 'close' ? 'm6 6 12 12M18 6 6 18' : name === 'trash' ? 'M4 7h16M9 3h6l1 4H8zM6 7l1 14h10l1-14' : name === 'export' ? 'M12 3v12m-4-4 4 4 4-4M4 17v4h16v-4' : 'M8 9h8M9 4h6l1 3H8zM7 7l-2 3v8l3 3h8l3-3v-8l-2-3M3 13h4m10 0h4'
@@ -50,7 +50,7 @@ const safeRenderResult = (value: unknown): ButtonRenderResult => {
   return result
 }
 
-export function Preview({ graph, graphId, assets, scripts, layouts, initialHistory = [], onHistoryChange, onClose }: { graph: WmgGraph; graphId: string; assets: AssetEntry[]; scripts: ScriptDocument[]; layouts: LayoutDocument[]; initialHistory?: PlaybackHistoryEntry[]; onHistoryChange?: (history: PlaybackHistoryEntry[]) => void; onClose: () => void }) {
+export function Preview({ graph, graphId, assets, scripts, layouts, initialHistory = [], onHistoryChange, onClose }: { graph: YuraiveGraph; graphId: string; assets: AssetEntry[]; scripts: ScriptDocument[]; layouts: LayoutDocument[]; initialHistory?: PlaybackHistoryEntry[]; onHistoryChange?: (history: PlaybackHistoryEntry[]) => void; onClose: () => void }) {
   const start = Object.entries(graph.nodes).find(([, node]) => node.start)?.[0] ?? Object.keys(graph.nodes)[0]
   const [current, setCurrent] = useState<CurrentMedia | null>(null)
   const currentRef = useRef<CurrentMedia | null>(null)
@@ -247,12 +247,12 @@ export function Preview({ graph, graphId, assets, scripts, layouts, initialHisto
   const exportHistory = () => {
     const content = historyRef.current.map((entry) => JSON.stringify(entry)).join('\n') + (historyRef.current.length ? '\n' : '')
     const url = URL.createObjectURL(new Blob([content], { type: 'application/x-ndjson' }))
-    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${graphId.replace(/\.wmg\.json$/i, '')}-preview-history.jsonl`; anchor.click(); URL.revokeObjectURL(url)
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${graphId.replace(/\.yuraive\.json$/i, '')}-preview-history.jsonl`; anchor.click(); URL.revokeObjectURL(url)
   }
 
   const close = () => { finalize('stopped'); resetStarlarkRuntime(); onClose() }
   const restart = async () => { const snapshot = finalize('restarted'); runId.current = crypto.randomUUID(); runStartedAt.current = new Date().toISOString(); await resolveToMedia(start, { type: 'restart' }, snapshot) }
-  const onButton = async (buttonId: string, button: WmgButton) => {
+  const onButton = async (buttonId: string, button: YuraiveButton) => {
     addTrace('button', `ボタン押下: ${buttonId}`)
     const snapshot = finalize('button')
     const next = chooseWeighted(button.onPress ?? [])

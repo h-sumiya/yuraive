@@ -5,14 +5,15 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-        android:name=".WmgfApplication"
+        android:name=".YuraiveApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:icon="@drawable/ic_launcher"
-        android:label="WMGF Player"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
-        android:theme="@style/Theme.WmgfPlayer">
+        android:theme="@style/Theme.Yuraive">
         <activity
             android:name=".MainActivity"
             android:exported="true">

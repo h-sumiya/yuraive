@@ -1,6 +1,6 @@
 import type { ButtonRenderStyle } from './types'
 
-export const LAYOUT_EXTENSION = '.wmg-layout.html'
+export const LAYOUT_EXTENSION = '.yuraive-layout.html'
 
 export const DEFAULT_LAYOUT_SOURCE = `<style>
 .stage {
@@ -26,14 +26,14 @@ slot:not([name]) {
   pointer-events: none;
 }
 
-.wmg-button {
+.yuraive-button {
   display: grid;
   place-items: center;
   min-height: 52px;
   padding: 12px 20px;
   border: 0;
   border-radius: 18px;
-  background: #702bc4;
+  background: #574de5;
   color: #ffffff;
   font: 600 16px/1.3 system-ui, sans-serif;
   text-align: center;
@@ -41,12 +41,12 @@ slot:not([name]) {
   pointer-events: auto;
 }
 
-.wmg-button:active {
+.yuraive-button:active {
   filter: brightness(.86);
   transform: translateY(1px);
 }
 
-@container wmg-canvas (max-width: 420px) {
+@container yuraive-canvas (max-width: 420px) {
   slot[name="actions"] {
     grid-template-columns: 1fr;
   }
@@ -61,7 +61,7 @@ slot:not([name]) {
 
 export const LAYOUT_ELEMENTS = ['div', 'slot'] as const
 export const LAYOUT_VARIABLES = [
-  '--wmg-canvas-width', '--wmg-canvas-height', '--wmg-safe-top', '--wmg-safe-right', '--wmg-safe-bottom', '--wmg-safe-left', '--wmg-density', '--wmg-font-scale',
+  '--yuraive-canvas-width', '--yuraive-canvas-height', '--yuraive-safe-top', '--yuraive-safe-right', '--yuraive-safe-bottom', '--yuraive-safe-left', '--yuraive-density', '--yuraive-font-scale',
 ] as const
 export const LAYOUT_CSS_PROPERTIES = [
   'display', 'grid-template', 'grid-template-columns', 'grid-template-rows', 'grid-template-areas', 'grid-area', 'grid-column', 'grid-row',
@@ -125,11 +125,11 @@ export const buildLayoutFragment = (source: string) => {
   const { body, styles } = sanitizedLayoutParts(source)
   const authorCss = styles.join('\n')
   return `<style>
-:host, #wmg-layout-root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
-:host { display: block; position: relative; container: wmg-canvas / size; contain: layout paint style; isolation: isolate; }
+:host, #yuraive-layout-root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+:host { display: block; position: relative; container: yuraive-canvas / size; contain: layout paint style; isolation: isolate; }
 *, *::before, *::after { box-sizing: border-box; }
-.wmg-button { all: unset; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-</style><style>${authorCss}</style><div id="wmg-layout-root">${body}</div>`
+.yuraive-button { all: unset; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+</style><style>${authorCss}</style><div id="yuraive-layout-root">${body}</div>`
 }
 
 export type LayoutButton = {
@@ -163,7 +163,7 @@ const applyButtonStyle = (element: HTMLButtonElement, style: ButtonRenderStyle |
 }
 
 export const syncLayoutRoot = (root: ShadowRoot, buttons: LayoutButton[], onPress?: (id: string) => void) => {
-  root.querySelectorAll('.wmg-button[data-wmg-injected]').forEach((button) => button.remove())
+  root.querySelectorAll('.yuraive-button[data-yuraive-injected]').forEach((button) => button.remove())
   const slots = [...root.querySelectorAll('slot')]
   const slotId = (slot: Element) => (slot.getAttribute('name') || slot.getAttribute('id') || '').trim()
   const defaultSlot = slots.find((slot) => !slotId(slot))
@@ -173,8 +173,8 @@ export const syncLayoutRoot = (root: ShadowRoot, buttons: LayoutButton[], onPres
     if (!target) return
     const element = document.createElement('button')
     element.type = 'button'
-    element.className = 'wmg-button'
-    element.dataset.wmgInjected = 'true'
+    element.className = 'yuraive-button'
+    element.dataset.yuraiveInjected = 'true'
     element.dataset.buttonId = button.id
     element.style.order = String(button.order ?? 0)
     element.style.zIndex = String(button.zIndex ?? 0)
@@ -188,12 +188,12 @@ export const syncLayoutRoot = (root: ShadowRoot, buttons: LayoutButton[], onPres
 export const updateLayoutVariables = (host: HTMLElement) => {
   const width = host.clientWidth
   const height = host.clientHeight
-  host.style.setProperty('--wmg-canvas-width', `${width}px`)
-  host.style.setProperty('--wmg-canvas-height', `${height}px`)
-  host.style.setProperty('--wmg-safe-top', '0px')
-  host.style.setProperty('--wmg-safe-right', '0px')
-  host.style.setProperty('--wmg-safe-bottom', '0px')
-  host.style.setProperty('--wmg-safe-left', '0px')
-  host.style.setProperty('--wmg-density', String(window.devicePixelRatio || 1))
-  host.style.setProperty('--wmg-font-scale', '1')
+  host.style.setProperty('--yuraive-canvas-width', `${width}px`)
+  host.style.setProperty('--yuraive-canvas-height', `${height}px`)
+  host.style.setProperty('--yuraive-safe-top', '0px')
+  host.style.setProperty('--yuraive-safe-right', '0px')
+  host.style.setProperty('--yuraive-safe-bottom', '0px')
+  host.style.setProperty('--yuraive-safe-left', '0px')
+  host.style.setProperty('--yuraive-density', String(window.devicePixelRatio || 1))
+  host.style.setProperty('--yuraive-font-scale', '1')
 }

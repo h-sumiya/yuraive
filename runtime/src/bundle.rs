@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-pub const BUNDLE_MAGIC: &[u8; 8] = b"WMGFBNDL";
+pub const BUNDLE_MAGIC: &[u8; 8] = b"YURAIVE1";
 pub const BUNDLE_FORMAT_VERSION: u16 = 1;
 pub const BUNDLE_HEADER_SIZE: usize = 16;
 pub const MAX_BUNDLE_SIZE: usize = 16 * 1024 * 1024;
@@ -39,7 +39,7 @@ struct RawTextAsset {
     kind: Option<u64>,
 }
 
-/// Decode a WMGF player bundle with a fixed header and a protobuf payload.
+/// Decode a Yuraive player bundle with a fixed header and a protobuf payload.
 ///
 /// Unknown protobuf fields are skipped so additive format changes remain
 /// readable. Known singular fields must occur exactly once to keep the bundle
@@ -52,19 +52,19 @@ pub fn decode_bundle(input: &[u8]) -> Result<DecodedBundle, String> {
         return Err("バンドルヘッダーが途中で終了しています".to_owned());
     }
     if &input[..8] != BUNDLE_MAGIC {
-        return Err("WMGFバンドルのマジック値が一致しません".to_owned());
+        return Err("Yuraiveバンドルのマジック値が一致しません".to_owned());
     }
     let format_version = u16::from_le_bytes([input[8], input[9]]);
     if format_version != BUNDLE_FORMAT_VERSION {
-        return Err(format!("未対応のWMGFバンドル形式です: {format_version}"));
+        return Err(format!("未対応のYuraiveバンドル形式です: {format_version}"));
     }
     let header_size = u16::from_le_bytes([input[10], input[11]]) as usize;
     if header_size != BUNDLE_HEADER_SIZE {
-        return Err("WMGFバンドルのヘッダーサイズが不正です".to_owned());
+        return Err("Yuraiveバンドルのヘッダーサイズが不正です".to_owned());
     }
     let payload_size = u32::from_le_bytes([input[12], input[13], input[14], input[15]]) as usize;
     if payload_size != input.len() - BUNDLE_HEADER_SIZE {
-        return Err("WMGFバンドルの本文サイズが一致しません".to_owned());
+        return Err("Yuraiveバンドルの本文サイズが一致しません".to_owned());
     }
 
     let mut cursor = 0;
@@ -99,7 +99,7 @@ pub fn decode_bundle(input: &[u8]) -> Result<DecodedBundle, String> {
     let bundle_version = bundle_version.ok_or_else(|| "bundleVersionがありません".to_owned())?;
     if bundle_version != 1 {
         return Err(format!(
-            "未対応のWMGFバンドルバージョンです: {bundle_version}"
+            "未対応のYuraiveバンドルバージョンです: {bundle_version}"
         ));
     }
     let graph_bytes = graph_json.ok_or_else(|| "graphJsonがありません".to_owned())?;
@@ -136,7 +136,7 @@ pub fn decode_bundle(input: &[u8]) -> Result<DecodedBundle, String> {
             .ok_or_else(|| format!("{path}: kindがありません"))?
         {
             1 if path.to_ascii_lowercase().ends_with(".star") => BundleTextAssetKind::Starlark,
-            2 if path.to_ascii_lowercase().ends_with(".wmg-layout.html") => {
+            2 if path.to_ascii_lowercase().ends_with(".yuraive-layout.html") => {
                 BundleTextAssetKind::Layout
             }
             1 => return Err(format!("Starlarkファイルの拡張子が不正です: {path}")),
@@ -335,7 +335,7 @@ mod tests {
             r#"{"version":1,"nodes":{},"buttons":{}}"#,
             &[
                 ("scripts/route.star", "def jump(ctx):\n  return None\n", 1),
-                ("ui/default.wmg-layout.html", "<slot></slot>", 2),
+                ("ui/default.yuraive-layout.html", "<slot></slot>", 2),
             ],
         );
         let decoded = decode_bundle(&input).unwrap();
@@ -346,7 +346,7 @@ mod tests {
             BundleTextAssetKind::Starlark
         );
         assert_eq!(
-            decoded.text_assets["ui/default.wmg-layout.html"].content,
+            decoded.text_assets["ui/default.yuraive-layout.html"].content,
             "<slot></slot>"
         );
     }

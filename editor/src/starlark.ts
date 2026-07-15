@@ -42,7 +42,7 @@ const stopWorker = (reason: string) => {
 
 const getWorker = () => {
   if (worker) return worker
-  worker = new Worker(new URL('./starlark.worker.ts', import.meta.url), { type: 'module', name: 'wmgf-starlark' })
+  worker = new Worker(new URL('./starlark.worker.ts', import.meta.url), { type: 'module', name: 'yuraive-starlark' })
   worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const item = pending.get(event.data.id)
     if (!item) return

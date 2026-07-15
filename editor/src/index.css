@@ -15,8 +15,8 @@
   --text: #d9dee5;
   --muted: #89939f;
   --faint: #626d78;
-  --accent: #4fa3d9;
-  --accent-soft: #233c4e;
+  --accent: #7068f0;
+  --accent-soft: #302d58;
   --danger: #e06c75;
   --warning: #d8a657;
   --success: #68b786;
@@ -29,7 +29,7 @@ body { min-width: 960px; }
 button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
-::selection { background: #315f7b; color: white; }
+::selection { background: #4d478f; color: white; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #39414a; border: 2px solid transparent; background-clip: content-box; border-radius: 6px; }

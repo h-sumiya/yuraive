@@ -1,6 +1,9 @@
-# WMGF Player for Android
+# Yuraive for Android
 
-WMGF v1 コンテンツを端末内のフォルダから再生するネイティブ Android アプリです。複数フォルダの永続権限、Media3 によるバックグラウンド再生、動画・音声・画像・WebVTT、Rust製Starlarkエンジンによるノード/ボタン、JSONL 履歴、前回状態の復元に対応します。JSONごとの再生コントロール表示・操作制限、アクセント色、次へ/前へ、作品情報、作者定義のセッション別再生統計と確認付き共有も利用できます。
+Yuraive v1 コンテンツを端末内のフォルダから再生するネイティブ Android アプリです。複数フォルダの永続権限、Media3 によるバックグラウンド再生、動画・音声・画像・WebVTT、Rust製Starlarkエンジンによるノード/ボタン、JSONL 履歴、前回状態の復元に対応します。JSONごとの再生コントロール表示・操作制限、アクセント色、次へ/前へ、作品情報、作者定義のセッション別再生統計と確認付き共有も利用できます。
+
+- 公式サイト: https://yuraive.com
+- Yuraive Editor: https://editor.yuraive.com
 
 ## ビルド
 
@@ -34,9 +37,10 @@ cd player-android
 ./gradlew lintDebug assembleRelease
 ```
 
-アプリ内の「＋」から WMGF コンテンツを含むフォルダを追加します。選択したフォルダの読み取り権限は Android の Storage Access Framework により再起動後も保持されます。
+アプリ内の「＋」から Yuraive コンテンツを含むフォルダを追加します。選択したフォルダの読み取り権限は Android の Storage Access Framework により再起動後も保持されます。
 
-設定の「すべての再生コントロールを表示・許可」を有効にすると、コンテンツ側の`playerControls`を一時的に上書きできます。JSON仕様は[WMGF_v1_SPEC.md](../notes/WMGF_v1_SPEC.md)を参照してください。
+設定の「すべての再生コントロールを表示・許可」を有効にすると、コンテンツ側の`playerControls`を一時的に上書きできます。JSON仕様は[YURAIVE_v1_SPEC.md](../notes/YURAIVE_v1_SPEC.md)を参照してください。
 
-編集用の`*.wmg.json`に加えて、スクリプトとレイアウトを内包した配布用`*.wmg`も読み込めます。
-同じ名前の両形式がある場合、ライブラリには`*.wmg`だけを表示します。
+編集用の`*.yuraive.json`に加えて、スクリプトとレイアウトを内包した配布用`*.yuraive`も読み込めます。
+同じ名前の両形式がある場合、ライブラリには`*.yuraive`だけを表示します。
+カスタム再生レイアウトのファイル名には`*.yuraive-layout.html`を使用します。

@@ -1,0 +1,7 @@
+# Design notes are local, except for the public Yuraive format specification.
+!notes/
+notes/*
+!notes/YURAIVE_v1_SPEC.md
+
+# Tool-generated local runtime state.
+.mono/

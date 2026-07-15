@@ -78,7 +78,7 @@ export function LayoutEditor({ layout, onChange, onSave }: { layout: LayoutDocum
       <div className="script-actions"><button className={`tool-button ${showPreview ? 'active' : ''}`} onClick={() => setShowPreview(!showPreview)}>プレビュー</button><button className="toolbar-button" disabled={!layout.dirty} onClick={onSave}>保存</button></div>
     </header>
     <div className="layout-editor-body"><div className="script-editor-host" ref={host}/>{showPreview && <div className="layout-live-preview"><header><strong>Canvas</strong><span>390 × 390</span></header><div><LayoutFrame source={layout.content} buttons={sampleButtons} className="layout-frame"/></div></div>}</div>
-    <footer className={`script-status ${issues.some((issue) => issue.severity === 'error') ? 'error' : ''}`}><div><span>{issues.length ? `${issues.length}件のレイアウト診断` : 'WMGF Layout · HTML/CSS · UTF-8'}</span></div><div><span>{layoutSlotNames(layout.content).length} slots</span><span>Ln {cursor.line}, Col {cursor.column}</span></div></footer>
+    <footer className={`script-status ${issues.some((issue) => issue.severity === 'error') ? 'error' : ''}`}><div><span>{issues.length ? `${issues.length}件のレイアウト診断` : 'Yuraive Layout · HTML/CSS · UTF-8'}</span></div><div><span>{layoutSlotNames(layout.content).length} slots</span><span>Ln {cursor.line}, Col {cursor.column}</span></div></footer>
   </section>
 }
 

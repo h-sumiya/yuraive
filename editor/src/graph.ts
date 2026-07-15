@@ -1,5 +1,5 @@
 import { LAYOUT_EXTENSION, layoutSlotNames, validateLayoutSource } from './layout'
-import type { AssetEntry, GraphLayoutPlacement, LayoutDocument, MediaCandidate, PlayerControlSettings, ScriptDocument, ValidationIssue, WmgButton, WmgGraph, WmgMetadata, WmgNode } from './types'
+import type { AssetEntry, GraphLayoutPlacement, LayoutDocument, MediaCandidate, PlayerControlSettings, ScriptDocument, ValidationIssue, YuraiveButton, YuraiveGraph, YuraiveMetadata, YuraiveNode } from './types'
 
 const hslToHex = (hue: number, saturation = 55, lightness = 52) => {
   const s = saturation / 100
@@ -37,8 +37,8 @@ const nextEditorColor = (items: Record<string, { editor?: { color?: string } }>)
   return hslToHex(hue, 50 + Math.random() * 12, 47 + Math.random() * 8)
 }
 
-export const nextNodeColor = (nodes: Record<string, WmgNode>) => nextEditorColor(nodes)
-export const nextButtonColor = (buttons: Record<string, WmgButton>) => nextEditorColor(buttons)
+export const nextNodeColor = (nodes: Record<string, YuraiveNode>) => nextEditorColor(nodes)
+export const nextButtonColor = (buttons: Record<string, YuraiveButton>) => nextEditorColor(buttons)
 export const nextPlayerControlColor = (controls: Record<string, PlayerControlSettings>) => nextEditorColor(controls)
 export const nextLayoutColor = (layouts: Record<string, GraphLayoutPlacement>) => nextEditorColor(Object.fromEntries(Object.entries(layouts).map(([path, placement]) => [path, { editor: placement }])))
 
@@ -55,7 +55,7 @@ export const DEFAULT_PLAYER_CONTROLS: Pick<PlayerControlSettings, PlayerControlB
   allowPrevious: false,
 }
 
-export const createGraph = (): WmgGraph => ({
+export const createGraph = (): YuraiveGraph => ({
   version: 1,
   metadata: { contentId: crypto.randomUUID() },
   globalPlayerControl: 'default',
@@ -76,11 +76,11 @@ export const createGraph = (): WmgGraph => ({
   editor: { layouts: { [`default${LAYOUT_EXTENSION}`]: { x: 120, y: 20, color: '#4d8e9f' } } },
 })
 
-const normalizeMetadata = (value: unknown): WmgMetadata | undefined => {
+const normalizeMetadata = (value: unknown): YuraiveMetadata | undefined => {
   if (value === undefined) return undefined
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('metadataはオブジェクトで指定してください')
   const raw = value as Record<string, unknown>
-  const metadata: WmgMetadata = {}
+  const metadata: YuraiveMetadata = {}
   for (const key of ['contentId', 'displayName', 'description', 'author', 'thumbnail', 'createdAt', 'updatedAt'] as const) {
     if (raw[key] === undefined) continue
     if (typeof raw[key] !== 'string') throw new Error(`metadata.${key}は文字列で指定してください`)
@@ -104,23 +104,23 @@ const normalizeMetadata = (value: unknown): WmgMetadata | undefined => {
   return Object.keys(metadata).length ? metadata : undefined
 }
 
-export const normalizeGraph = (value: unknown): WmgGraph => {
+export const normalizeGraph = (value: unknown): YuraiveGraph => {
   if (!value || typeof value !== 'object') throw new Error('JSONのルートがオブジェクトではありません')
   const raw = value as { version?: unknown; metadata?: unknown; nodes?: unknown; buttons?: unknown; playerControls?: unknown; globalPlayerControl?: unknown; playbackStats?: unknown; editor?: unknown }
-  if (raw.version !== 1) throw new Error('対応しているWMGFバージョンは1です')
+  if (raw.version !== 1) throw new Error('対応しているYuraiveバージョンは1です')
   if (!raw.nodes || typeof raw.nodes !== 'object' || Array.isArray(raw.nodes)) {
     throw new Error('nodesが見つかりません')
   }
   if (!raw.buttons || typeof raw.buttons !== 'object' || Array.isArray(raw.buttons)) {
-    throw new Error('buttonsが見つかりません。独立ボタン形式のWMGFを使用してください')
+    throw new Error('buttonsが見つかりません。独立ボタン形式のYuraiveを使用してください')
   }
-  const nodes = raw.nodes as Record<string, WmgNode>
-  const buttons = raw.buttons as Record<string, WmgButton>
+  const nodes = raw.nodes as Record<string, YuraiveNode>
+  const buttons = raw.buttons as Record<string, YuraiveButton>
   if (raw.playerControls !== undefined && (!raw.playerControls || typeof raw.playerControls !== 'object' || Array.isArray(raw.playerControls))) {
     throw new Error('playerControlsはオブジェクトで指定してください')
   }
   if (raw.globalPlayerControl !== undefined && typeof raw.globalPlayerControl !== 'string') throw new Error('globalPlayerControlは文字列で指定してください')
-  let playbackStats: WmgGraph['playbackStats']
+  let playbackStats: YuraiveGraph['playbackStats']
   if (raw.playbackStats !== undefined) {
     if (!raw.playbackStats || typeof raw.playbackStats !== 'object' || Array.isArray(raw.playbackStats)) throw new Error('playbackStatsはオブジェクトで指定してください')
     const stats = raw.playbackStats as Record<string, unknown>
@@ -142,8 +142,8 @@ export const normalizeGraph = (value: unknown): WmgGraph => {
     node.editor.color ??= hslToHex((baseHue + index * 137.508) % 360, 54, 51)
   })
   Object.values(buttons).forEach((button, index) => {
-    delete (button as WmgButton & { layout?: unknown }).layout
-    delete (button as WmgButton & { appearance?: unknown }).appearance
+    delete (button as YuraiveButton & { layout?: unknown }).layout
+    delete (button as YuraiveButton & { appearance?: unknown }).appearance
     button.onPress ??= []
     button.editor ??= { x: 180 + (index % 4) * 190, y: 360 + Math.floor(index / 4) * 90 }
     button.editor.color ??= hslToHex((baseHue + 70 + index * 137.508) % 360, 42, 56)
@@ -216,7 +216,7 @@ export const chooseWeighted = <T extends { weight: number }>(items: T[]): T | un
   return selectable.find((item) => ((cursor -= item.weight) < 0)) ?? selectable.at(-1)
 }
 
-const allNodePaths = (node: WmgNode) => [
+const allNodePaths = (node: YuraiveNode) => [
   ...(node.media ?? []).flatMap((candidate) => [
     candidate.source.audio,
     candidate.source.image,
@@ -225,7 +225,7 @@ const allNodePaths = (node: WmgNode) => [
   ]),
 ].filter(Boolean) as string[]
 
-export const validateGraph = (graph: WmgGraph, assets: AssetEntry[], scripts: ScriptDocument[] = [], layouts: LayoutDocument[] = []): ValidationIssue[] => {
+export const validateGraph = (graph: YuraiveGraph, assets: AssetEntry[], scripts: ScriptDocument[] = [], layouts: LayoutDocument[] = []): ValidationIssue[] => {
   const issues: ValidationIssue[] = []
   const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
   for (const key of ['createdAt', 'updatedAt'] as const) {
