@@ -45,6 +45,9 @@ import kotlinx.serialization.json.put
 import java.time.Instant
 import java.util.UUID
 
+internal fun playbackItemId(runId: String, generation: Long, graphId: String, nodeId: String?, mediaId: String): String =
+    "$runId:$generation:$graphId#$nodeId/$mediaId"
+
 class GraphPlaybackEngine(
     context: Context,
     private val player: Player,
@@ -156,17 +159,7 @@ class GraphPlaybackEngine(
             graphRef = ref
             graph = loaded
             history = historyStore.read(ref.graphId).toMutableList()
-            runId = UUID.randomUUID().toString()
-            runStartedAt = now()
-            currentNodeId = null
-            currentMedia = null
-            currentStartedAt = null
-            currentFinalized = true
-            activePlayBaseMs = 0
-            visualPath = null
-            visualUri = null
-            layoutSource = null
-            nonFatalError = null
+            beginNewRun()
             val start = loaded.nodes.entries.singleOrNull { it.value.start }?.key ?: error("開始ノードが 1 件ではありません")
             enterNode(start, trigger("start"), mutableSetOf())
         }.onFailure { fail(it.message ?: "再生を開始できません") }
@@ -178,11 +171,7 @@ class GraphPlaybackEngine(
         runCatching {
             player.stop()
             player.clearMediaItems()
-            runId = UUID.randomUUID().toString()
-            runStartedAt = now()
-            activePlayBaseMs = 0
-            currentFinalized = true
-            currentMedia = null
+            beginNewRun()
             val start = graph?.nodes?.entries?.singleOrNull { it.value.start }?.key ?: error("開始ノードがありません")
             enterNode(start, trigger("restart"), mutableSetOf())
         }.onFailure { fail(it.message ?: "再スタートできません") }
@@ -423,7 +412,7 @@ class GraphPlaybackEngine(
         val metadata = graph?.metadata
         val itemBuilder = MediaItem.Builder()
             .setUri(sourceUri)
-            .setMediaId("${ref.graphId}#${currentNodeId}/${media.id}")
+            .setMediaId(playbackItemId(runId, generation, ref.graphId, currentNodeId, media.id))
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(metadata?.displayName?.takeIf(String::isNotBlank) ?: ref.contentFolderName)
@@ -453,6 +442,26 @@ class GraphPlaybackEngine(
             activePlayBaseMs = 0
             activePlayStartedRealtime = null
         }
+    }
+
+    private fun beginNewRun() {
+        runId = UUID.randomUUID().toString()
+        runStartedAt = now()
+        currentNodeId = null
+        currentMedia = null
+        currentStartedAt = null
+        currentStartPositionMs = 0
+        activePlayBaseMs = 0
+        activePlayStartedRealtime = null
+        currentFinalized = true
+        visualPath = null
+        visualUri = null
+        layoutSource = null
+        baseButtons = emptyList()
+        nodeElapsedBaseMs = 0
+        nodeClockRunning = false
+        transitionClaimed = false
+        nonFatalError = null
     }
 
     private suspend fun renderButtons(node: YuraiveNode): List<RenderedButton> {

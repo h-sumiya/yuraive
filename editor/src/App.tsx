@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { createPlayerBundle, playerBundleName } from './bundle'
+import { createPlayerBundle, decodePlayerBundle, playerBundleName } from './bundle'
+import { inspectContentAssets, type ContentAssetInspection } from './contentInspection'
 import { createGraph, DEFAULT_PLAYER_CONTROLS, defaultMedia, fileKind, nextButtonColor, nextLayoutColor, nextNodeColor, nextPlayerControlColor, normalizeGraph, probability, validateGraph, type PlayerControlBooleanKey } from './graph'
 import { Preview } from './Preview'
 import { LayoutEditor, LayoutInspector } from './LayoutEditor'
@@ -41,6 +42,7 @@ const Icon = ({ name, size = 16 }: { name: string; size?: number }) => {
     refresh: <><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.4-2.2L20 8M4 16l2.5 2.2A7 7 0 0 0 17.9 16"/></>,
     controls: <><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></>,
     globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></>,
+    info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.1"/></>,
   }
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
 }
@@ -57,7 +59,7 @@ const draftKey = (workspace: string, path: string) => `yuraive-draft:${encodeURI
 const scriptDraftKey = (workspace: string, path: string) => `yuraive-script-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
 const layoutDraftKey = (workspace: string, path: string) => `yuraive-layout-draft:${encodeURIComponent(workspace)}:${encodeURIComponent(path)}`
 const BUNDLE_NOTICE_HIDDEN_KEY = 'yuraive-bundle-distribution-notice-hidden'
-const defaultScriptSource = (name = 'script') => `# ${name}\n# ctx["history"]: 確定済み再生履歴（最大1000件）\n# ctx["current"]: 現在の再生状態 / ctx["totalActivePlayMs"]: 実再生時間の合計\n# random(), randint(start, end), choice(items), shuffled(items) が利用できます。\n\ndef jump(ctx):\n    """Script Nodeから遷移するNode IDを返します。"""\n    return None\n\ndef render(ctx):\n    """Buttonの表示内容を上書きします。"""\n    return {\n        "visible": True,\n        "text": "Continue",\n        "style": {},\n    }\n\ndef render_stats(ctx):\n    """1セッション分の再生統計を返します。"""\n    minutes = ctx["session"]["activePlayMs"] // 60000\n    return {\n        "sortValue": minutes,\n        "display": {\n            "schemaVersion": 1,\n            "fallbackText": "%s分再生" % minutes,\n            "root": {"type": "text", "text": "%s分再生" % minutes},\n        },\n    }\n`
+const defaultScriptSource = (name = 'script') => `# ${name}\n# ctx["history"]: 確定済み再生履歴（最大1000件）\n# ctx["currentHistory"]: 現在のrunIdに属する確定済み再生履歴\n# ctx["current"]: 現在の再生状態 / ctx["totalActivePlayMs"]: 実再生時間の合計\n# random(), randint(start, end), choice(items), shuffled(items) が利用できます。\n\ndef jump(ctx):\n    """Script Nodeから遷移するNode IDを返します。"""\n    return None\n\ndef render(ctx):\n    """Buttonの表示内容を上書きします。"""\n    return {\n        "visible": True,\n        "text": "Continue",\n        "style": {},\n    }\n\ndef render_stats(ctx):\n    """1セッション分の再生統計を返します。"""\n    minutes = ctx["session"]["activePlayMs"] // 60000\n    return {\n        "sortValue": minutes,\n        "display": {\n            "schemaVersion": 1,\n            "fallbackText": "%s分再生" % minutes,\n            "root": {"type": "text", "text": "%s分再生" % minutes},\n        },\n    }\n`
 const scriptStem = (value: string) => value.trim().replace(/(?:\.star)+$/i, '')
 const scriptFileName = (value: string) => {
   const stem = scriptStem(value)
@@ -981,6 +983,113 @@ function AssetPreview({ asset, onClose }: { asset: AssetEntry; onClose: () => vo
   </div>
 }
 
+type ContentInspectionTarget =
+  | { kind: 'json'; document: GraphDocument }
+  | { kind: 'bundle'; asset: AssetEntry }
+
+type InspectionTreeBranch = {
+  folders: Map<string, InspectionTreeBranch>
+  files: ContentAssetInspection[]
+}
+
+const inspectionKindLabel = (kinds: ContentAssetInspection['kinds']) => kinds.map((kind) => ({
+  audio: '音声', video: '動画', image: '画像', subtitle: '字幕', script: 'Script', layout: 'Layout',
+})[kind]).join(' / ')
+
+function InspectionAssetTree({ assets }: { assets: ContentAssetInspection[] }) {
+  const tree = useMemo(() => {
+    const root: InspectionTreeBranch = { folders: new Map(), files: [] }
+    assets.forEach((asset) => {
+      const parts = asset.problem === 'unsafe' ? [asset.path] : asset.path.split('/').filter(Boolean)
+      const name = parts.pop()
+      if (!name) return
+      let branch = root
+      parts.forEach((part) => {
+        if (!branch.folders.has(part)) branch.folders.set(part, { folders: new Map(), files: [] })
+        branch = branch.folders.get(part)!
+      })
+      branch.files.push(asset)
+    })
+    return root
+  }, [assets])
+  const render = (branch: InspectionTreeBranch, depth = 0): React.ReactNode => <>
+    {[...branch.folders.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([name, child]) => <details className="inspection-tree-folder" open key={`${depth}:${name}`}>
+      <summary style={{ paddingLeft: 8 + depth * 14 }}><Icon name="chevron" size={11}/><Icon name="folder" size={13}/><span>{name}</span></summary>
+      {render(child, depth + 1)}
+    </details>)}
+    {[...branch.files].sort((left, right) => left.path.localeCompare(right.path)).map((asset) => {
+      const name = asset.problem === 'unsafe' ? asset.path : asset.path.split('/').at(-1) ?? asset.path
+      const icon = asset.kinds.includes('image') ? 'image' : asset.kinds.some((kind) => kind === 'audio' || kind === 'video') ? 'media' : asset.kinds.includes('script') ? 'script' : asset.kinds.includes('layout') ? 'fit' : 'file'
+      return <div className={`inspection-tree-file ${asset.recognized ? '' : 'unrecognized'}`} style={{ paddingLeft: 26 + depth * 14 }} title={asset.path} key={asset.path}>
+        <Icon name={icon} size={13}/><span>{name}</span><small>{asset.problem === 'unsafe' ? '不正なパス' : asset.problem === 'missing' ? '見つかりません' : asset.embedded ? '内蔵' : inspectionKindLabel(asset.kinds)}</small>
+      </div>
+    })}
+  </>
+  return <div className="inspection-file-tree">{assets.length ? render(tree) : <div className="inspection-tree-empty">参照アセットはありません</div>}</div>
+}
+
+function ContentInspectionModal({ target, workspacePaths, onClose }: { target: ContentInspectionTarget; workspacePaths: string[]; onClose: () => void }) {
+  const [decoded, setDecoded] = useState<{ graph: YuraiveGraph; embeddedPaths: Set<string> } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setError(null)
+    if (target.kind === 'json') {
+      setDecoded({ graph: target.document.graph, embeddedPaths: new Set() })
+      return () => { cancelled = true }
+    }
+    setDecoded(null)
+    void target.asset.file.arrayBuffer()
+      .then((buffer) => decodePlayerBundle(new Uint8Array(buffer)))
+      .then((bundle) => {
+        if (!cancelled) setDecoded({ graph: normalizeGraph(JSON.parse(bundle.graphJson)), embeddedPaths: new Set(Object.keys(bundle.textAssets)) })
+      })
+      .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : 'バイナリを読み込めませんでした') })
+    return () => { cancelled = true }
+  }, [target])
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', keydown)
+    return () => window.removeEventListener('keydown', keydown)
+  }, [onClose])
+
+  const source = target.kind === 'json' ? target.document : target.asset
+  const parent = source.path.includes('/') ? source.path.slice(0, source.path.lastIndexOf('/')) : ''
+  const knownPaths = useMemo(() => new Set(workspacePaths), [workspacePaths])
+  const inspected = decoded ? inspectContentAssets(
+    decoded.graph,
+    (path) => knownPaths.has([parent, path].filter(Boolean).join('/')),
+    decoded.embeddedPaths,
+    target.kind === 'bundle',
+  ) : []
+  const metadata = decoded?.graph.metadata
+  const missing = inspected.filter((asset) => !asset.recognized).length
+  const metadataRows = [
+    ['作者', metadata?.author],
+    ['Content ID', metadata?.contentId],
+    ['作成日時', metadata?.createdAt],
+    ['更新日時', metadata?.updatedAt],
+    ['タグ', metadata?.tags?.join('、')],
+  ].filter((row): row is [string, string] => Boolean(row[1]))
+
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="content-inspection-modal" role="dialog" aria-modal="true" aria-labelledby="content-inspection-title">
+      <header><div><Icon name="info" size={15}/><strong id="content-inspection-title">作品情報とアセット</strong><span>{source.path}</span><i>{target.kind === 'json' ? 'JSON' : 'バイナリ'}</i></div><button className="icon-button" aria-label="閉じる" onClick={onClose}><Icon name="close" size={14}/></button></header>
+      {error ? <div className="inspection-load-error"><Icon name="warning" size={20}/><strong>ファイルを解析できません</strong><span>{error}</span></div> : !decoded ? <div className="inspection-loading">バイナリを解析中…</div> : <div className="content-inspection-body">
+        <section className="inspection-metadata">
+          <h2>{metadata?.displayName || source.name.replace(/\.yuraive(?:\.json)?$/i, '')}</h2>
+          {metadata?.description && <p>{metadata.description}</p>}
+          <dl><div><dt>ファイル</dt><dd>{source.name}</dd></div>{metadataRows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+        </section>
+        <section className="inspection-assets">
+          <header><div><h3>参照アセット</h3><span>{inspected.length - missing} / {inspected.length} 件を確認</span></div>{missing > 0 && <strong>{missing} 件を認識できません</strong>}</header>
+          <InspectionAssetTree assets={inspected}/>
+        </section>
+      </div>}
+    </section>
+  </div>
+}
+
 function BundleExportNotice({ onClose }: { onClose: (hidePermanently: boolean) => void }) {
   const [hidePermanently, setHidePermanently] = useState(false)
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose(hidePermanently)}>
@@ -1018,6 +1127,7 @@ function App() {
   const [view, setView] = useState<View>({ zoom: 1, x: 80, y: 65 })
   const [showPreview, setShowPreview] = useState(false)
   const [previewAsset, setPreviewAsset] = useState<AssetEntry | null>(null)
+  const [inspectionTarget, setInspectionTarget] = useState<ContentInspectionTarget | null>(null)
   const [showProblems, setShowProblems] = useState(false)
   const [showFileMenu, setShowFileMenu] = useState(false)
   const [showBundleNotice, setShowBundleNotice] = useState(false)
@@ -2249,9 +2359,10 @@ function App() {
     {showProblems && <div className="problems-panel" style={{ left: leftWidth + 4, right: rightWidth + 4 }}><header><strong>問題</strong><button className="icon-button" onClick={() => setShowProblems(false)}><Icon name="close" size={13}/></button></header>{issues.length ? issues.map((issue, index) => <button key={index} onClick={() => { const script = issue.scriptPath ? docScripts.find((item) => item.path === issue.scriptPath) : undefined; const layout = issue.layoutPath ? docLayouts.find((item) => item.path === issue.layoutPath) : undefined; if (script) openScriptTab(script); else if (layout) { const original = layouts.find((item) => item.uid === layout.uid); if (original) openLayoutTab(original) } else { if (active) openGraphTab(active); if (issue.nodeId) { setSelectedNode(issue.nodeId); setSelectedButton(null); setSelectedPlayerControl(null) } else if (issue.buttonId) { setSelectedButton(issue.buttonId); setSelectedNode(null); setSelectedPlayerControl(null) } else if (issue.playerControlId) { setSelectedPlayerControl(issue.playerControlId); setSelectedNode(null); setSelectedButton(null) } } setShowProblems(false) }}><Icon name="warning" size={13}/><span>{issue.message}</span><small>{issue.scriptPath ?? issue.layoutPath ?? issue.nodeId ?? issue.buttonId ?? issue.playerControlId ?? 'グラフ'}</small></button>) : <div className="problems-empty"><Icon name="check" size={15}/>問題は見つかりませんでした</div>}</div>}
     {showPreview && active && <Preview graph={active.graph} graphId={active.path} assets={docAssets} scripts={docScripts} layouts={docLayouts} initialHistory={previewHistories[active.uid] ?? []} onHistoryChange={(history) => setPreviewHistories((current) => ({ ...current, [active.uid]: history }))} onClose={() => setShowPreview(false)}/>}
     {previewAsset && <AssetPreview asset={previewAsset} onClose={() => setPreviewAsset(null)}/>}
+    {inspectionTarget && <ContentInspectionModal target={inspectionTarget} workspacePaths={[...documents, ...scripts, ...layouts, ...assets].map((item) => item.path)} onClose={() => setInspectionTarget(null)}/>}
     {showBundleNotice && <BundleExportNotice onClose={(hidePermanently) => { if (hidePermanently) localStorage.setItem(BUNDLE_NOTICE_HIDDEN_KEY, 'true'); setShowBundleNotice(false) }}/>}
-    {tabMenu && <div className="tab-context-menu" style={{ left: tabMenu.x, top: tabMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { closeTab({ kind: tabMenu.kind, uid: tabMenu.uid }); setTabMenu(null) }}><Icon name="close" size={13}/>タブを閉じる</button>{tabMenu.kind === 'graph' && <button onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) duplicateDocument(target); setTabMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => { const target = tabMenu.kind === 'graph' ? documents.find((item) => item.uid === tabMenu.uid) : tabMenu.kind === 'script' ? scripts.find((item) => item.uid === tabMenu.uid) : layouts.find((item) => item.uid === tabMenu.uid); if (target) beginTreeRename({ kind: tabMenu.kind, uid: target.uid, path: target.path }, 'tab') }}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (tabMenu.kind === 'graph') { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) void deleteDocument(target) } else if (tabMenu.kind === 'script') { const target = scripts.find((script) => script.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'script', uid: target.uid, path: target.path }) } else { const target = layouts.find((layout) => layout.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'layout', uid: target.uid, path: target.path }) } setTabMenu(null) }}><Icon name="trash" size={13}/>ファイルを削除</button></div>}
-    {treeMenu && <div className="tab-context-menu tree-context-menu" style={{ left: treeMenu.x, top: treeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{treeMenu.target.kind === 'root' || treeMenu.target.kind === 'folder' ? <><label>{treeMenu.target.path || rootName}</label><button onClick={() => beginTreeCreate(treeMenu.target, 'file')}><Icon name="file" size={13}/>ファイルを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'folder')}><Icon name="folder" size={13}/>フォルダを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'script')}><Icon name="script" size={13}/>Starlarkスクリプトを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'layout')}><Icon name="fit" size={13}/>レイアウトファイルを作成</button>{treeMenu.target.kind === 'folder' && <button className="danger" onClick={() => { void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>フォルダを削除</button>}</> : <>{treeMenu.target.kind === 'graph' && <button onClick={() => { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) duplicateDocument(target); setTreeMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => beginTreeRename(treeMenu.target, 'tree')}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (treeMenu.target.kind === 'graph') { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) void deleteDocument(target) } else void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>削除</button></>}</div>}
+    {tabMenu && <div className="tab-context-menu" style={{ left: tabMenu.x, top: tabMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { closeTab({ kind: tabMenu.kind, uid: tabMenu.uid }); setTabMenu(null) }}><Icon name="close" size={13}/>タブを閉じる</button>{tabMenu.kind === 'graph' && <button onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) setInspectionTarget({ kind: 'json', document: target }); setTabMenu(null) }}><Icon name="info" size={13}/>作品情報とアセット</button>}{tabMenu.kind === 'graph' && <button onClick={() => { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) duplicateDocument(target); setTabMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => { const target = tabMenu.kind === 'graph' ? documents.find((item) => item.uid === tabMenu.uid) : tabMenu.kind === 'script' ? scripts.find((item) => item.uid === tabMenu.uid) : layouts.find((item) => item.uid === tabMenu.uid); if (target) beginTreeRename({ kind: tabMenu.kind, uid: target.uid, path: target.path }, 'tab') }}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (tabMenu.kind === 'graph') { const target = documents.find((document) => document.uid === tabMenu.uid); if (target) void deleteDocument(target) } else if (tabMenu.kind === 'script') { const target = scripts.find((script) => script.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'script', uid: target.uid, path: target.path }) } else { const target = layouts.find((layout) => layout.uid === tabMenu.uid); if (target) void deleteWorkspaceTarget({ kind: 'layout', uid: target.uid, path: target.path }) } setTabMenu(null) }}><Icon name="trash" size={13}/>ファイルを削除</button></div>}
+    {treeMenu && <div className="tab-context-menu tree-context-menu" style={{ left: treeMenu.x, top: treeMenu.y }} onPointerDown={(event) => event.stopPropagation()}>{treeMenu.target.kind === 'root' || treeMenu.target.kind === 'folder' ? <><label>{treeMenu.target.path || rootName}</label><button onClick={() => beginTreeCreate(treeMenu.target, 'file')}><Icon name="file" size={13}/>ファイルを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'folder')}><Icon name="folder" size={13}/>フォルダを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'script')}><Icon name="script" size={13}/>Starlarkスクリプトを作成</button><button onClick={() => beginTreeCreate(treeMenu.target, 'layout')}><Icon name="fit" size={13}/>レイアウトファイルを作成</button>{treeMenu.target.kind === 'folder' && <button className="danger" onClick={() => { void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>フォルダを削除</button>}</> : <>{(treeMenu.target.kind === 'graph' || (treeMenu.target.kind === 'asset' && treeMenu.target.path.toLowerCase().endsWith('.yuraive'))) && <button onClick={() => { if (treeMenu.target.kind === 'graph') { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) setInspectionTarget({ kind: 'json', document: target }) } else { const target = assets.find((item) => item.path === treeMenu.target.path); if (target) setInspectionTarget({ kind: 'bundle', asset: target }) } setTreeMenu(null) }}><Icon name="info" size={13}/>作品情報とアセット</button>}{treeMenu.target.kind === 'graph' && <button onClick={() => { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) duplicateDocument(target); setTreeMenu(null) }}><Icon name="copy" size={13}/>複製</button>}<button onClick={() => beginTreeRename(treeMenu.target, 'tree')}><Icon name="file" size={13}/>名前を変更</button><button className="danger" onClick={() => { if (treeMenu.target.kind === 'graph') { const target = documents.find((item) => item.uid === treeMenu.target.uid); if (target) void deleteDocument(target) } else void deleteWorkspaceTarget(treeMenu.target); setTreeMenu(null) }}><Icon name="trash" size={13}/>削除</button></>}</div>}
     <input ref={folderInput} type="file" multiple hidden onChange={(event) => event.target.files && void openFallback(event.target.files)}/>
     {toast && <div className="toast">{toast}</div>}
   </div>

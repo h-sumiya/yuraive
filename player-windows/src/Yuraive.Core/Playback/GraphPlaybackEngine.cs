@@ -40,6 +40,7 @@ public sealed class GraphPlaybackEngine : IAsyncDisposable
     private long _nodeEnteredTimestamp = Stopwatch.GetTimestamp();
     private bool _nodeClockRunning;
     private bool _transitionClaimed;
+    private long _mediaGeneration;
     private string? _nonFatalError;
 
     public GraphPlaybackEngine(
@@ -138,16 +139,7 @@ public sealed class GraphPlaybackEngine : IAsyncDisposable
                 _graphRef = reference;
                 _graph = loaded;
                 _history = (await _historyStore.ReadAsync(reference.GraphId, cancellationToken)).ToList();
-                _runId = Guid.NewGuid().ToString();
-                _runStartedAt = Now();
-                _currentNodeId = null;
-                _currentMedia = null;
-                _currentStartedAt = null;
-                _currentFinalized = true;
-                _activePlayBaseMs = 0;
-                _visualPath = null;
-                _layoutSource = null;
-                _nonFatalError = null;
+                BeginNewRun();
                 var start = loaded.Nodes.SingleOrDefault(item => item.Value.Start);
                 if (start.Key is null) throw new InvalidDataException("開始ノードが1件ではありません");
                 await EnterNodeAsync(start.Key, Trigger("start"), new(StringComparer.Ordinal), null, cancellationToken);
@@ -166,11 +158,7 @@ public sealed class GraphPlaybackEngine : IAsyncDisposable
             if (_currentMedia is not null && !_currentFinalized) await FinalizeCurrentAsync("restarted", cancellationToken);
             _player.Stop();
             _player.Clear();
-            _runId = Guid.NewGuid().ToString();
-            _runStartedAt = Now();
-            _activePlayBaseMs = 0;
-            _currentFinalized = true;
-            _currentMedia = null;
+            BeginNewRun();
             var start = _graph?.Nodes.SingleOrDefault(item => item.Value.Start);
             if (start?.Key is null) throw new InvalidDataException("開始ノードがありません");
             await EnterNodeAsync(start.Value.Key, Trigger("restart"), new(StringComparer.Ordinal), null, cancellationToken);
@@ -245,9 +233,9 @@ public sealed class GraphPlaybackEngine : IAsyncDisposable
         {
             var start = _graph?.Nodes.SingleOrDefault(item => item.Value.Start);
             if (start?.Key is null) return;
-            _runId = Guid.NewGuid().ToString();
-            _runStartedAt = Now();
-            _activePlayBaseMs = 0;
+            _player.Stop();
+            _player.Clear();
+            BeginNewRun();
             await EnterNodeAsync(start.Value.Key, Trigger("restart"), new(StringComparer.Ordinal), null, cancellationToken);
         }
         else if (_player.HasMedia)
@@ -404,7 +392,7 @@ public sealed class GraphPlaybackEngine : IAsyncDisposable
         {
             SourcePath = fullPath,
             SubtitlePath = source.Subtitle is null ? null : _library.GetAssetPath(reference, source.Subtitle),
-            MediaId = $"{reference.GraphId}#{_currentNodeId}/{media.Id}",
+            MediaId = $"{_runId}:{++_mediaGeneration}:{reference.GraphId}#{_currentNodeId}/{media.Id}",
             Title = string.IsNullOrWhiteSpace(metadata?.DisplayName) ? reference.ContentFolderName : metadata.DisplayName,
             Artist = metadata?.Author,
             ArtworkPath = _visualPath is null ? null : _library.GetAssetPath(reference, _visualPath),
@@ -418,6 +406,27 @@ public sealed class GraphPlaybackEngine : IAsyncDisposable
             _activePlayBaseMs = 0;
             _activePlayStartedTimestamp = null;
         }
+    }
+
+    private void BeginNewRun()
+    {
+        _runId = Guid.NewGuid().ToString();
+        _runStartedAt = Now();
+        _currentNodeId = null;
+        _currentMedia = null;
+        _currentStartedAt = null;
+        _currentStartPositionMs = 0;
+        _activePlayBaseMs = 0;
+        _activePlayStartedTimestamp = null;
+        _currentFinalized = true;
+        _visualPath = null;
+        _layoutSource = null;
+        _baseButtons = [];
+        _nodeElapsedBaseMs = 0;
+        _nodeClockRunning = false;
+        _transitionClaimed = false;
+        _mediaGeneration = 0;
+        _nonFatalError = null;
     }
 
     private async Task<IReadOnlyList<RenderedButton>> RenderButtonsAsync(YuraiveNode node, CancellationToken cancellationToken)

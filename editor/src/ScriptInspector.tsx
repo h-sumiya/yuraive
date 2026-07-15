@@ -35,6 +35,7 @@ export default function ScriptInspector({ script, test, assets = [] }: { script:
       <section className="script-side-section script-api">
         <h3>利用できるコンテキスト</h3>
         <code>ctx["history"]</code><span>確定済みの PlaybackHistoryEntry 配列</span>
+        <code>ctx["currentHistory"]</code><span>現在の runId に属する確定済み履歴。同じ履歴要素への参照配列</span>
         <code>ctx["current"]</code><span>現在または直前のMedia再生情報。未再生時は None</span>
         <code>ctx["trigger"]</code><span>start / restart / end / button / empty / render / test / debug</span>
         <code>ctx["now"]</code><span>実行時刻（RFC 3339）</span>

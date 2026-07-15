@@ -38,6 +38,54 @@ data class LibraryGraph(
     val modifiedAt: Long = 0,
 )
 
+enum class AssetInspectionProblem { UNSAFE_PATH, MISSING }
+
+data class LibraryAssetInspection(
+    val path: String,
+    val recognized: Boolean,
+    val embedded: Boolean = false,
+    val problem: AssetInspectionProblem? = null,
+)
+
+data class LibraryContentInspection(
+    val graph: YuraiveGraph,
+    val isBundle: Boolean,
+    val assets: List<LibraryAssetInspection>,
+)
+
+internal fun inspectGraphAssets(
+    graph: YuraiveGraph,
+    isBundle: Boolean,
+    embeddedPaths: Set<String>,
+    exists: (String) -> Boolean,
+): List<LibraryAssetInspection> {
+    val bundledTextPaths = buildSet {
+        graph.playbackStats?.path?.let(::add)
+        graph.nodes.values.forEach { it.script?.path?.let(::add) }
+        graph.buttons.values.forEach { it.render?.path?.let(::add) }
+        graph.playerControls.values.forEach { it.layout?.let(::add) }
+    }
+    return GraphValidator.allAssetPaths(graph)
+        .filter(String::isNotEmpty)
+        .sorted()
+        .map { path ->
+            val safe = GraphValidator.isSafeRelativePath(path)
+            val embedded = safe && path in embeddedPaths
+            val requiresEmbedding = isBundle && path in bundledTextPaths
+            val recognized = safe && (embedded || (!requiresEmbedding && exists(path)))
+            LibraryAssetInspection(
+                path = path,
+                recognized = recognized,
+                embedded = embedded,
+                problem = when {
+                    !safe -> AssetInspectionProblem.UNSAFE_PATH
+                    !recognized -> AssetInspectionProblem.MISSING
+                    else -> null
+                },
+            )
+        }
+}
+
 data class LibraryRoot(
     val grant: RootGrant,
     val directory: LibraryDirectory? = null,
@@ -203,6 +251,13 @@ class DocumentLibrary(private val context: Context) {
         YuraiveJson.format.decodeFromString<YuraiveGraph>(text).also {
             graphCache[ref.graphId] = CachedGraph(it, text, decoded?.textAssets.orEmpty(), isBundle)
         }
+    }
+
+    suspend fun inspectContent(ref: GraphRef): LibraryContentInspection = withContext(Dispatchers.IO) {
+        val graph = readGraph(ref)
+        val cached = graphCache[ref.graphId] ?: error("Yuraive ファイルを読み込めません")
+        val assets = inspectGraphAssets(graph, cached.isBundle, cached.textAssets.keys) { path -> resolveAsset(ref, path) != null }
+        LibraryContentInspection(graph, cached.isBundle, assets)
     }
 
     suspend fun readAssetText(ref: GraphRef, relativeAssetPath: String, maxBytes: Int = 2 * 1024 * 1024): String = withContext(Dispatchers.IO) {

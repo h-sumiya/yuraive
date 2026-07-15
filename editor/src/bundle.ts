@@ -17,6 +17,28 @@ type BundleTextFile = {
   kind: 1 | 2
 }
 
+export type DecodedPlayerBundle = {
+  bundleVersion: number
+  graphJson: string
+  textAssets: Record<string, { kind: 'starlark' | 'layout'; content: string }>
+}
+
+let bundleRuntime: Promise<typeof import('./wasm/yuraive-runtime/yuraive_runtime')> | undefined
+let bundleRuntimeReady: Promise<unknown> | undefined
+
+export const decodePlayerBundle = async (input: Uint8Array): Promise<DecodedPlayerBundle> => {
+  bundleRuntime ??= import('./wasm/yuraive-runtime/yuraive_runtime')
+  const runtime = await bundleRuntime
+  bundleRuntimeReady ??= runtime.default()
+  await bundleRuntimeReady
+  const result = JSON.parse(runtime.decodeBundle(input)) as DecodedPlayerBundle & { error?: string }
+  if (result.error) throw new Error(result.error)
+  if (result.bundleVersion !== 1 || typeof result.graphJson !== 'string' || !result.textAssets) {
+    throw new Error('Yuraiveバンドルの内容が不正です')
+  }
+  return result
+}
+
 const concat = (parts: Uint8Array[]) => {
   const size = parts.reduce((total, part) => total + part.length, 0)
   const output = new Uint8Array(size)

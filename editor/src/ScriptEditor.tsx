@@ -30,6 +30,7 @@ const completions = [
   { label: 'choice', type: 'function', apply: 'choice(["a", "b"])', detail: '配列から1件を抽選' },
   { label: 'shuffled', type: 'function', apply: 'shuffled([1, 2, 3])', detail: 'シャッフルした新しい配列' },
   { label: 'ctx["history"]', type: 'property', detail: '再生履歴の全件配列' },
+  { label: 'ctx["currentHistory"]', type: 'property', detail: '現在の実行IDに属する確定済み履歴' },
   { label: 'ctx["current"]', type: 'property', detail: '現在のノードと再生位置' },
   { label: 'ctx["trigger"]', type: 'property', detail: 'start / restart / end / button / empty / render / test / debug' },
   { label: 'ctx["now"]', type: 'property', detail: '実行時刻 (RFC 3339)' },

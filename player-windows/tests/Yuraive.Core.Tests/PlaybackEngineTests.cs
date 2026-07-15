@@ -62,6 +62,51 @@ public sealed class PlaybackEngineTests
         Assert.Equal(3_210, Assert.Single(restoredAdapter.Loads).PositionMs);
     }
 
+    [Fact]
+    public async Task OpeningAThenBThenACreatesDistinctRunsAndPlatformItems()
+    {
+        using var temporary = new TemporaryDirectory();
+        var (firstReference, _) = TestGraph.WriteTwoSceneGraph(temporary.Combine("content-a"));
+        var (secondReference, _) = TestGraph.WriteTwoSceneGraph(temporary.Combine("content-b"));
+        var paths = new AppDataPaths(temporary.Combine("state"));
+        var adapter = new FakeMediaPlaybackAdapter();
+        await using var engine = CreateEngine(paths, adapter);
+
+        await engine.StartAsync(firstReference);
+        var firstRunId = engine.State.RunId;
+        var firstPlatformItemId = adapter.Loads[^1].MediaId;
+
+        await engine.StartAsync(secondReference);
+        var secondRunId = engine.State.RunId;
+
+        await engine.StartAsync(firstReference);
+        var returnRunId = engine.State.RunId;
+        var returnPlatformItemId = adapter.Loads[^1].MediaId;
+
+        Assert.NotNull(firstRunId);
+        Assert.NotNull(secondRunId);
+        Assert.NotNull(returnRunId);
+        Assert.NotEqual(firstRunId, secondRunId);
+        Assert.NotEqual(firstRunId, returnRunId);
+        Assert.NotEqual(secondRunId, returnRunId);
+        Assert.NotEqual(firstPlatformItemId, returnPlatformItemId);
+
+        var firstHistory = await new HistoryStore(paths).ReadAsync(firstReference.GraphId);
+        Assert.Single(firstHistory);
+        Assert.Equal(firstRunId, firstHistory[0].RunId);
+        Assert.NotEqual(firstHistory[0].RunId, engine.State.RunId);
+
+        await engine.NextAsync();
+        adapter.RaiseEnded();
+        await WaitUntilAsync(() => engine.State.Status == PlaybackStatus.Completed);
+        var completedRunId = engine.State.RunId;
+
+        await engine.StartAsync(firstReference);
+
+        Assert.NotEqual(completedRunId, engine.State.RunId);
+        Assert.NotEqual(returnPlatformItemId, adapter.Loads[^1].MediaId);
+    }
+
     private static GraphPlaybackEngine CreateEngine(AppDataPaths paths, FakeMediaPlaybackAdapter adapter) => new(
         new DocumentLibrary(paths),
         new HistoryStore(paths),

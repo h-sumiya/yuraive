@@ -30,6 +30,12 @@ pub fn run_starlark_wasm(request_json: &str) -> String {
     run_starlark_json(request_json)
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = decodeBundle)]
+pub fn decode_bundle_wasm(input: &[u8]) -> String {
+    decode_bundle_json(input)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Severity {

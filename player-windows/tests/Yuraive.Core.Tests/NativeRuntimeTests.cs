@@ -37,8 +37,23 @@ public sealed class NativeRuntimeTests
         {
             path = "route.star",
             functionName = "jump",
-            args = new object[] { new { target = "ending" } },
-            scripts = new Dictionary<string, string> { ["route.star"] = "def jump(ctx):\n    return {'target': ctx['target'], 'ok': True}\n" },
+            args = new object[]
+            {
+                new
+                {
+                    target = "ending",
+                    runId = "run-a",
+                    history = new[]
+                    {
+                        new { id = "a-1", runId = "run-a" },
+                        new { id = "b-1", runId = "run-b" },
+                    },
+                },
+            },
+            scripts = new Dictionary<string, string>
+            {
+                ["route.star"] = "def jump(ctx):\n    return {'target': ctx['target'], 'ok': True, 'currentIds': [entry['id'] for entry in ctx['currentHistory']]}\n",
+            },
             timeoutMs = 1_200,
         }, YuraiveJson.Options);
         using var response = JsonDocument.Parse(NativeRuntime.RunStarlarkJson(request));
@@ -46,6 +61,7 @@ public sealed class NativeRuntimeTests
         Assert.False(response.RootElement.TryGetProperty("error", out _));
         Assert.Equal("ending", response.RootElement.GetProperty("value").GetProperty("target").GetString());
         Assert.True(response.RootElement.GetProperty("value").GetProperty("ok").GetBoolean());
+        Assert.Equal("a-1", response.RootElement.GetProperty("value").GetProperty("currentIds")[0].GetString());
     }
 
     [Fact]

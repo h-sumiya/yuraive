@@ -5,9 +5,14 @@ import { createStarlarkContext } from './scriptContext'
 import { resetStarlarkRuntime, runStarlark } from './starlark'
 import type { AssetEntry, ButtonRenderResult, LayoutDocument, MediaCandidate, PlaybackHistoryEntry, PreviewTraceEntry, ScriptDocument, StarlarkCurrent, YuraiveButton, YuraiveGraph } from './types'
 
-const PreviewIcon = ({ name }: { name: 'play' | 'close' | 'debug' | 'trash' | 'export' }) => {
-  const path = name === 'play' ? 'm7 4 13 8-13 8z' : name === 'close' ? 'm6 6 12 12M18 6 6 18' : name === 'trash' ? 'M4 7h16M9 3h6l1 4H8zM6 7l1 14h10l1-14' : name === 'export' ? 'M12 3v12m-4-4 4 4 4-4M4 17v4h16v-4' : 'M8 9h8M9 4h6l1 3H8zM7 7l-2 3v8l3 3h8l3-3v-8l-2-3M3 13h4m10 0h4'
+const PreviewIcon = ({ name }: { name: 'play' | 'pause' | 'close' | 'debug' | 'trash' | 'export' }) => {
+  const path = name === 'play' ? 'm7 4 13 8-13 8z' : name === 'pause' ? 'M8 5v14M16 5v14' : name === 'close' ? 'm6 6 12 12M18 6 6 18' : name === 'trash' ? 'M4 7h16M9 3h6l1 4H8zM6 7l1 14h10l1-14' : name === 'export' ? 'M12 3v12m-4-4 4 4 4-4M4 17v4h16v-4' : 'M8 9h8M9 4h6l1 3H8zM7 7l-2 3v8l3 3h8l3-3v-8l-2-3M3 13h4m10 0h4'
   return <svg className="icon" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d={path}/></svg>
+}
+
+const formatPreviewTime = (valueMs: number) => {
+  const seconds = Math.max(0, Math.floor(valueMs / 1000))
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
 function useObjectUrl(file?: File) {
@@ -58,6 +63,8 @@ export function Preview({ graph, graphId, assets, scripts, layouts, initialHisto
   const historyRef = useRef<PlaybackHistoryEntry[]>(initialHistory)
   const [trace, setTrace] = useState<PreviewTraceEntry[]>([])
   const [positionMs, setPositionMs] = useState(0)
+  const [durationMs, setDurationMs] = useState(0)
+  const [playing, setPlaying] = useState(false)
   const [buttonResults, setButtonResults] = useState<Record<string, ButtonRenderResult>>({})
   const [resolving, setResolving] = useState(true)
   const [debugOpen, setDebugOpen] = useState(true)
@@ -65,6 +72,7 @@ export function Preview({ graph, graphId, assets, scripts, layouts, initialHisto
   const runId = useRef(crypto.randomUUID())
   const runStartedAt = useRef(new Date().toISOString())
   const tracker = useRef<ActiveTracker | null>(null)
+  const mediaElement = useRef<HTMLMediaElement | null>(null)
   const finalizedCurrent = useRef<PlaybackHistoryEntry | null>(null)
   const mounted = useRef(true)
   const started = useRef(false)
@@ -163,6 +171,8 @@ export function Preview({ graph, graphId, assets, scripts, layouts, initialHisto
     currentRef.current = next
     setCurrent(next)
     setPositionMs(0)
+    setDurationMs(0)
+    setPlaying(false)
     finalizedCurrent.current = null
     if (selected) {
       tracker.current = { id: crypto.randomUUID(), runId: runId.current, nodeId, candidate: selected, startedAt: new Date(), activePlayMs: 0, startPositionMs: 0, positionMs: 0, durationMs: 0 }
@@ -252,6 +262,20 @@ export function Preview({ graph, graphId, assets, scripts, layouts, initialHisto
 
   const close = () => { finalize('stopped'); resetStarlarkRuntime(); onClose() }
   const restart = async () => { const snapshot = finalize('restarted'); runId.current = crypto.randomUUID(); runStartedAt.current = new Date().toISOString(); await resolveToMedia(start, { type: 'restart' }, snapshot) }
+  const next = async () => { await transitionFromCurrent('completed', { type: 'next' }) }
+  const toggleMedia = () => {
+    const element = mediaElement.current
+    if (!element) return
+    if (element.paused) void element.play()
+    else element.pause()
+  }
+  const seek = (value: number) => {
+    const element = mediaElement.current
+    if (!element || !Number.isFinite(value)) return
+    element.currentTime = value / 1000
+    if (tracker.current) tracker.current.positionMs = value
+    setPositionMs(value)
+  }
   const onButton = async (buttonId: string, button: YuraiveButton) => {
     addTrace('button', `ボタン押下: ${buttonId}`)
     const snapshot = finalize('button')
@@ -287,9 +311,9 @@ export function Preview({ graph, graphId, assets, scripts, layouts, initialHisto
       <header><div><PreviewIcon name="play"/><strong>プレビュー</strong><span>{node ? `${node.editor?.label || current?.nodeId} - ${current?.nodeId}` : resolving ? '遷移を解決中…' : '停止'}</span></div><div><button className={`icon-button ${debugOpen ? 'active' : ''}`} title="デバッグパネル" onClick={() => setDebugOpen(!debugOpen)}><PreviewIcon name="debug"/></button><button className="icon-button" onClick={close}><PreviewIcon name="close"/></button></div></header>
       <div className="preview-body">
         <div className="preview-stage">
-          {imageUrl && <img src={imageUrl} style={{ objectFit: candidate?.source.fit === 'stretch' ? 'fill' : candidate?.source.fit ?? 'cover' }} alt=""/>}
-          {candidate?.source.type === 'video' && mediaUrl && <video key={`${current?.nodeId}-${candidate.id}`} src={mediaUrl} autoPlay controls style={{ objectFit: candidate.source.fit === 'stretch' ? 'fill' : candidate.source.fit ?? 'contain' }} onLoadedMetadata={(event) => { if (tracker.current) tracker.current.durationMs = event.currentTarget.duration * 1000 }} onPlay={() => { if (tracker.current && tracker.current.playingSince === undefined) tracker.current.playingSince = performance.now() }} onPause={() => { const item = tracker.current; if (item?.playingSince !== undefined) { item.activePlayMs += performance.now() - item.playingSince; item.playingSince = undefined } }} onTimeUpdate={(event) => { const value = event.currentTarget.currentTime * 1000; if (tracker.current) tracker.current.positionMs = value; setPositionMs(value) }} onEnded={() => void transitionFromCurrent('completed', { type: 'end' })}/>} 
-          {candidate?.source.type !== 'video' && mediaUrl && <audio key={`${current?.nodeId}-${candidate?.id}`} src={mediaUrl} autoPlay controls onLoadedMetadata={(event) => { if (tracker.current) tracker.current.durationMs = event.currentTarget.duration * 1000 }} onPlay={() => { if (tracker.current && tracker.current.playingSince === undefined) tracker.current.playingSince = performance.now() }} onPause={() => { const item = tracker.current; if (item?.playingSince !== undefined) { item.activePlayMs += performance.now() - item.playingSince; item.playingSince = undefined } }} onTimeUpdate={(event) => { const value = event.currentTarget.currentTime * 1000; if (tracker.current) tracker.current.positionMs = value; setPositionMs(value) }} onEnded={() => void transitionFromCurrent('completed', { type: 'end' })}/>} 
+          {imageUrl && <><img className="preview-artwork-cover" src={imageUrl} aria-hidden="true" alt=""/><span className="preview-artwork-shade"/><img className="preview-artwork-contain" src={imageUrl} alt=""/></>}
+          {candidate?.source.type === 'video' && mediaUrl && <video ref={(element) => { mediaElement.current = element }} key={`${current?.nodeId}-${candidate.id}`} src={mediaUrl} autoPlay onLoadedMetadata={(event) => { const value = Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration * 1000 : 0; if (tracker.current) tracker.current.durationMs = value; setDurationMs(value) }} onPlay={() => { setPlaying(true); if (tracker.current && tracker.current.playingSince === undefined) tracker.current.playingSince = performance.now() }} onPause={() => { setPlaying(false); const item = tracker.current; if (item?.playingSince !== undefined) { item.activePlayMs += performance.now() - item.playingSince; item.playingSince = undefined } }} onTimeUpdate={(event) => { const value = event.currentTarget.currentTime * 1000; if (tracker.current) tracker.current.positionMs = value; setPositionMs(value) }} onEnded={() => void transitionFromCurrent('completed', { type: 'end' })}/>}
+          {candidate?.source.type !== 'video' && mediaUrl && <audio ref={(element) => { mediaElement.current = element }} key={`${current?.nodeId}-${candidate?.id}`} src={mediaUrl} autoPlay onLoadedMetadata={(event) => { const value = Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration * 1000 : 0; if (tracker.current) tracker.current.durationMs = value; setDurationMs(value) }} onPlay={() => { setPlaying(true); if (tracker.current && tracker.current.playingSince === undefined) tracker.current.playingSince = performance.now() }} onPause={() => { setPlaying(false); const item = tracker.current; if (item?.playingSince !== undefined) { item.activePlayMs += performance.now() - item.playingSince; item.playingSince = undefined } }} onTimeUpdate={(event) => { const value = event.currentTarget.currentTime * 1000; if (tracker.current) tracker.current.positionMs = value; setPositionMs(value) }} onEnded={() => void transitionFromCurrent('completed', { type: 'end' })}/>}
           {!candidate && <div className="preview-empty"><PreviewIcon name="play"/><strong>{resolving ? '遷移を解決中…' : node?.terminal ? 'グラフが終了しました' : 'メディアなし'}</strong>{!resolving && node && !node.terminal && node.onEnd?.length ? <button className="primary-button" onClick={() => void transitionFromCurrent('completed', { type: 'empty' })}>即時遷移を実行</button> : null}</div>}
           {layoutSource && <LayoutFrame
             source={layoutSource}
@@ -305,7 +329,13 @@ export function Preview({ graph, graphId, assets, scripts, layouts, initialHisto
           <footer><span>{resolving ? '● resolving' : '● ready'}</span><span>{scripts.length} scripts · max 32 hops</span></footer>
         </aside>}
       </div>
-      <footer><span>履歴はこのプレビュー内のメモリにのみ保持されます</span><div><button className="text-button" onClick={() => void evaluateButtons()}>表示Scriptを再実行</button><button className="text-button" onClick={() => void restart()}>最初から</button><button className="primary-button" onClick={close}>終了</button></div></footer>
+      <div className="preview-transport">
+        <button type="button" aria-label={playing ? '一時停止' : '再生'} title={playing ? '一時停止' : '再生'} disabled={!mediaUrl} onClick={toggleMedia}><PreviewIcon name={playing ? 'pause' : 'play'}/></button>
+        <span>{formatPreviewTime(positionMs)}</span>
+        <input type="range" aria-label="再生位置" min={0} max={Math.max(durationMs, 1)} step={100} value={Math.min(positionMs, Math.max(durationMs, 1))} disabled={!mediaUrl || durationMs <= 0} onChange={(event) => seek(Number(event.currentTarget.value))}/>
+        <span>{formatPreviewTime(durationMs)}</span>
+      </div>
+      <footer><span>履歴はこのプレビュー内のメモリにのみ保持されます</span><div><button className="text-button" onClick={() => void evaluateButtons()}>表示Scriptを再実行</button><button className="text-button" onClick={() => void restart()}>最初から</button><button className="text-button" disabled={resolving || !node?.onEnd?.length} onClick={() => void next()}>次へ</button><button className="primary-button" onClick={close}>終了</button></div></footer>
     </div>
   </div>
 }

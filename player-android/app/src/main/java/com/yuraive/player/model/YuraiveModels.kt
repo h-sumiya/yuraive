@@ -326,7 +326,7 @@ object GraphValidator {
     }
 
     fun isSafeRelativePath(path: String): Boolean = path.isNotBlank() &&
-        !path.startsWith('/') && ':' !in path && path.split('/').none { it == ".." || it.isBlank() }
+        !path.startsWith('/') && ':' !in path && '\\' !in path && path.split('/').none { it == "." || it == ".." || it.isBlank() }
 }
 
 private object NativeGraphValidator {

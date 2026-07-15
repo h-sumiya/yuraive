@@ -5,8 +5,10 @@ use starlark::environment::{FrozenModule, Globals, GlobalsBuilder, LibraryExtens
 use starlark::eval::{Evaluator, ReturnFileLoader};
 use starlark::starlark_module;
 use starlark::syntax::{AstModule, Dialect};
+use starlark::values::dict::{DictMut, DictRef};
+use starlark::values::list::{AllocList, ListRef};
 use starlark::values::list_or_tuple::UnpackListOrTuple;
-use starlark::values::Value;
+use starlark::values::{Heap, Value};
 use starlark::PrintHandler;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -240,6 +242,36 @@ fn compile_loads(
     Ok(loaded)
 }
 
+fn add_current_history<'v>(context_value: Value<'v>, heap: Heap<'v>) -> Result<()> {
+    let Some(context) = DictRef::from_value(context_value) else {
+        return Ok(());
+    };
+    let Some(run_id) = context.get_str("runId").and_then(Value::unpack_str) else {
+        return Ok(());
+    };
+    let Some(history_value) = context.get_str("history") else {
+        return Ok(());
+    };
+    let run_id = run_id.to_owned();
+    drop(context);
+
+    let Some(history) = ListRef::from_value(history_value) else {
+        return Ok(());
+    };
+    let current_history = heap.alloc(AllocList(history.iter().filter(|entry| {
+        DictRef::from_value(*entry)
+            .and_then(|entry| entry.get_str("runId"))
+            .and_then(Value::unpack_str)
+            == Some(run_id.as_str())
+    })));
+    let key = heap.alloc("currentHistory");
+    let key = key.get_hashed().map_err(|error| anyhow!("{error:#}"))?;
+    DictMut::from_value(context_value)?
+        .aref
+        .insert_hashed(key, current_history);
+    Ok(())
+}
+
 fn execute(request: &StarlarkRunRequest, prints: &RefCell<Vec<String>>) -> Result<JsonValue> {
     let timeout_ms = request.timeout_ms.clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
     let deadline = Deadline::after(timeout_ms);
@@ -288,8 +320,12 @@ fn execute(request: &StarlarkRunRequest, prints: &RefCell<Vec<String>>) -> Resul
         let arguments = request
             .args
             .iter()
-            .map(|argument| module.heap().alloc(argument))
-            .collect::<Vec<_>>();
+            .map(|argument| {
+                let value = module.heap().alloc(argument);
+                add_current_history(value, module.heap())?;
+                Ok(value)
+            })
+            .collect::<Result<Vec<_>>>()?;
         let value = evaluator
             .eval_function(function, &arguments, &[])
             .map_err(|error| anyhow!("{error:#}"))?;
@@ -361,6 +397,26 @@ mod tests {
         assert_eq!(
             response.value,
             Some(json!({"target": "ending", "values": [1, true, null]}))
+        );
+        assert_eq!(response.error, None);
+    }
+
+    #[test]
+    fn adds_current_history_as_references_to_entries_from_the_selected_run() {
+        let response = run_starlark(&request(
+            "def jump(ctx):\n    ctx['currentHistory'][0]['nodeId'] = 'changed'\n    return {\n        'ids': [entry['id'] for entry in ctx['currentHistory']],\n        'historyNode': ctx['history'][0]['nodeId'],\n    }\n",
+            vec![json!({
+                "runId": "run-a",
+                "history": [
+                    {"id": "a-1", "runId": "run-a", "nodeId": "original"},
+                    {"id": "b-1", "runId": "run-b", "nodeId": "other"},
+                    {"id": "a-2", "runId": "run-a", "nodeId": "ending"}
+                ]
+            })],
+        ));
+        assert_eq!(
+            response.value,
+            Some(json!({"ids": ["a-1", "a-2"], "historyNode": "changed"}))
         );
         assert_eq!(response.error, None);
     }
