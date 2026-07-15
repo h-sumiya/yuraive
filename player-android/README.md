@@ -37,7 +37,15 @@ cd player-android
 ./gradlew lintDebug assembleRelease
 ```
 
-アプリ内の「＋」から Yuraive コンテンツを含むフォルダを追加します。選択したフォルダの読み取り権限は Android の Storage Access Framework により再起動後も保持されます。
+## フォルダの追加
+
+アプリ内の「＋」から追加元を選びます。
+
+- **この端末**: Android の Storage Access Framework でフォルダを選択します。読み取り権限は再起動後も保持されます。
+- **SMB**: ホスト、ポート、共有名を入力し、接続後に追加するフォルダを選択します。ドメイン、ユーザー名、パスワードは任意で、ユーザー名とパスワードがともに空欄の場合は guest 接続を使用します。
+- **WebDAV**: HTTPS URL と任意の Basic 認証情報を入力し、接続後に追加するフォルダを選択します。サーバーは `PROPFIND`（`Depth: 1`）と、シークに使用する `GET` の Range リクエストに対応している必要があります。
+
+SMB・WebDAV の接続情報と認証情報は Android Keystore の鍵で暗号化して保存します。端末が Tailscale に接続されていれば、tailnet 内の HTTPS WebDAV URL や SMB ホストも利用できます。
 
 設定の「すべての再生コントロールを表示・許可」を有効にすると、コンテンツ側の`playerControls`を一時的に上書きできます。JSON仕様は[YURAIVE_v1_SPEC.md](../notes/YURAIVE_v1_SPEC.md)を参照してください。
 

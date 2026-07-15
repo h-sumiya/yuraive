@@ -394,7 +394,7 @@ class GraphPlaybackEngine(
         val ref = graphRef ?: error("グラフ参照がありません")
         val source = media.source
         val sourcePath = source.video ?: source.audio ?: error("${media.id} に再生ソースがありません")
-        val sourceUri = library.assetUri(ref, sourcePath) ?: error("ファイルが見つかりません: $sourcePath")
+        val sourceUri = library.mediaUri(ref, sourcePath) ?: error("ファイルが見つかりません: $sourcePath")
         when (source.type) {
             "audioImage" -> {
                 visualPath = source.image
@@ -432,7 +432,7 @@ class GraphPlaybackEngine(
                     .build(),
             )
         source.subtitle?.let { subtitlePath ->
-            library.assetUri(ref, subtitlePath)?.let { subtitleUri ->
+            library.mediaUri(ref, subtitlePath)?.let { subtitleUri ->
                 itemBuilder.setSubtitleConfigurations(
                     listOf(
                         MediaItem.SubtitleConfiguration.Builder(subtitleUri)

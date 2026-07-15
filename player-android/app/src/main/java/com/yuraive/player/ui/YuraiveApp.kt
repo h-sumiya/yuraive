@@ -276,6 +276,7 @@ fun YuraiveApp(
     var validation by remember { mutableStateOf<Pair<GraphRef, List<ValidationIssue>>?>(null) }
     var validating by remember { mutableStateOf(false) }
     var scanVersion by remember { mutableStateOf(0) }
+    var showAddFolderDialog by rememberSaveable { mutableStateOf(false) }
 
     val activeBrowserRoot = browserRoot ?: browserRootUri?.let { uri ->
         libraryRoots.firstOrNull { it.grant.uri == uri }
@@ -444,7 +445,7 @@ fun YuraiveApp(
                             modifier = Modifier.padding(padding),
                             roots = libraryRoots,
                             scanning = scanning || validating,
-                            addFolder = addFolder,
+                            addFolder = { showAddFolderDialog = true },
                             refresh = { scanVersion++ },
                             removeRoot = { app.library.removeRoot(it) },
                             browseRoot = { root ->
@@ -536,6 +537,14 @@ fun YuraiveApp(
                     else TextButton(onClick = { validation = null }) { Text("閉じる") }
                 },
                 dismissButton = { if (errors.isEmpty()) TextButton(onClick = { validation = null }) { Text("キャンセル") } },
+            )
+        }
+
+        if (showAddFolderDialog) {
+            RemoteFolderDialog(
+                library = app.library,
+                onDismiss = { showAddFolderDialog = false },
+                onSelectLocal = addFolder,
             )
         }
     }

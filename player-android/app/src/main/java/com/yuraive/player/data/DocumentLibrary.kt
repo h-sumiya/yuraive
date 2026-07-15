@@ -21,6 +21,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import java.io.IOException
+import java.io.InputStream
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -74,11 +76,23 @@ private data class PreviewMetadata(
     val thumbnail: String? = null,
 )
 
+private data class StoredFile(
+    val rootUri: String,
+    val relativePath: String,
+    val name: String,
+    val isDirectory: Boolean,
+    val isFile: Boolean,
+    val length: Long = 0,
+    val lastModified: Long = 0,
+    val localFile: DocumentFile? = null,
+)
+
 class DocumentLibrary(private val context: Context) {
     private val preferences = context.getSharedPreferences("library", Context.MODE_PRIVATE)
     private val rootsMutable = MutableStateFlow(readRoots())
-    private val rootCache = ConcurrentHashMap<String, DocumentFile>()
-    private val childrenCache = ConcurrentHashMap<String, Map<String, DocumentFile>>()
+    private val remoteSources = RemoteSourceManager(context)
+    private val rootCache = ConcurrentHashMap<String, StoredFile>()
+    private val childrenCache = ConcurrentHashMap<String, Map<String, StoredFile>>()
     private val directoryCache = ConcurrentHashMap<String, LibraryDirectory>()
     private val graphCache = ConcurrentHashMap<String, CachedGraph>()
     private val validationCache = ConcurrentHashMap<String, CachedValidation>()
@@ -94,8 +108,21 @@ class DocumentLibrary(private val context: Context) {
         persist(updated)
     }
 
+    suspend fun browseRemoteFolders(config: RemoteConnectionConfig, relativePath: String): List<RemoteFolder> =
+        remoteSources.browse(config, relativePath)
+
+    fun addRemoteRoot(config: RemoteConnectionConfig, relativePath: String, fallbackName: String) {
+        val grant = remoteSources.save(config, relativePath, fallbackName)
+        val updated = (rootsMutable.value.filterNot { it.uri == grant.uri } + grant).sortedBy { it.name.lowercase() }
+        persist(updated)
+    }
+
     fun removeRoot(uri: String) {
-        runCatching { context.contentResolver.releasePersistableUriPermission(Uri.parse(uri), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        if (remoteSources.isRemoteRoot(uri)) {
+            remoteSources.remove(uri)
+        } else {
+            runCatching { context.contentResolver.releasePersistableUriPermission(Uri.parse(uri), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        }
         knownGraphsMutable.value = knownGraphsMutable.value.filterNot { it.ref.rootUri == uri }
         persist(rootsMutable.value.filterNot { it.uri == uri })
     }
@@ -127,8 +154,7 @@ class DocumentLibrary(private val context: Context) {
         scriptCache.clear()
         val scanned = rootsMutable.value.map { grant ->
             runCatching {
-                val root = DocumentFile.fromTreeUri(context, Uri.parse(grant.uri))
-                    ?: error("フォルダを開けません")
+                val root = rootFile(grant)
                 rootCache[grant.uri] = root
                 LibraryRoot(grant, scanDirectory(grant, root, ""))
             }.getOrElse { LibraryRoot(grant, error = it.message ?: "フォルダを読み込めません") }
@@ -171,7 +197,7 @@ class DocumentLibrary(private val context: Context) {
         val file = bundleRelativePath(ref.relativePath)?.let { resolveFromRoot(ref, it) }
             ?: resolveFromRoot(ref, ref.relativePath)
             ?: error("Yuraive ファイルが見つかりません")
-        val isBundle = isBundlePath(file.name.orEmpty())
+        val isBundle = isBundlePath(file.name)
         val decoded = if (isBundle) NativeBundleDecoder.decode(readBytes(file, 16 * 1024 * 1024)) else null
         val text = decoded?.graphJson ?: readText(file, 8 * 1024 * 1024)
         YuraiveJson.format.decodeFromString<YuraiveGraph>(text).also {
@@ -203,12 +229,12 @@ class DocumentLibrary(private val context: Context) {
             return@withContext sources.also { scriptCache[ref.graphId] = it }
         }
         val contentRoot = resolveFromRoot(ref, ref.parentPath)
-            ?.takeIf(DocumentFile::isDirectory)
+            ?.takeIf(StoredFile::isDirectory)
             ?: error("コンテンツフォルダが見つかりません")
         val sources = linkedMapOf<String, String>()
         var totalBytes = 0
 
-        fun collect(directory: DocumentFile, relativeDirectory: String, depth: Int) {
+        fun collect(directory: StoredFile, relativeDirectory: String, depth: Int) {
             require(depth <= 16) { "スクリプトフォルダの階層が深すぎます" }
             children(directory).forEach { (name, file) ->
                 val path = listOf(relativeDirectory, name).filter(String::isNotEmpty).joinToString("/")
@@ -231,8 +257,24 @@ class DocumentLibrary(private val context: Context) {
 
     suspend fun assetUri(ref: GraphRef, relativeAssetPath: String): Uri? = withContext(Dispatchers.IO) {
         if (!GraphValidator.isSafeRelativePath(relativeAssetPath)) return@withContext null
-        resolveAsset(ref, relativeAssetPath)?.uri
+        val file = resolveAsset(ref, relativeAssetPath) ?: return@withContext null
+        file.localFile?.uri ?: remoteSources.materialize(
+            file.rootUri,
+            file.relativePath,
+            file.lastModified,
+            file.length,
+        )
     }
+
+    suspend fun mediaUri(ref: GraphRef, relativeAssetPath: String): Uri? = withContext(Dispatchers.IO) {
+        if (!GraphValidator.isSafeRelativePath(relativeAssetPath)) return@withContext null
+        val file = resolveAsset(ref, relativeAssetPath) ?: return@withContext null
+        file.localFile?.uri ?: remoteSources.mediaUri(file.rootUri, file.relativePath)
+    }
+
+    internal fun openRemoteMedia(uri: Uri, offset: Long): RemoteRead = remoteSources.openMedia(uri, offset)
+
+    internal fun isRemoteMediaUri(uri: Uri): Boolean = uri.scheme == RemoteSourceManager.REMOTE_MEDIA_SCHEME
 
     suspend fun validate(ref: GraphRef, graph: YuraiveGraph): List<ValidationIssue> = withContext(Dispatchers.IO) {
         validationCache[ref.graphId]
@@ -300,16 +342,13 @@ class DocumentLibrary(private val context: Context) {
         issues.toList().also { validationCache[ref.graphId] = CachedValidation(graph, it) }
     }
 
-    private fun scanDirectory(grant: RootGrant, directory: DocumentFile, relativePath: String): LibraryDirectory {
-        val files = directory.listFiles()
-        childrenCache[directory.uri.toString()] = files.mapNotNull { file ->
-            file.name?.let { it to file }
-        }.toMap()
-        val bundleFiles = files.filter { file -> file.isFile && isBundlePath(file.name.orEmpty()) }
-        val bundleNames = bundleFiles.mapNotNull { it.name?.let(::graphBaseName)?.lowercase(Locale.ROOT) }.toSet()
+    private fun scanDirectory(grant: RootGrant, directory: StoredFile, relativePath: String): LibraryDirectory {
+        val files = children(directory).values.toList()
+        val bundleFiles = files.filter { file -> file.isFile && isBundlePath(file.name) }
+        val bundleNames = bundleFiles.map { graphBaseName(it.name).lowercase(Locale.ROOT) }.toSet()
         val graphFiles = bundleFiles + files.filter { file ->
-            file.isFile && file.name?.endsWith(".yuraive.json", ignoreCase = true) == true
-                && graphBaseName(file.name.orEmpty()).lowercase(Locale.ROOT) !in bundleNames
+            file.isFile && file.name.endsWith(".yuraive.json", ignoreCase = true)
+                && graphBaseName(file.name).lowercase(Locale.ROOT) !in bundleNames
         }
         val name = relativePath.substringAfterLast('/').ifBlank { grant.name }
         if (graphFiles.isNotEmpty()) {
@@ -326,18 +365,17 @@ class DocumentLibrary(private val context: Context) {
             name = name,
             relativePath = relativePath,
             folders = files.mapNotNull { file ->
-                val fileName = file.name ?: return@mapNotNull null
                 if (!file.isDirectory) return@mapNotNull null
                 LibraryFolder(
-                    name = fileName,
-                    relativePath = listOf(relativePath, fileName).filter(String::isNotEmpty).joinToString("/"),
+                    name = file.name,
+                    relativePath = listOf(relativePath, file.name).filter(String::isNotEmpty).joinToString("/"),
                 )
             }.sortedBy { it.name.lowercase() },
         ).also { directoryCache[directoryKey(grant.uri, relativePath)] = it }
     }
 
-    private fun scanGraphPreview(grant: RootGrant, parentPath: String, file: DocumentFile): LibraryGraph {
-        val fileName = file.name ?: "content.yuraive.json"
+    private fun scanGraphPreview(grant: RootGrant, parentPath: String, file: StoredFile): LibraryGraph {
+        val fileName = file.name.ifBlank { "content.yuraive.json" }
         val relativePath = listOf(parentPath, fileName).filter(String::isNotEmpty).joinToString("/")
         val ref = GraphRef(grant.uri, grant.name, relativePath)
         return runCatching {
@@ -347,26 +385,26 @@ class DocumentLibrary(private val context: Context) {
                 displayName = metadata.displayName?.takeIf(String::isNotBlank) ?: graphBaseName(fileName),
                 author = metadata.author?.takeIf(String::isNotBlank),
                 thumbnailPath = metadata.thumbnail?.takeIf(String::isNotBlank),
-                modifiedAt = file.lastModified(),
+                modifiedAt = file.lastModified,
             )
         }.getOrElse {
             LibraryGraph(
                 ref = ref,
                 displayName = graphBaseName(fileName),
                 parseError = it.message ?: "JSON メタデータを解析できません",
-                modifiedAt = file.lastModified(),
+                modifiedAt = file.lastModified,
             )
         }
     }
 
-    private fun readBundleMetadata(file: DocumentFile): PreviewMetadata {
+    private fun readBundleMetadata(file: StoredFile): PreviewMetadata {
         val decoded = NativeBundleDecoder.decode(readBytes(file, 16 * 1024 * 1024))
         val metadata = YuraiveJson.format.decodeFromString<YuraiveGraph>(decoded.graphJson).metadata
         return PreviewMetadata(metadata?.displayName, metadata?.author, metadata?.thumbnail)
     }
 
-    private fun readMetadataPrefix(file: DocumentFile): PreviewMetadata {
-        return context.contentResolver.openInputStream(file.uri)?.bufferedReader(Charsets.UTF_8)?.use { reader ->
+    private fun readMetadataPrefix(file: StoredFile): PreviewMetadata {
+        return openInput(file).bufferedReader(Charsets.UTF_8).use { reader ->
             val prefix = StringBuilder()
             val buffer = CharArray(METADATA_READ_CHUNK)
             while (prefix.length < METADATA_PREFIX_LIMIT) {
@@ -388,7 +426,7 @@ class DocumentLibrary(private val context: Context) {
                 }
             }
             error("メタデータがJSONの先頭 ${METADATA_PREFIX_LIMIT / 1024} KiB以内にありません")
-        } ?: error("ファイルを開けません: ${file.name}")
+        }
     }
 
     private fun com.yuraive.player.model.GraphMetadataPreview?.toPreviewMetadata() = PreviewMetadata(
@@ -408,17 +446,18 @@ class DocumentLibrary(private val context: Context) {
     private fun directoryKey(rootUri: String, relativePath: String) = "$rootUri::$relativePath"
     private fun favoriteTimestampKey(graphId: String) = "favoriteAt:$graphId"
 
-    private fun resolveAsset(ref: GraphRef, path: String): DocumentFile? {
+    private fun resolveAsset(ref: GraphRef, path: String): StoredFile? {
         val complete = listOf(ref.parentPath, path).filter(String::isNotEmpty).joinToString("/")
         return resolveFromRoot(ref, complete)
     }
 
-    private fun resolveFromRoot(ref: GraphRef, path: String): DocumentFile? {
+    private fun resolveFromRoot(ref: GraphRef, path: String): StoredFile? {
         return resolveFromRoot(ref.rootUri, path)
     }
 
-    private fun resolveFromRoot(rootUri: String, path: String): DocumentFile? {
-        var current = rootCache[rootUri] ?: DocumentFile.fromTreeUri(context, Uri.parse(rootUri))
+    private fun resolveFromRoot(rootUri: String, path: String): StoredFile? {
+        var current = rootCache[rootUri] ?: rootsMutable.value.firstOrNull { it.uri == rootUri }
+            ?.let(::rootFile)
             ?.also { rootCache[rootUri] = it }
             ?: return null
         for (segment in path.split('/').filter(String::isNotEmpty)) {
@@ -427,14 +466,42 @@ class DocumentLibrary(private val context: Context) {
         return current
     }
 
-    private fun children(directory: DocumentFile): Map<String, DocumentFile> =
-        childrenCache.computeIfAbsent(directory.uri.toString()) {
-            directory.listFiles().mapNotNull { file -> file.name?.let { it to file } }.toMap()
+    private fun children(directory: StoredFile): Map<String, StoredFile> =
+        childrenCache.computeIfAbsent(directoryKey(directory.rootUri, directory.relativePath)) {
+            if (remoteSources.isRemoteRoot(directory.rootUri)) {
+                remoteSources.list(directory.rootUri, directory.relativePath).associate { node ->
+                    val path = listOf(directory.relativePath, node.name).filter(String::isNotEmpty).joinToString("/")
+                    node.name to StoredFile(
+                        rootUri = directory.rootUri,
+                        relativePath = path,
+                        name = node.name,
+                        isDirectory = node.isDirectory,
+                        isFile = !node.isDirectory,
+                        length = node.size,
+                        lastModified = node.modifiedAt,
+                    )
+                }
+            } else {
+                directory.localFile?.listFiles().orEmpty().mapNotNull { file ->
+                    val name = file.name ?: return@mapNotNull null
+                    val path = listOf(directory.relativePath, name).filter(String::isNotEmpty).joinToString("/")
+                    name to StoredFile(
+                        rootUri = directory.rootUri,
+                        relativePath = path,
+                        name = name,
+                        isDirectory = file.isDirectory,
+                        isFile = file.isFile,
+                        length = file.length(),
+                        lastModified = file.lastModified(),
+                        localFile = file,
+                    )
+                }.toMap()
+            }
         }
 
-    private fun readText(file: DocumentFile, maxBytes: Int): String {
-        require(file.length() <= maxBytes || file.length() == 0L) { "ファイルが大きすぎます: ${file.name}" }
-        return context.contentResolver.openInputStream(file.uri)?.bufferedReader(Charsets.UTF_8)?.use { reader ->
+    private fun readText(file: StoredFile, maxBytes: Int): String {
+        require(file.length <= maxBytes || file.length == 0L) { "ファイルが大きすぎます: ${file.name}" }
+        return openInput(file).bufferedReader(Charsets.UTF_8).use { reader ->
             val result = StringBuilder()
             val buffer = CharArray(8_192)
             var total = 0
@@ -446,12 +513,12 @@ class DocumentLibrary(private val context: Context) {
                 result.append(buffer, 0, count)
             }
             result.toString()
-        } ?: error("ファイルを開けません: ${file.name}")
+        }
     }
 
-    private fun readBytes(file: DocumentFile, maxBytes: Int): ByteArray {
-        require(file.length() <= maxBytes || file.length() == 0L) { "ファイルが大きすぎます: ${file.name}" }
-        return context.contentResolver.openInputStream(file.uri)?.use { input ->
+    private fun readBytes(file: StoredFile, maxBytes: Int): ByteArray {
+        require(file.length <= maxBytes || file.length == 0L) { "ファイルが大きすぎます: ${file.name}" }
+        return openInput(file).use { input ->
             val result = java.io.ByteArrayOutputStream()
             val buffer = ByteArray(8_192)
             var total = 0
@@ -463,7 +530,33 @@ class DocumentLibrary(private val context: Context) {
                 result.write(buffer, 0, count)
             }
             result.toByteArray()
-        } ?: error("ファイルを開けません: ${file.name}")
+        }
+    }
+
+    private fun rootFile(grant: RootGrant): StoredFile {
+        if (remoteSources.isRemoteRoot(grant.uri)) {
+            return StoredFile(grant.uri, "", grant.name, isDirectory = true, isFile = false)
+        }
+        val document = DocumentFile.fromTreeUri(context, Uri.parse(grant.uri)) ?: error("フォルダを開けません")
+        return StoredFile(
+            rootUri = grant.uri,
+            relativePath = "",
+            name = document.name ?: grant.name,
+            isDirectory = document.isDirectory,
+            isFile = document.isFile,
+            length = document.length(),
+            lastModified = document.lastModified(),
+            localFile = document,
+        )
+    }
+
+    private fun openInput(file: StoredFile): InputStream {
+        val local = file.localFile
+        if (local != null) {
+            return context.contentResolver.openInputStream(local.uri)
+                ?: throw IOException("ファイルを開けません: ${file.name}")
+        }
+        return remoteSources.open(file.rootUri, file.relativePath).input
     }
 
     private fun assetExists(ref: GraphRef, path: String): Boolean =

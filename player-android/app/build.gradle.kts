@@ -32,6 +32,7 @@ android {
             "META-INF/DEPENDENCIES",
             "META-INF/LICENSE*",
             "META-INF/NOTICE*",
+            "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
         )
         // build-android.sh already strips these with the matching NDK toolchain.
         jniLibs.keepDebugSymbols += "**/libyuraive_runtime.so"
@@ -88,6 +89,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.0")
     implementation("androidx.documentfile:documentfile:1.1.0")
     implementation("androidx.core:core-ktx:1.16.0")
+
+    implementation("com.hierynomus:smbj:0.14.0")
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
+    runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
 
     implementation("androidx.media3:media3-exoplayer:1.10.1")
     implementation("androidx.media3:media3-session:1.10.1")
