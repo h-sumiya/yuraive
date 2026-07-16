@@ -16,6 +16,8 @@ public sealed class AppDataPaths
     public string Snapshot => Path.Combine(Root, "playback-state.json");
     public string Settings => Path.Combine(Root, "settings.json");
     public string Library => Path.Combine(Root, "library.json");
+    public string RemoteConnections => Path.Combine(Root, "remote-connections.dat");
+    public string RemoteCache => EnsureDirectory("remote-cache");
 
     private string EnsureDirectory(string name)
     {

@@ -19,7 +19,8 @@ public sealed partial class ButtonLayoutView : UserControl
 {
     private IReadOnlyList<RenderedButton> _buttons = [];
     private string? _source;
-    private string? _contentFolder;
+    private string? _assetKey;
+    private Func<string, string?>? _assetResolver;
     private string? _renderKey;
 
     public ButtonLayoutView()
@@ -35,12 +36,13 @@ public sealed partial class ButtonLayoutView : UserControl
     // Kept as an async-compatible API so MainWindow startup does not need a platform special case.
     public Task InitializeAsync() => Task.CompletedTask;
 
-    public void Update(string? source, IReadOnlyList<RenderedButton> buttons, string? contentFolder)
+    public void Update(string? source, IReadOnlyList<RenderedButton> buttons, string? assetKey, Func<string, string?>? assetResolver)
     {
         _source = source;
         _buttons = buttons;
-        _contentFolder = contentFolder;
-        var visible = source is not null && contentFolder is not null && buttons.Any(button => button.Visible);
+        _assetKey = assetKey;
+        _assetResolver = assetResolver;
+        var visible = source is not null && assetKey is not null && assetResolver is not null && buttons.Any(button => button.Visible);
         Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (!visible)
         {
@@ -53,7 +55,7 @@ public sealed partial class ButtonLayoutView : UserControl
 
     private void RenderIfNeeded()
     {
-        if (Visibility != Visibility.Visible || _source is null || _contentFolder is null
+        if (Visibility != Visibility.Visible || _source is null || _assetKey is null || _assetResolver is null
             || ActualWidth <= 0 || ActualHeight <= 0) return;
 
         // Playback state is published frequently. Geometry is recomputed only if the source,
@@ -61,7 +63,7 @@ public sealed partial class ButtonLayoutView : UserControl
         var width = Math.Round(ActualWidth, 2);
         var height = Math.Round(ActualHeight, 2);
         var buttonJson = JsonSerializer.Serialize(_buttons, YuraiveJson.Options);
-        var key = $"{width:F2}|{height:F2}|{_contentFolder}|{_source}|{buttonJson}";
+        var key = $"{width:F2}|{height:F2}|{_assetKey}|{_source}|{buttonJson}";
         if (string.Equals(key, _renderKey, StringComparison.Ordinal)) return;
 
         try
@@ -74,7 +76,7 @@ public sealed partial class ButtonLayoutView : UserControl
                 FontScale = 1,
             });
             LayoutCanvas.Children.Clear();
-            foreach (var item in model.Buttons) AddButton(item, _contentFolder);
+            foreach (var item in model.Buttons) AddButton(item, _assetResolver);
             _renderKey = key;
         }
         catch
@@ -85,7 +87,7 @@ public sealed partial class ButtonLayoutView : UserControl
         }
     }
 
-    private void AddButton(NativeLayoutButton item, string contentFolder)
+    private void AddButton(NativeLayoutButton item, Func<string, string?> assetResolver)
     {
         var style = item.Style;
         var text = new TextBlock
@@ -108,7 +110,7 @@ public sealed partial class ButtonLayoutView : UserControl
             text.CharacterSpacing = (int)Math.Round(style.LetterSpacing / style.FontSize * 1000);
 
         var content = new Grid();
-        if (SafeAssetPath(contentFolder, style.BackgroundImage) is { } imagePath)
+        if (!string.IsNullOrWhiteSpace(style.BackgroundImage) && assetResolver(style.BackgroundImage) is { } imagePath)
         {
             content.Children.Add(new Image
             {
@@ -144,18 +146,6 @@ public sealed partial class ButtonLayoutView : UserControl
         Canvas.SetTop(button, item.Y);
         Canvas.SetZIndex(button, item.ZIndex);
         LayoutCanvas.Children.Add(button);
-    }
-
-    private static string? SafeAssetPath(string root, string? relative)
-    {
-        if (string.IsNullOrWhiteSpace(relative) || Uri.TryCreate(relative, UriKind.Absolute, out _)) return null;
-        try
-        {
-            var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            var fullPath = Path.GetFullPath(Path.Combine(fullRoot, relative.Replace('/', Path.DirectorySeparatorChar)));
-            return fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) && File.Exists(fullPath) ? fullPath : null;
-        }
-        catch { return null; }
     }
 
     private static SolidColorBrush Brush(string? css, Color fallback) => new(ParseColor(css, fallback));

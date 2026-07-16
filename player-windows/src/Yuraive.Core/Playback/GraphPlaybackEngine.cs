@@ -381,7 +381,8 @@ public sealed class GraphPlaybackEngine : IAsyncDisposable
         var reference = _graphRef ?? throw new InvalidOperationException("グラフ参照がありません");
         var source = media.Source;
         var sourcePath = source.Video ?? source.Audio ?? throw new InvalidDataException($"{media.Id} に再生ソースがありません");
-        var fullPath = _library.GetAssetPath(reference, sourcePath) ?? throw new FileNotFoundException($"ファイルが見つかりません: {sourcePath}");
+        var fullPath = await _library.GetAssetPathAsync(reference, sourcePath, cancellationToken)
+            ?? throw new FileNotFoundException($"ファイルが見つかりません: {sourcePath}");
         switch (source.Type)
         {
             case "audioImage": _visualPath = source.Image; break;
@@ -391,11 +392,11 @@ public sealed class GraphPlaybackEngine : IAsyncDisposable
         await _player.LoadAsync(new()
         {
             SourcePath = fullPath,
-            SubtitlePath = source.Subtitle is null ? null : _library.GetAssetPath(reference, source.Subtitle),
+            SubtitlePath = source.Subtitle is null ? null : await _library.GetAssetPathAsync(reference, source.Subtitle, cancellationToken),
             MediaId = $"{_runId}:{++_mediaGeneration}:{reference.GraphId}#{_currentNodeId}/{media.Id}",
             Title = string.IsNullOrWhiteSpace(metadata?.DisplayName) ? reference.ContentFolderName : metadata.DisplayName,
             Artist = metadata?.Author,
-            ArtworkPath = _visualPath is null ? null : _library.GetAssetPath(reference, _visualPath),
+            ArtworkPath = _visualPath is null ? null : await _library.GetAssetPathAsync(reference, _visualPath, cancellationToken),
             Volume = Math.Clamp(source.Volume, 0, 1),
             Loop = source.Loop,
             PositionMs = Math.Max(0, positionMs),

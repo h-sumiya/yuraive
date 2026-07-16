@@ -50,6 +50,7 @@ public sealed partial class MainWindow : Window
     private bool _waveformAnimating;
     private bool _showPlayerOnNarrow;
     private bool _isSearching;
+    private bool _addingFolder;
     private bool _displayRequestActive;
     private string? _artworkSourcePath;
     private int _artworkLoadVersion;
@@ -430,6 +431,201 @@ public sealed partial class MainWindow : Window
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 
+    private async Task ShowContentInspectionAsync(LibraryGraph item)
+    {
+        SetLibraryBusy(true);
+        try
+        {
+            var content = await _library.InspectContentAsync(item.Ref);
+            var metadata = content.Graph.Metadata;
+            var panel = new StackPanel { Spacing = 0, MinWidth = 600 };
+            panel.Children.Add(new TextBlock
+            {
+                Text = string.IsNullOrWhiteSpace(metadata?.DisplayName) ? item.DisplayName : metadata.DisplayName,
+                FontSize = 24,
+                FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            if (!string.IsNullOrWhiteSpace(metadata?.Description))
+            {
+                panel.Children.Add(new TextBlock
+                {
+                    Text = metadata.Description,
+                    Margin = new Thickness(0, 8, 0, 12),
+                    Foreground = new SolidColorBrush(Colors.Gray),
+                    TextWrapping = TextWrapping.Wrap,
+                });
+            }
+            AddInspectionMetadataRow(panel, "ファイル", item.Ref.FileName);
+            AddInspectionMetadataRow(panel, "形式", content.IsBundle ? "バイナリ (.yuraive)" : "JSON (.yuraive.json)");
+            AddInspectionMetadataRow(panel, "作者", metadata?.Author);
+            AddInspectionMetadataRow(panel, "Content ID", metadata?.ContentId);
+            AddInspectionMetadataRow(panel, "作成日時", metadata?.CreatedAt);
+            AddInspectionMetadataRow(panel, "更新日時", metadata?.UpdatedAt);
+            AddInspectionMetadataRow(panel, "タグ", metadata?.Tags is { Count: > 0 } tags ? string.Join("、", tags) : null);
+
+            var missing = content.Assets.Count(asset => !asset.Recognized);
+            var heading = new Grid { Margin = new Thickness(0, 26, 0, 8) };
+            heading.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+            heading.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+            var headingText = new StackPanel { Spacing = 2 };
+            headingText.Children.Add(new TextBlock { Text = "参照アセット", FontSize = 17, FontWeight = Microsoft.UI.Text.FontWeights.Bold });
+            headingText.Children.Add(new TextBlock
+            {
+                Text = $"{content.Assets.Count - missing} / {content.Assets.Count} 件を確認",
+                FontSize = 12,
+                Foreground = new SolidColorBrush(Colors.Gray),
+            });
+            heading.Children.Add(headingText);
+            if (missing > 0)
+            {
+                var missingText = new TextBlock
+                {
+                    Text = $"{missing}件を認識できません",
+                    Foreground = new SolidColorBrush(Colors.IndianRed),
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                };
+                Grid.SetColumn(missingText, 1);
+                heading.Children.Add(missingText);
+            }
+            panel.Children.Add(heading);
+            panel.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Colors.Gray), Opacity = .35 });
+
+            if (content.Assets.Count == 0)
+            {
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "参照アセットはありません",
+                    Margin = new Thickness(0, 28, 0, 20),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Foreground = new SolidColorBrush(Colors.Gray),
+                });
+            }
+            else
+            {
+                var tree = new TreeView
+                {
+                    SelectionMode = TreeViewSelectionMode.None,
+                    MaxHeight = 380,
+                    ItemTemplate = (DataTemplate)Application.Current.Resources["InspectionTreeNodeTemplate"],
+                };
+                foreach (var node in BuildInspectionTree(content.Assets)) tree.RootNodes.Add(node);
+                panel.Children.Add(tree);
+            }
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = RootGrid.XamlRoot,
+                Title = "作品情報とアセット",
+                Content = new ScrollViewer
+                {
+                    Content = panel,
+                    MaxHeight = 650,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                },
+                CloseButtonText = "閉じる",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            await dialog.ShowAsync();
+        }
+        catch (Exception error)
+        {
+            await ShowMessageAsync("作品ファイルを解析できません", error.Message);
+        }
+        finally { SetLibraryBusy(false); }
+    }
+
+    private static void AddInspectionMetadataRow(Panel panel, string label, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return;
+        var row = new Grid { Padding = new Thickness(0, 9, 0, 9) };
+        row.ColumnDefinitions.Add(new() { Width = new GridLength(110) });
+        row.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        row.Children.Add(new TextBlock { Text = label, FontSize = 12, Foreground = new SolidColorBrush(Colors.Gray) });
+        var text = new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap };
+        Grid.SetColumn(text, 1);
+        row.Children.Add(text);
+        panel.Children.Add(row);
+        panel.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Colors.Gray), Opacity = .25 });
+    }
+
+    private static IReadOnlyList<TreeViewNode> BuildInspectionTree(IReadOnlyList<LibraryAssetInspection> assets)
+    {
+        var root = new InspectionTreeBranch();
+        foreach (var asset in assets)
+        {
+            var parts = asset.Problem == AssetInspectionProblem.UnsafePath
+                ? new[] { asset.Path }
+                : asset.Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) continue;
+            var branch = root;
+            foreach (var folder in parts.Take(parts.Length - 1))
+            {
+                if (!branch.Folders.TryGetValue(folder, out var child)) branch.Folders[folder] = child = new();
+                branch = child;
+            }
+            branch.Files.Add((parts[^1], asset));
+        }
+
+        IReadOnlyList<TreeViewNode> Convert(InspectionTreeBranch branch)
+        {
+            var result = new List<TreeViewNode>();
+            foreach (var (name, child) in branch.Folders)
+            {
+                var node = new TreeViewNode { Content = InspectionTreeRow(name, "\uE8B7", null, recognized: true), IsExpanded = true };
+                foreach (var nested in Convert(child)) node.Children.Add(nested);
+                result.Add(node);
+            }
+            foreach (var (name, asset) in branch.Files.OrderBy(value => value.Asset.Path, StringComparer.Ordinal))
+            {
+                var status = asset.Problem switch
+                {
+                    AssetInspectionProblem.UnsafePath => "不正なパス",
+                    AssetInspectionProblem.Missing => "見つかりません",
+                    _ => asset.Embedded ? "内蔵" : null,
+                };
+                result.Add(new TreeViewNode { Content = InspectionTreeRow(name, "\uE8A5", status, asset.Recognized) });
+            }
+            return result;
+        }
+
+        return Convert(root);
+    }
+
+    private static FrameworkElement InspectionTreeRow(string name, string glyph, string? status, bool recognized)
+    {
+        var color = recognized ? new SolidColorBrush(Colors.Transparent) : new SolidColorBrush(Colors.IndianRed);
+        var row = new Grid { MinHeight = 36 };
+        row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        var icon = new FontIcon
+        {
+            Glyph = glyph,
+            FontSize = 17,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (!recognized) icon.Foreground = color;
+        row.Children.Add(icon);
+        var text = new TextBlock
+        {
+            Text = name,
+            Margin = new Thickness(9, 0, 10, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (!recognized) text.Foreground = color;
+        Grid.SetColumn(text, 1);
+        row.Children.Add(text);
+        if (status is not null)
+        {
+            var badge = new TextBlock { Text = status, FontSize = 11, Foreground = recognized ? new SolidColorBrush(Colors.Gray) : color, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(badge, 2);
+            row.Children.Add(badge);
+        }
+        return row;
+    }
+
     private async void LibraryItemAction_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not LibraryEntryViewModel item) return;
@@ -613,12 +809,25 @@ public sealed partial class MainWindow : Window
         catch { return null; }
     }
 
-    private void LibraryList_RightTapped(object sender, RightTappedRoutedEventArgs e)
+    private void LibraryItem_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
-        var element = e.OriginalSource as DependencyObject;
-        var container = FindAncestor<ListViewItem>(element);
-        var item = container?.Content as LibraryEntryViewModel;
-        if (item is null) return;
+        if (sender is not FrameworkElement { DataContext: LibraryEntryViewModel item } anchor) return;
+        var point = e.GetCurrentPoint(anchor);
+        if (point.Properties.PointerUpdateKind != Microsoft.UI.Input.PointerUpdateKind.RightButtonReleased) return;
+        e.Handled = true;
+        ShowLibraryItemMenu(item, anchor, point.Position);
+    }
+
+    private void LibraryItem_RightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        if (e.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse) return;
+        if (sender is not FrameworkElement { DataContext: LibraryEntryViewModel item } anchor) return;
+        e.Handled = true;
+        ShowLibraryItemMenu(item, anchor, e.GetPosition(anchor));
+    }
+
+    private void ShowLibraryItemMenu(LibraryEntryViewModel item, FrameworkElement anchor, Windows.Foundation.Point position)
+    {
         var menu = new MenuFlyout();
         if (item.Kind == LibraryEntryKind.Root && item.Root is not null)
         {
@@ -632,6 +841,14 @@ public sealed partial class MainWindow : Window
         }
         if (item.Kind == LibraryEntryKind.Graph && item.Graph is not null)
         {
+            var inspect = new MenuFlyoutItem
+            {
+                Text = "作品情報とアセット",
+                Icon = new FontIcon { Glyph = "\uE946" },
+                IsEnabled = item.Graph.ParseError is null,
+            };
+            inspect.Click += async (_, _) => await ShowContentInspectionAsync(item.Graph);
+            menu.Items.Add(inspect);
             var favorite = new MenuFlyoutItem
             {
                 Text = _library.FavoriteIds.Contains(item.Graph.Ref.GraphId) ? "お気に入りから削除" : "お気に入りに追加",
@@ -645,7 +862,7 @@ public sealed partial class MainWindow : Window
             };
             menu.Items.Add(favorite);
         }
-        if (menu.Items.Count > 0) menu.ShowAt(container, e.GetPosition(container));
+        if (menu.Items.Count > 0) menu.ShowAt(anchor, position);
     }
 
     private async void AddFolderButton_Click(object sender, RoutedEventArgs e)
@@ -653,18 +870,57 @@ public sealed partial class MainWindow : Window
 
     private async Task PickAndAddFolderAsync()
     {
-        var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.MusicLibrary };
-        picker.FileTypeFilter.Add("*");
-        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-        var folder = await picker.PickSingleFolderAsync();
-        if (folder is null || string.IsNullOrWhiteSpace(folder.Path)) return;
+        if (_addingFolder) return;
+        _addingFolder = true;
+        AddFolderButton.IsEnabled = false;
+        EmptyAddFolderButton.IsEnabled = false;
         try
         {
-            await _library.AddRootAsync(folder.Path, folder.Name);
-            _section = LibrarySection.Library;
-            await RefreshRootsAsync();
+            var result = await new RemoteFolderDialog(_library).ShowAsync(RootGrid.XamlRoot);
+            if (result == AddFolderDialogResult.Local) await PickLocalAndAddFolderAsync();
+            else if (result == AddFolderDialogResult.RemoteAdded)
+            {
+                _section = LibrarySection.Library;
+                _browserRoot = null;
+                await RefreshRootsAsync();
+            }
         }
-        catch (Exception error) { await ShowMessageAsync("フォルダを追加できません", error.Message); }
+        catch (Exception error)
+        {
+            _section = LibrarySection.Library;
+            _browserRoot = null;
+            try { await RefreshRootsAsync(); }
+            catch
+            {
+                _rootScan = [];
+                await ShowRootsAsync();
+            }
+            await ShowMessageAsync("フォルダを追加できません", error.Message);
+        }
+        finally
+        {
+            _addingFolder = false;
+            AddFolderButton.IsEnabled = true;
+            EmptyAddFolderButton.IsEnabled = true;
+        }
+    }
+
+    private async Task PickLocalAndAddFolderAsync()
+    {
+        var windowId = Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
+        var picker = new Microsoft.Windows.Storage.Pickers.FolderPicker(windowId)
+        {
+            SuggestedStartLocation = Microsoft.Windows.Storage.Pickers.PickerLocationId.MusicLibrary,
+            CommitButtonText = "このフォルダーを追加",
+            Title = "ライブラリに追加するフォルダーを選択",
+        };
+        var folder = await picker.PickSingleFolderAsync();
+        if (folder is null || string.IsNullOrWhiteSpace(folder.Path)) return;
+        var path = Path.GetFullPath(folder.Path);
+        await _library.AddRootAsync(path, new DirectoryInfo(path).Name);
+        _section = LibrarySection.Library;
+        _browserRoot = null;
+        await RefreshRootsAsync();
     }
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await RefreshRootsAsync();
@@ -916,13 +1172,10 @@ public sealed partial class MainWindow : Window
         var reference = state.GraphRef;
         if (state.LayoutSource is null || reference is null)
         {
-            ButtonLayout.Update(null, [], null);
+            ButtonLayout.Update(null, [], null, null);
             return;
         }
-        var contentFolder = reference!.ParentPath.Length == 0
-            ? reference.RootUri
-            : Path.Combine(reference.RootUri, reference.ParentPath.Replace('/', Path.DirectorySeparatorChar));
-        ButtonLayout.Update(state.LayoutSource, state.Buttons, contentFolder);
+        ButtonLayout.Update(state.LayoutSource, state.Buttons, reference.GraphId, path => _library.GetAssetPath(reference, path));
     }
 
     private async void PlayPauseButton_Click(object sender, RoutedEventArgs e) => await _engine.ToggleAsync();
@@ -1476,16 +1729,6 @@ public sealed partial class MainWindow : Window
         await new ContentDialog { XamlRoot = RootGrid.XamlRoot, Title = title, Content = message, CloseButtonText = "閉じる" }.ShowAsync();
     }
 
-    private static T? FindAncestor<T>(DependencyObject? element) where T : DependencyObject
-    {
-        while (element is not null)
-        {
-            if (element is T found) return found;
-            element = VisualTreeHelper.GetParent(element);
-        }
-        return null;
-    }
-
     private static T? FindDescendant<T>(DependencyObject element) where T : DependencyObject
     {
         for (var index = 0; index < VisualTreeHelper.GetChildrenCount(element); index++)
@@ -1557,6 +1800,12 @@ public sealed partial class MainWindow : Window
             index += char.IsSurrogatePair(value, index) ? 2 : 1;
         }
         return count;
+    }
+
+    private sealed class InspectionTreeBranch
+    {
+        public SortedDictionary<string, InspectionTreeBranch> Folders { get; } = new(StringComparer.CurrentCultureIgnoreCase);
+        public List<(string Name, LibraryAssetInspection Asset)> Files { get; } = [];
     }
 
     private enum LibrarySection { Library, Favorites, Collection, History, Settings }

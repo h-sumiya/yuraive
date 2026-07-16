@@ -50,6 +50,12 @@
     <RustDll Condition="'$(OS)' != 'Windows_NT'">$(MSBuildProjectDirectory)/../../../runtime/target/release/libyuraive_runtime.so</RustDll>
   </PropertyGroup>
 
+  <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+    <Content Include="$(RustDll)" Link="yuraive_runtime.dll"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <Target Name="BuildRustRuntime" BeforeTargets="CoreCompile"
           Inputs="$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.toml;$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.lock;$(MSBuildProjectDirectory)\..\..\..\runtime\src\lib.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\bundle.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\layout_engine.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\script_engine.rs"
           Outputs="$(RustDll)">
@@ -57,7 +63,7 @@
           Command="cargo build --release --locked" />
   </Target>
 
-  <Target Name="CopyRustRuntime" AfterTargets="Build">
+  <Target Name="CopyRustRuntime" AfterTargets="Build" Condition="'$(OS)' != 'Windows_NT'">
     <Copy SourceFiles="$(RustDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>

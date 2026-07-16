@@ -99,6 +99,63 @@ public sealed class StorageTests
     }
 
     [Fact]
+    public async Task ContentInspectionReturnsMetadataAndExpectedAssetState()
+    {
+        using var temporary = new TemporaryDirectory();
+        var state = new AppDataPaths(temporary.Combine("state"));
+        var root = temporary.Combine("library");
+        var (reference, _) = TestGraph.WriteTwoSceneGraph(root);
+        var library = new DocumentLibrary(state);
+
+        var complete = await library.InspectContentAsync(reference);
+        Assert.Equal("Windows player test", complete.Graph.Metadata?.DisplayName);
+        Assert.False(complete.IsBundle);
+        Assert.All(complete.Assets, asset => Assert.True(asset.Recognized, asset.Path));
+
+        File.Delete(System.IO.Path.Combine(root, "ending.wav"));
+        var missing = await library.InspectContentAsync(reference);
+        var ending = Assert.Single(missing.Assets, asset => asset.Path == "ending.wav");
+        Assert.False(ending.Recognized);
+        Assert.Equal(AssetInspectionProblem.Missing, ending.Problem);
+    }
+
+    [Fact]
+    public async Task RemoteRootsPersistCredentialsOnlyInDpapiProtectedStorage()
+    {
+        using var temporary = new TemporaryDirectory();
+        var paths = new AppDataPaths(temporary.Combine("state"));
+        var library = new DocumentLibrary(paths);
+        await library.AddRemoteRootAsync(new RemoteConnectionConfig
+        {
+            Protocol = RemoteProtocol.WebDav,
+            Endpoint = "https://dav.example.test/library/",
+            Username = "reader",
+            Password = "not-plain-text",
+            DisplayName = "Remote works",
+        }, "stories", "stories");
+
+        var root = Assert.Single(library.Roots);
+        Assert.StartsWith("yuraive+webdav://", root.Uri);
+        Assert.Equal("Remote works", root.Name);
+        var protectedPayload = await File.ReadAllTextAsync(paths.RemoteConnections);
+        Assert.DoesNotContain("not-plain-text", protectedPayload);
+        Assert.DoesNotContain("dav.example.test", protectedPayload);
+        Assert.Equal(root, Assert.Single(new DocumentLibrary(paths).Roots));
+
+        await library.RemoveRootAsync(root.Uri);
+        Assert.Empty(library.Roots);
+    }
+
+    [Theory]
+    [InlineData("http://dav.example.test/", "WebDAV URL は https://")]
+    [InlineData("https://user@dav.example.test/", "ユーザー名とパスワード")]
+    public void RemotePathsRejectUnsafeWebDavEndpoints(string endpoint, string expected)
+    {
+        var error = RemotePaths.Validate(new RemoteConnectionConfig { Protocol = RemoteProtocol.WebDav, Endpoint = endpoint });
+        Assert.Contains(expected, error);
+    }
+
+    [Fact]
     public async Task LibraryPrefersBundleAndReadsEmbeddedTextAssets()
     {
         using var temporary = new TemporaryDirectory();
@@ -128,6 +185,11 @@ public sealed class StorageTests
         Assert.Contains("route.star", await library.ReadScriptSourcesAsync(preview.Ref, "route.star"));
         Assert.Equal("<style></style><slot></slot>", await library.ReadAssetTextAsync(preview.Ref, "default.yuraive-layout.html"));
         Assert.DoesNotContain(await library.ValidateAsync(preview.Ref, graph), issue => issue.Severity == ValidationSeverity.Error);
+        var inspection = await library.InspectContentAsync(preview.Ref);
+        Assert.True(inspection.IsBundle);
+        Assert.All(inspection.Assets, asset => Assert.True(asset.Recognized, asset.Path));
+        Assert.True(Assert.Single(inspection.Assets, asset => asset.Path == "route.star").Embedded);
+        Assert.True(Assert.Single(inspection.Assets, asset => asset.Path == "default.yuraive-layout.html").Embedded);
     }
 
     private static byte[] EncodeBundle(string graphJson, params (string Path, string Content, byte Kind)[] assets)

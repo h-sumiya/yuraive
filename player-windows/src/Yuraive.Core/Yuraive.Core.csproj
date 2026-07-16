@@ -7,4 +7,7 @@
     <RootNamespace>Yuraive.Core</RootNamespace>
     <EnableWindowsTargeting Condition="'$(OS)' != 'Windows_NT'">true</EnableWindowsTargeting>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="SMBLibrary" Version="1.5.7" />
+  </ItemGroup>
 </Project>

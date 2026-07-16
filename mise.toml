@@ -29,7 +29,7 @@ run = "dotnet test player-windows/tests/Yuraive.Core.Tests/Yuraive.Core.Tests.cs
 
 [tasks.windowsRun]
 description = "Run the WinUI 3 desktop player (x64)"
-run = "dotnet run --project player-windows/src/Yuraive.App/Yuraive.App.csproj -p:Platform=x64"
+run = "dotnet run --project player-windows/src/Yuraive.App/Yuraive.App.csproj -p:Platform=x64 -p:BaseOutputPath=bin/windows-run/"
 
 [tools]
 node = "latest"

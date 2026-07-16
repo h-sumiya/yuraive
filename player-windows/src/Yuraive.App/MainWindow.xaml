@@ -15,9 +15,7 @@
 
         <Grid x:Name="AppTitleBar" Background="{ThemeResource LayerFillColorDefaultBrush}">
             <StackPanel Margin="16,0" Orientation="Horizontal" VerticalAlignment="Center" Spacing="10">
-                <Border Width="28" Height="28" CornerRadius="7" Background="White">
-                    <Image Source="ms-appx:///Assets/Square44x44Logo.png" Stretch="Uniform" />
-                </Border>
+                <Image Width="28" Height="28" Source="ms-appx:///Assets/YuraiveMark.svg" Stretch="Uniform" />
                 <TextBlock FontWeight="SemiBold" Text="Yuraive" VerticalAlignment="Center" />
             </StackPanel>
         </Grid>
@@ -53,7 +51,7 @@
                                 <FontIcon Glyph="&#xE721;" />
                             </Button>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
-                                <Image Width="32" Height="32" Source="ms-appx:///Assets/Square44x44Logo.png" Stretch="Uniform" />
+                                <Image Width="32" Height="32" Source="ms-appx:///Assets/YuraiveMark.svg" Stretch="Uniform" />
                                 <TextBlock VerticalAlignment="Center" FontSize="22" FontWeight="Bold" Text="Yuraive" />
                             </StackPanel>
                             <StackPanel x:Name="HomeTopActions" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="2">
@@ -84,7 +82,6 @@
                             HorizontalContentAlignment="Stretch"
                             IsItemClickEnabled="True"
                             ItemClick="LibraryList_ItemClick"
-                            RightTapped="LibraryList_RightTapped"
                             ItemContainerStyle="{StaticResource LibraryGridItemStyle}"
                             Loaded="LibraryList_Loaded"
                             SelectionMode="None">
@@ -125,7 +122,7 @@
                             </GridView.ItemsPanel>
                             <GridView.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                    <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsRightTapEnabled="True" PointerReleased="LibraryItem_PointerReleased" RightTapped="LibraryItem_RightTapped">
                                     <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="60" /></Grid.RowDefinitions>
                                         <Border CornerRadius="18,18,0,0" Background="{ThemeResource ControlFillColorSecondaryBrush}">
                                             <Grid>
