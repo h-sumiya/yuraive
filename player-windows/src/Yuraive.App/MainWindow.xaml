@@ -111,6 +111,12 @@
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                         <TextBlock x:Name="SectionTitle" VerticalAlignment="Center" FontSize="28" FontWeight="Bold" Text="ライブラリ" />
                                         <StackPanel x:Name="LibraryHeaderActions" Grid.Column="1" Margin="18,0,0,0" Orientation="Horizontal" Spacing="4">
+                                            <Button x:Name="DeleteSelectedRootsButton" Height="40" Padding="12,0" CornerRadius="20" Visibility="Collapsed" Click="DeleteSelectedRootsButton_Click" ToolTipService.ToolTip="選択したフォルダをライブラリから削除">
+                                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                                    <FontIcon Glyph="&#xE74D;" />
+                                                    <TextBlock x:Name="SelectedRootCountText" VerticalAlignment="Center" FontWeight="SemiBold" />
+                                                </StackPanel>
+                                            </Button>
                                             <Button x:Name="RefreshButton" Style="{StaticResource RoundIconButtonStyle}" Click="RefreshButton_Click" ToolTipService.ToolTip="再読み込み"><FontIcon Glyph="&#xE72C;" /></Button>
                                             <Button x:Name="AddFolderButton" Style="{StaticResource RoundIconButtonStyle}" Click="AddFolderButton_Click" ToolTipService.ToolTip="フォルダを追加"><FontIcon Glyph="&#xE710;" /></Button>
                                         </StackPanel>
@@ -122,7 +128,7 @@
                             </GridView.ItemsPanel>
                             <GridView.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsRightTapEnabled="True" PointerReleased="LibraryItem_PointerReleased" RightTapped="LibraryItem_RightTapped">
+                                    <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsRightTapEnabled="True" PointerEntered="LibraryItem_PointerEntered" PointerExited="LibraryItem_PointerExited" PointerReleased="LibraryItem_PointerReleased" RightTapped="LibraryItem_RightTapped">
                                     <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="60" /></Grid.RowDefinitions>
                                         <Border CornerRadius="18,18,0,0" Background="{ThemeResource ControlFillColorSecondaryBrush}">
                                             <Grid>
@@ -140,9 +146,26 @@
                                                 <TextBlock Text="{Binding Subtitle}" Visibility="{Binding SubtitleVisibility}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" MaxLines="1" TextTrimming="CharacterEllipsis" />
                                             </StackPanel>
                                         </Border>
-                                        <Button Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8" Width="42" Height="42" Padding="0" CornerRadius="21" Background="#D81A1820" Visibility="{Binding ActionVisibility}" Click="LibraryItemAction_Click" ToolTipService.ToolTip="項目の操作">
-                                            <FontIcon Glyph="{Binding ActionGlyph}" Foreground="{Binding ActionForeground}" />
-                                        </Button>
+                                        <Grid Grid.Row="0" Margin="4" HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="{Binding RootSelectionVisibility}">
+                                            <ToggleButton x:Name="RootSelectionButton" Width="30" Height="30" Padding="0" Background="Transparent" BorderThickness="0" Visibility="Collapsed" IsChecked="{Binding RootIsSelected, Mode=TwoWay}" Loaded="RootSelectionToggle_Loaded" Checked="RootSelectionToggle_Changed" Unchecked="RootSelectionToggle_Changed" ToolTipService.ToolTip="削除対象に選択">
+                                                <ToggleButton.Template>
+                                                    <ControlTemplate TargetType="ToggleButton">
+                                                        <Grid Background="Transparent">
+                                                            <FontIcon FontSize="17" Glyph="&#xE73E;" Foreground="White" Opacity="0.86" Visibility="{Binding RootSelectionUncheckedVisibility}" />
+                                                            <Grid Width="24" Height="24" Visibility="{Binding RootSelectionCheckedVisibility}">
+                                                                <Ellipse Fill="White" />
+                                                                <FontIcon FontSize="13" Glyph="&#xE73E;" Foreground="#1A1820" />
+                                                            </Grid>
+                                                        </Grid>
+                                                    </ControlTemplate>
+                                                </ToggleButton.Template>
+                                            </ToggleButton>
+                                        </Grid>
+                                        <Grid Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8" Visibility="{Binding ActionVisibility}">
+                                            <Button x:Name="LibraryItemActionButton" Width="42" Height="42" Padding="0" CornerRadius="21" Background="#D81A1820" Visibility="Collapsed" Click="LibraryItemAction_Click" ToolTipService.ToolTip="項目の操作">
+                                                <FontIcon Glyph="{Binding ActionGlyph}" Foreground="{Binding ActionForeground}" />
+                                            </Button>
+                                        </Grid>
                                     </Grid>
                                 </DataTemplate>
                             </GridView.ItemTemplate>
@@ -257,7 +280,7 @@
                 <Border x:Name="MiniPlayer" Grid.Row="1" Height="76" Background="{StaticResource PlayerAccentContainerBrush}" Visibility="Collapsed">
                     <Grid>
                         <Button x:Name="MiniPlayerOpenButton" Padding="0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" BorderThickness="0" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" Click="MiniPlayer_Click">
-                            <Grid Margin="14,8,72,8" ColumnSpacing="12">
+                            <Grid Margin="14,8,126,8" ColumnSpacing="12">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="58" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <Border Width="58" Height="58" CornerRadius="14" Background="{ThemeResource ControlFillColorSecondaryBrush}">
                                     <Grid><FontIcon Glyph="&#xE768;" Foreground="{StaticResource PlayerAccentBrush}" /><Image x:Name="MiniArtworkImage" Stretch="UniformToFill" /></Grid>
@@ -268,9 +291,14 @@
                                 </StackPanel>
                             </Grid>
                         </Button>
-                        <Button x:Name="MiniPlayPauseButton" Width="50" Height="50" Margin="0,0,14,0" HorizontalAlignment="Right" VerticalAlignment="Center" Padding="0" CornerRadius="25" Background="Transparent" Click="PlayPauseButton_Click" ToolTipService.ToolTip="再生/一時停止">
-                            <FontIcon x:Name="MiniPlayPauseIcon" FontSize="22" Glyph="&#xE768;" />
-                        </Button>
+                        <StackPanel Margin="0,0,8,0" HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal" Spacing="2">
+                            <Button x:Name="MiniStopButton" Width="40" Height="40" Padding="0" CornerRadius="20" Background="Transparent" BorderThickness="0" Click="StopButton_Click" ToolTipService.ToolTip="再生を終了">
+                                <FontIcon FontSize="17" Glyph="&#xE8BB;" />
+                            </Button>
+                            <Button x:Name="MiniPlayPauseButton" Width="50" Height="50" Padding="0" CornerRadius="25" Background="Transparent" BorderThickness="0" Click="PlayPauseButton_Click" ToolTipService.ToolTip="再生/一時停止">
+                                <FontIcon x:Name="MiniPlayPauseIcon" FontSize="22" Glyph="&#xE768;" />
+                            </Button>
+                        </StackPanel>
                     </Grid>
                 </Border>
             </Grid>

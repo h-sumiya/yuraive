@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Yuraive.Core.Models;
@@ -7,8 +9,10 @@ namespace Yuraive.App;
 
 public enum LibraryEntryKind { Root, Folder, Graph, Add }
 
-public sealed class LibraryEntryViewModel
+public sealed class LibraryEntryViewModel : INotifyPropertyChanged
 {
+    private bool _rootIsSelected;
+
     public required LibraryEntryKind Kind { get; init; }
     public required string Title { get; init; }
     public string Subtitle { get; init; } = "";
@@ -17,11 +21,31 @@ public sealed class LibraryEntryViewModel
     public string ActionGlyph { get; init; } = "";
     public Visibility ActionVisibility { get; init; } = Visibility.Collapsed;
     public Brush? ActionForeground { get; init; }
+    public Visibility RootSelectionVisibility { get; init; } = Visibility.Collapsed;
+    public bool RootIsSelected
+    {
+        get => _rootIsSelected;
+        set
+        {
+            if (_rootIsSelected == value) return;
+            _rootIsSelected = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(RootSelectionCheckedVisibility));
+            OnPropertyChanged(nameof(RootSelectionUncheckedVisibility));
+        }
+    }
+    public Visibility RootSelectionCheckedVisibility => RootIsSelected ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility RootSelectionUncheckedVisibility => RootIsSelected ? Visibility.Collapsed : Visibility.Visible;
     public ImageSource? Thumbnail { get; init; }
     public ImageSource? BlurredThumbnail { get; init; }
     public RootGrant? Root { get; init; }
     public LibraryFolder? Folder { get; init; }
     public LibraryGraph? Graph { get; init; }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
 public sealed class HistoryEntryViewModel

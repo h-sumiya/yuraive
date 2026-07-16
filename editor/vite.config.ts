@@ -3,10 +3,18 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  build: {
+    outDir: mode === 'native' ? 'dist-native' : 'dist',
+  },
+  worker: {
+    rollupOptions: {
+      output: { entryFileNames: 'assets/worker-[hash].js' },
+    },
+  },
   plugins: [
     react(),
-    VitePWA({
+    ...(mode === 'native' ? [] : [VitePWA({
       manifest: false,
       injectRegister: 'script-defer',
       registerType: 'prompt',
@@ -14,6 +22,6 @@ export default defineConfig({
         globPatterns: ['**/*.{css,html,js,png,svg,wasm,webmanifest}'],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
       },
-    }),
+    })]),
   ],
-})
+}))

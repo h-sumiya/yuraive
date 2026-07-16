@@ -3,6 +3,7 @@ import { chooseWeighted } from './graph'
 import { LayoutFrame } from './LayoutFrame'
 import { createStarlarkContext } from './scriptContext'
 import { resetStarlarkRuntime, runStarlark } from './starlark'
+import { nativeFileUrl } from './nativeDirectory'
 import type { AssetEntry, ButtonRenderResult, LayoutDocument, MediaCandidate, PlaybackHistoryEntry, PreviewTraceEntry, ScriptDocument, StarlarkCurrent, YuraiveButton, YuraiveGraph } from './types'
 
 const PreviewIcon = ({ name }: { name: 'play' | 'pause' | 'close' | 'debug' | 'trash' | 'export' }) => {
@@ -19,6 +20,8 @@ function useObjectUrl(file?: File) {
   const [url, setUrl] = useState<string>()
   useEffect(() => {
     if (!file) { setUrl(undefined); return }
+    const nativeUrl = nativeFileUrl(file)
+    if (nativeUrl) { setUrl(nativeUrl); return }
     const next = URL.createObjectURL(file)
     setUrl(next)
     return () => { window.setTimeout(() => URL.revokeObjectURL(next), 1000) }
@@ -230,9 +233,9 @@ export function Preview({ graph, graphId, assets, scripts, layouts, initialHisto
 
   useEffect(() => {
     const paths = new Set(Object.entries(graph.buttons).flatMap(([id, button]) => [button.style?.backgroundImage, buttonResults[id]?.style?.backgroundImage]).filter(Boolean) as string[])
-    const next = Object.fromEntries([...paths].flatMap((path) => { const file = assets.find((item) => item.path === path)?.file; return file ? [[path, URL.createObjectURL(file)]] : [] }))
+    const next = Object.fromEntries([...paths].flatMap((path) => { const file = assets.find((item) => item.path === path)?.file; return file ? [[path, nativeFileUrl(file) ?? URL.createObjectURL(file)]] : [] }))
     setButtonImageUrls(next)
-    return () => Object.values(next).forEach((url) => URL.revokeObjectURL(url))
+    return () => Object.values(next).forEach((url) => { if (url.startsWith('blob:')) URL.revokeObjectURL(url) })
   }, [assets, buttonResults, graph.buttons])
 
   const evaluateButtons = useCallback(async () => {

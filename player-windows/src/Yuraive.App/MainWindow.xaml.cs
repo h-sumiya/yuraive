@@ -38,6 +38,8 @@ public sealed partial class MainWindow : Window
     private readonly string? _activatedBundlePath;
     private readonly ObservableCollection<LibraryEntryViewModel> _libraryItems = [];
     private readonly ObservableCollection<HistoryEntryViewModel> _historyItems = [];
+    private readonly Dictionary<string, EditorWindow> _editorWindows = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _selectedRootUris = new(StringComparer.OrdinalIgnoreCase);
     private readonly DisplayRequest _displayRequest = new();
     private IReadOnlyList<LibraryRoot> _rootScan = [];
     private RootGrant? _browserRoot;
@@ -159,6 +161,7 @@ public sealed partial class MainWindow : Window
         _isSearching = false;
         SearchPanel.Visibility = Visibility.Collapsed;
         SearchBox.Text = "";
+        _selectedRootUris.IntersectWith(_rootScan.Select(root => root.Grant.Uri));
         ShowListPanel();
         ConfigureLibraryHeader(home: true, "Yuraive");
         SectionTitle.Text = "ライブラリ";
@@ -172,8 +175,8 @@ public sealed partial class MainWindow : Window
                 Title = root.Grant.Name,
                 Subtitle = root.Error ?? "",
                 Glyph = root.Error is null ? "\uE8B7" : "\uE783",
-                ActionGlyph = "\uE74D",
-                ActionVisibility = Visibility.Visible,
+                RootSelectionVisibility = Visibility.Visible,
+                RootIsSelected = _selectedRootUris.Contains(root.Grant.Uri),
                 Thumbnail = ThumbnailSource(preview),
                 BlurredThumbnail = ThumbnailSource(preview, 48),
                 Root = root.Grant,
@@ -186,6 +189,7 @@ public sealed partial class MainWindow : Window
             Glyph = "\uE710",
         });
         ReplaceLibraryItems(items);
+        UpdateRootSelectionActions();
         SetEmptyState(false, "", "", showAdd: false);
     }
 
@@ -355,6 +359,80 @@ public sealed partial class MainWindow : Window
         LibraryProgress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         LibraryList.IsEnabled = !busy;
         RefreshButton.IsEnabled = !busy;
+        DeleteSelectedRootsButton.IsEnabled = !busy;
+    }
+
+    private void RootSelectionToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleButton toggle) return;
+        UpdateRootSelectionToggleVisual(toggle);
+        UpdateRootSelectionToggleVisibility(toggle);
+        if (toggle.DataContext is not LibraryEntryViewModel { Root: { } root } item) return;
+
+        item.RootIsSelected = toggle.IsChecked == true;
+        if (item.RootIsSelected) _selectedRootUris.Add(root.Uri);
+        else _selectedRootUris.Remove(root.Uri);
+        UpdateRootSelectionActions();
+    }
+
+    private void RootSelectionToggle_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton toggle) UpdateRootSelectionToggleVisibility(toggle);
+    }
+
+    private static void UpdateRootSelectionToggleVisual(ToggleButton toggle)
+    {
+        ToolTipService.SetToolTip(toggle, toggle.IsChecked == true ? "選択を解除" : "削除対象に選択");
+    }
+
+    private static void UpdateRootSelectionToggleVisibility(ToggleButton toggle)
+    {
+        toggle.Visibility = toggle.IsChecked == true || toggle.IsPointerOver ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void UpdateRootSelectionActions()
+    {
+        var count = _selectedRootUris.Count;
+        SelectedRootCountText.Text = $"{count}件";
+        DeleteSelectedRootsButton.Visibility = count > 0 && _section == LibrarySection.Library && _browserRoot is null && !_isSearching
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        ToolTipService.SetToolTip(DeleteSelectedRootsButton, $"選択したフォルダをライブラリから削除（{count}件）");
+    }
+
+    private async void DeleteSelectedRootsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var uris = _selectedRootUris.ToArray();
+        if (uris.Length == 0) return;
+
+        var failures = new List<(string Uri, Exception Error)>();
+        SetLibraryBusy(true);
+        try
+        {
+            foreach (var uri in uris)
+            {
+                try
+                {
+                    await _library.RemoveRootAsync(uri);
+                    _selectedRootUris.Remove(uri);
+                }
+                catch (Exception error)
+                {
+                    failures.Add((uri, error));
+                }
+            }
+            await RefreshRootsAsync();
+        }
+        finally
+        {
+            SetLibraryBusy(false);
+        }
+
+        if (failures.Count > 0)
+        {
+            var details = string.Join(Environment.NewLine, failures.Select(failure => $"{failure.Uri}: {failure.Error.Message}"));
+            await ShowMessageAsync("一部のフォルダを削除できませんでした", details);
+        }
     }
 
     private async void LibraryList_ItemClick(object sender, ItemClickEventArgs e)
@@ -629,12 +707,7 @@ public sealed partial class MainWindow : Window
     private async void LibraryItemAction_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not LibraryEntryViewModel item) return;
-        if (item.Kind == LibraryEntryKind.Root && item.Root is not null)
-        {
-            await _library.RemoveRootAsync(item.Root.Uri);
-            await RefreshRootsAsync();
-        }
-        else if (item.Kind == LibraryEntryKind.Graph && item.Graph is not null)
+        if (item.Kind == LibraryEntryKind.Graph && item.Graph is not null)
         {
             await _library.ToggleFavoriteAsync(item.Graph.Ref.GraphId);
             UpdateFavoriteIcon(_lastPlaybackState);
@@ -699,8 +772,6 @@ public sealed partial class MainWindow : Window
                 Title = root.Grant.Name,
                 Subtitle = root.Error ?? "",
                 Glyph = root.Error is null ? "\uE8B7" : "\uE783",
-                ActionGlyph = "\uE74D",
-                ActionVisibility = Visibility.Visible,
                 Thumbnail = ThumbnailSource(preview),
                 BlurredThumbnail = ThumbnailSource(preview, 48),
                 Root = root.Grant,
@@ -809,6 +880,24 @@ public sealed partial class MainWindow : Window
         catch { return null; }
     }
 
+    private void LibraryItem_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is FrameworkElement item) UpdateLibraryItemHoverActions(item, true);
+    }
+
+    private void LibraryItem_PointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is FrameworkElement item) UpdateLibraryItemHoverActions(item, false);
+    }
+
+    private static void UpdateLibraryItemHoverActions(FrameworkElement item, bool hovered)
+    {
+        if (FindDescendantByName<ToggleButton>(item, "RootSelectionButton") is { } selection)
+            selection.Visibility = hovered || selection.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        if (FindDescendantByName<Button>(item, "LibraryItemActionButton") is { } action)
+            action.Visibility = hovered ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private void LibraryItem_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: LibraryEntryViewModel item } anchor) return;
@@ -831,9 +920,18 @@ public sealed partial class MainWindow : Window
         var menu = new MenuFlyout();
         if (item.Kind == LibraryEntryKind.Root && item.Root is not null)
         {
+            var edit = new MenuFlyoutItem
+            {
+                Text = "エディタで開く",
+                Icon = new FontIcon { Glyph = "\uE70F" },
+                IsEnabled = CanEditRoot(item.Root),
+            };
+            edit.Click += async (_, _) => await OpenEditorAsync(item.Root);
+            menu.Items.Add(edit);
             var remove = new MenuFlyoutItem { Text = "フォルダを削除", Icon = new FontIcon { Glyph = "\uE74D" } };
             remove.Click += async (_, _) =>
             {
+                _selectedRootUris.Remove(item.Root.Uri);
                 await _library.RemoveRootAsync(item.Root.Uri);
                 await RefreshRootsAsync();
             };
@@ -863,6 +961,34 @@ public sealed partial class MainWindow : Window
             menu.Items.Add(favorite);
         }
         if (menu.Items.Count > 0) menu.ShowAt(anchor, position);
+    }
+
+    private async Task OpenEditorAsync(RootGrant root)
+    {
+        try
+        {
+            if (!CanEditRoot(root)) throw new InvalidOperationException("ローカルフォルダだけをエディタで開けます");
+            if (_editorWindows.TryGetValue(root.Uri, out var existing))
+            {
+                existing.Activate();
+                return;
+            }
+
+            var editor = new EditorWindow(root.Uri, root.Name);
+            _editorWindows[root.Uri] = editor;
+            editor.Closed += (_, _) => _editorWindows.Remove(root.Uri);
+            editor.Activate();
+        }
+        catch (Exception error)
+        {
+            await ShowMessageAsync("エディタを開けません", error.Message);
+        }
+    }
+
+    private static bool CanEditRoot(RootGrant root)
+    {
+        try { return Path.IsPathFullyQualified(root.Uri) && Directory.Exists(root.Uri); }
+        catch { return false; }
     }
 
     private async void AddFolderButton_Click(object sender, RoutedEventArgs e)
@@ -1007,6 +1133,7 @@ public sealed partial class MainWindow : Window
         MiniPlayPauseIcon.Glyph = PlayPauseIcon.Glyph;
         PlayPauseButton.IsEnabled = state.Status is PlaybackStatus.Ready or PlaybackStatus.Completed;
         MiniPlayPauseButton.IsEnabled = PlayPauseButton.IsEnabled;
+        MiniStopButton.IsEnabled = state.Controls.AllowStop && state.Status != PlaybackStatus.Loading;
         PreviousButton.Visibility = Visibility.Visible;
         PreviousButton.IsEnabled = state.Controls.AllowPrevious && state.CanPrevious;
         NextButton.Visibility = Visibility.Visible;
@@ -1736,6 +1863,17 @@ public sealed partial class MainWindow : Window
             var child = VisualTreeHelper.GetChild(element, index);
             if (child is T found) return found;
             if (FindDescendant<T>(child) is { } nested) return nested;
+        }
+        return null;
+    }
+
+    private static T? FindDescendantByName<T>(DependencyObject element, string name) where T : FrameworkElement
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(element); index++)
+        {
+            var child = VisualTreeHelper.GetChild(element, index);
+            if (child is T found && found.Name == name) return found;
+            if (FindDescendantByName<T>(child, name) is { } nested) return nested;
         }
         return null;
     }

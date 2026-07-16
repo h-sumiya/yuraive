@@ -6,6 +6,7 @@ import { createGraph, DEFAULT_PLAYER_CONTROLS, defaultMedia, fileKind, nextButto
 import { Preview } from './Preview'
 import { LayoutEditor, LayoutInspector } from './LayoutEditor'
 import { DEFAULT_LAYOUT_SOURCE, LAYOUT_EXTENSION } from './layout'
+import { isNativeDirectoryHost, nativeFileUrl, requestNativeDirectory } from './nativeDirectory'
 import { createStarlarkContext } from './scriptContext'
 import ScriptInspector from './ScriptInspector'
 import type { ScriptTestState } from './ScriptEditor'
@@ -253,6 +254,8 @@ function useObjectUrl(file?: File) {
   const [url, setUrl] = useState<string>()
   useEffect(() => {
     if (!file) { setUrl(undefined); return }
+    const nativeUrl = nativeFileUrl(file)
+    if (nativeUrl) { setUrl(nativeUrl); return }
     const next = URL.createObjectURL(file)
     setUrl(next)
     return () => URL.revokeObjectURL(next)
@@ -1210,11 +1213,11 @@ function App() {
     for (const part of path.split('/').filter(Boolean)) directory = await directory.getDirectoryHandle(part, { create })
     return directory
   }, [root])
-  const openDirectory = async () => {
-    if (!window.showDirectoryPicker) return
+  const openDirectory = async (providedHandle?: FileSystemDirectoryHandle) => {
+    if (!providedHandle && !window.showDirectoryPicker) return
     setBusy(true)
     try {
-      const handle = await window.showDirectoryPicker({ mode: 'readwrite' })
+      const handle = providedHandle ?? await window.showDirectoryPicker!({ mode: 'readwrite' })
       const result = await readDirectory(handle)
       const restored = restoreDrafts(handle.name, result.documents)
       const restoredScripts = restoreScriptDrafts(handle.name, result.scripts)
@@ -1268,9 +1271,17 @@ function App() {
   }
   const requestOpenDirectory = () => {
     if ((documents.some((document) => document.dirty) || scripts.some((script) => script.dirty) || layouts.some((layout) => layout.dirty)) && !window.confirm('未保存の変更があります。保存せずに新しいフォルダを開きますか？')) return
-    if (window.showDirectoryPicker) void openDirectory()
+    if (isNativeDirectoryHost()) void requestNativeDirectory().then((handle) => handle && openDirectory(handle))
+    else if (window.showDirectoryPicker) void openDirectory()
     else folderInput.current?.click()
   }
+  useEffect(() => {
+    let cancelled = false
+    if (isNativeDirectoryHost()) void requestNativeDirectory().then((handle) => {
+      if (!cancelled && handle) void openDirectory(handle)
+    })
+    return () => { cancelled = true }
+  }, [])
   const openFallback = async (files: FileList) => {
     setBusy(true)
     const docs: GraphDocument[] = []
@@ -1965,12 +1976,13 @@ function App() {
     if (nextPath === target.path) return true
     if (workspacePathExists(nextPath, target.path)) { notify('同じ名前の項目が既にあります'); return false }
     try {
+      let nextHandle: FileSystemFileHandle | undefined
       if (root) {
         const directory = await resolveDirectory(parent)
-        const handle = await directory?.getFileHandle(name, { create: true })
-        if (handle) { const writable = await handle.createWritable(); await writable.write(target.file); await writable.close(); await directory?.removeEntry(target.name) }
+        nextHandle = await directory?.getFileHandle(name, { create: true })
+        if (nextHandle) { const writable = await nextHandle.createWritable(); await writable.write(target.file); await writable.close(); await directory?.removeEntry(target.name) }
       }
-      const nextFile = new File([target.file], name, { type: target.file.type, lastModified: target.file.lastModified })
+      const nextFile = nextHandle ? await nextHandle.getFile() : new File([target.file], name, { type: target.file.type, lastModified: target.file.lastModified })
       setAssets((items) => items.map((item) => item.path === target.path ? { ...item, name, path: nextPath, kind: fileKind(nextPath), file: nextFile } : item))
       setDocuments((items) => items.map((document) => {
         const graphParent = document.path.includes('/') ? document.path.slice(0, document.path.lastIndexOf('/') + 1) : ''
@@ -2269,7 +2281,7 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [layouts, rootName])
 
-  if (!rootName) return <><Welcome busy={busy} onOpen={() => void openDirectory()} onFallback={(files) => void openFallback(files)}/>{toast && <div className="toast">{toast}</div>}</>
+  if (!rootName) return <><Welcome busy={busy} onOpen={requestOpenDirectory} onFallback={(files) => void openFallback(files)}/>{toast && <div className="toast">{toast}</div>}</>
   return <div className="app-shell" onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' } }} onDrop={(event) => { if (!event.dataTransfer.types.includes('Files')) return; event.preventDefault(); const promises = Array.from(event.dataTransfer.items).map((item) => (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> }).getAsFileSystemHandle?.() ?? Promise.resolve(null)); void importDroppedHandles(promises) }}>
     <header className="titlebar"><div className="brand"><img className="brand-logo" src="/favicon.svg" alt=""/><strong>Yuraive</strong><span>Editor</span></div><nav><div className="menu-anchor"><button onPointerDown={(event) => event.stopPropagation()} onClick={() => setShowFileMenu(!showFileMenu)}>ファイル</button>{showFileMenu && <div className="app-menu" onPointerDown={(event) => event.stopPropagation()}><button disabled={!activeTab} onClick={() => { void saveCurrent(); setShowFileMenu(false) }}><Icon name="save" size={13}/><span>保存</span><kbd>Ctrl+S</kbd></button><div className="menu-separator"/><button onClick={() => { setShowFileMenu(false); requestOpenDirectory() }}><Icon name="folder" size={13}/><span>新しいフォルダを開く</span></button></div>}</div></nav><div className="title-actions"><span className="workspace-name"><Icon name="folder" size={13}/>{rootName}</span><button className="toolbar-button" disabled={!activeTab} onClick={() => void saveCurrent()}><Icon name="save" size={14}/>保存</button><button className="primary-button compact" disabled={!active} onClick={() => setShowPreview(true)}><Icon name="play" size={13}/>プレビュー</button></div></header>
     <div className="workspace" style={{ gridTemplateColumns: `${leftWidth}px 4px minmax(360px, 1fr) 4px ${rightWidth}px` }}><Suspense fallback={<div className="workspace-loading">エディタを読み込み中…</div>}>

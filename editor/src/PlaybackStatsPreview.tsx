@@ -1,4 +1,5 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { nativeFileUrl } from './nativeDirectory'
 import type { AssetEntry } from './types'
 
 type JsonObject = Record<string, unknown>
@@ -165,9 +166,9 @@ const DisplayNodePreview = ({ value, assetUrls }: { value: unknown; assetUrls: R
 export function PlaybackStatsPreview({ value, assets = [] }: { value: unknown; assets?: AssetEntry[] }) {
   const [assetUrls, setAssetUrls] = useState<Record<string, string>>({})
   useEffect(() => {
-    const next = Object.fromEntries(assets.filter((asset) => asset.kind === 'image').map((asset) => [asset.path, URL.createObjectURL(asset.file)]))
+    const next = Object.fromEntries(assets.filter((asset) => asset.kind === 'image').map((asset) => [asset.path, nativeFileUrl(asset.file) ?? URL.createObjectURL(asset.file)]))
     setAssetUrls(next)
-    return () => Object.values(next).forEach((url) => URL.revokeObjectURL(url))
+    return () => Object.values(next).forEach((url) => { if (url.startsWith('blob:')) URL.revokeObjectURL(url) })
   }, [assets])
   const errors = validateResult(value)
   const result = object(value)

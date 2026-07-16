@@ -27,6 +27,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <EnableWindowsTargeting Condition="'$(OS)' != 'Windows_NT'">true</EnableWindowsTargeting>
+    <EditorSourceRoot>$(MSBuildProjectDirectory)\..\..\..\editor</EditorSourceRoot>
   </PropertyGroup>
 
   <!-- XBF and MSIX packaging invoke Windows-native SDK tools. Linux CI still
@@ -65,5 +66,52 @@
 
   <Target Name="CopyRustRuntime" AfterTargets="Build" Condition="'$(OS)' != 'Windows_NT'">
     <Copy SourceFiles="$(RustDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <ItemGroup>
+    <EditorBuildInput Include="$(EditorSourceRoot)\src\**\*;$(EditorSourceRoot)\public\**\*;$(EditorSourceRoot)\index.html;$(EditorSourceRoot)\package.json;$(EditorSourceRoot)\package-lock.json;$(EditorSourceRoot)\vite.config.ts;$(EditorSourceRoot)\tsconfig*.json" />
+  </ItemGroup>
+
+  <Target Name="RestoreOfflineEditorDependencies"
+          Condition="'$(DesignTimeBuild)' != 'true'"
+          Inputs="$(EditorSourceRoot)\package-lock.json"
+          Outputs="$(EditorSourceRoot)\node_modules\.package-lock.json">
+    <Exec WorkingDirectory="$(EditorSourceRoot)" Command="npm ci" />
+  </Target>
+
+  <Target Name="BuildOfflineEditor"
+          Condition="'$(DesignTimeBuild)' != 'true'"
+          BeforeTargets="PrepareForBuild"
+          DependsOnTargets="RestoreOfflineEditorDependencies"
+          Inputs="@(EditorBuildInput)"
+          Outputs="$(EditorSourceRoot)\dist-native\index.html">
+    <Exec WorkingDirectory="$(EditorSourceRoot)" Command="npm run build:native" />
+  </Target>
+
+  <Target Name="IncludeOfflineEditorAssets"
+          Condition="'$(DesignTimeBuild)' != 'true'"
+          BeforeTargets="AssignTargetPaths"
+          DependsOnTargets="BuildOfflineEditor">
+    <ItemGroup>
+      <_OfflineEditorAsset Include="$(EditorSourceRoot)\dist-native\**\*" />
+      <Content Remove="@(_OfflineEditorAsset)" />
+      <Content Include="@(_OfflineEditorAsset)">
+        <Link>Editor\%(_OfflineEditorAsset.RecursiveDir)%(_OfflineEditorAsset.Filename)%(_OfflineEditorAsset.Extension)</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </Content>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyOfflineEditorToAppxLayout"
+          Condition="'$(DesignTimeBuild)' != 'true' and Exists('$(OutDir)AppX')"
+          AfterTargets="Build"
+          DependsOnTargets="IncludeOfflineEditorAssets">
+    <ItemGroup>
+      <_AppxEditorAsset Include="$(EditorSourceRoot)\dist-native\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_AppxEditorAsset)"
+          DestinationFiles="@(_AppxEditorAsset->'$(OutDir)AppX\Editor\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
   </Target>
 </Project>
