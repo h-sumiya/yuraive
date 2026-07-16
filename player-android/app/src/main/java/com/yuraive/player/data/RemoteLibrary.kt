@@ -23,6 +23,7 @@ import com.hierynomus.smbj.share.File as SmbFile
 import com.yuraive.player.model.GraphValidator
 import com.yuraive.player.model.YuraiveJson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -144,6 +145,7 @@ internal object RemotePaths {
 
 internal class RemoteSourceManager(private val context: Context) {
     private val store = EncryptedRemoteConfigStore(context)
+    private val windows = WindowsPeerSourceManager(context)
     private val configs = ConcurrentHashMap<String, RemoteConnectionConfig>()
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -153,7 +155,15 @@ internal class RemoteSourceManager(private val context: Context) {
         .followSslRedirects(false)
         .build()
 
-    fun isRemoteRoot(rootUri: String): Boolean = rootUri.startsWith(SMB_ROOT_PREFIX) || rootUri.startsWith(WEBDAV_ROOT_PREFIX)
+    fun isRemoteRoot(rootUri: String): Boolean = rootUri.startsWith(SMB_ROOT_PREFIX) ||
+        rootUri.startsWith(WEBDAV_ROOT_PREFIX) || windows.isRoot(rootUri)
+
+    suspend fun pairWindows(qrPayload: String): List<RootGrant> = windows.pair(qrPayload)
+    val windowsConnectionStates: StateFlow<Map<String, WindowsConnectionStatus>> get() = windows.connectionStates
+    fun windowsDevices(rootUris: List<String>): List<WindowsDeviceConnection> = windows.devices(rootUris)
+    fun removeWindowsDevice(deviceId: String) = windows.removeDevice(deviceId)
+    fun refreshWindowsDevice(deviceId: String) = windows.refreshDevice(deviceId)
+    fun refreshWindowsDevices() = windows.refreshAll()
 
     suspend fun browse(config: RemoteConnectionConfig, relativePath: String): List<RemoteFolder> = withContext(Dispatchers.IO) {
         RemotePaths.validate(config)?.let(::error)
@@ -188,12 +198,18 @@ internal class RemoteSourceManager(private val context: Context) {
 
     fun remove(rootUri: String) {
         val id = rootId(rootUri) ?: return
+        if (windows.isRoot(rootUri)) {
+            windows.remove(rootUri)
+            File(context.cacheDir, "remote-assets/$id").deleteRecursively()
+            return
+        }
         configs.remove(id)
         store.remove(id)
         File(context.cacheDir, "remote-assets/$id").deleteRecursively()
     }
 
     fun list(rootUri: String, relativePath: String): List<RemoteNode> {
+        if (windows.isRoot(rootUri)) return windows.list(rootUri, relativePath)
         val config = config(rootUri)
         val path = RemotePaths.join(config.rootPath, RemotePaths.normalizeRelative(relativePath))
         return backend(config).list(path)
@@ -201,6 +217,7 @@ internal class RemoteSourceManager(private val context: Context) {
 
     fun open(rootUri: String, relativePath: String, offset: Long = 0): RemoteRead {
         require(offset >= 0) { "読み込み位置が不正です" }
+        if (windows.isRoot(rootUri)) return windows.open(rootUri, relativePath, offset)
         val config = config(rootUri)
         val path = RemotePaths.join(config.rootPath, RemotePaths.normalizeRelative(relativePath))
         return backend(config).open(path, offset)
@@ -216,6 +233,7 @@ internal class RemoteSourceManager(private val context: Context) {
     fun openMedia(uri: Uri, offset: Long): RemoteRead {
         require(uri.scheme == REMOTE_MEDIA_SCHEME) { "リモートメディアURIではありません" }
         val id = uri.host?.takeIf(ID_PATTERN::matches) ?: error("リモートメディアIDが不正です")
+        windows.rootUriForId(id)?.let { return windows.open(it, uri.pathSegments.joinToString("/"), offset) }
         val config = configById(id)
         val rootUri = rootUri(config.protocol, id)
         val path = uri.pathSegments.joinToString("/")
@@ -277,6 +295,7 @@ internal class RemoteSourceManager(private val context: Context) {
     private fun rootId(rootUri: String): String? = when {
         rootUri.startsWith(SMB_ROOT_PREFIX) -> rootUri.removePrefix(SMB_ROOT_PREFIX)
         rootUri.startsWith(WEBDAV_ROOT_PREFIX) -> rootUri.removePrefix(WEBDAV_ROOT_PREFIX)
+        rootUri.startsWith(WindowsPeerSourceManager.ROOT_PREFIX) -> rootUri.removePrefix(WindowsPeerSourceManager.ROOT_PREFIX)
         else -> null
     }?.takeIf(ID_PATTERN::matches)
 

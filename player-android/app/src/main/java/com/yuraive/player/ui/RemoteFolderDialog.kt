@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -73,6 +74,7 @@ internal fun RemoteFolderDialog(
     library: DocumentLibrary,
     onDismiss: () -> Unit,
     onSelectLocal: () -> Unit,
+    onSelectWindows: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var step by rememberSaveable { mutableStateOf(RemoteFolderStep.SOURCE) }
@@ -254,6 +256,10 @@ internal fun RemoteFolderDialog(
                             errorMessage = null
                             step = RemoteFolderStep.CONNECTION
                         },
+                        onWindows = {
+                            onDismiss()
+                            onSelectWindows()
+                        },
                     )
                     RemoteFolderStep.CONNECTION -> ConnectionForm(
                         modifier = Modifier.weight(1f),
@@ -353,14 +359,20 @@ private fun SourceSelection(
     modifier: Modifier,
     onLocal: () -> Unit,
     onRemote: (RemoteProtocol) -> Unit,
+    onWindows: () -> Unit,
 ) {
-    Row(
+    Column(
         modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        SourceButton("端末", Icons.Default.PhoneAndroid, Modifier.weight(1f), onLocal)
-        SourceButton("SMB", Icons.Default.Dns, Modifier.weight(1f)) { onRemote(RemoteProtocol.SMB) }
-        SourceButton("WebDAV", Icons.Default.Cloud, Modifier.weight(1f)) { onRemote(RemoteProtocol.WEBDAV) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SourceButton("端末", Icons.Default.PhoneAndroid, Modifier.weight(1f), onLocal)
+            SourceButton("Windows", Icons.Default.Computer, Modifier.weight(1f), onWindows)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SourceButton("SMB", Icons.Default.Dns, Modifier.weight(1f)) { onRemote(RemoteProtocol.SMB) }
+            SourceButton("WebDAV", Icons.Default.Cloud, Modifier.weight(1f)) { onRemote(RemoteProtocol.WEBDAV) }
+        }
     }
 }
 

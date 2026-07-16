@@ -184,11 +184,12 @@ internal sealed class RemoteSourceManager
         return List(rootUri, parent).FirstOrDefault(node => string.Equals(node.Name, name, StringComparison.Ordinal));
     }
 
-    public RemoteRead Open(string rootUri, string relativePath)
+    public RemoteRead Open(string rootUri, string relativePath, long offset = 0)
     {
+        if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset));
         var config = Config(rootUri);
         var path = RemotePaths.Join(config.RootPath, RemotePaths.NormalizeRelative(relativePath));
-        return Backend(config).Open(path);
+        return Backend(config).Open(path, offset);
     }
 
     public string? CachedPath(string rootUri, string relativePath)
@@ -280,7 +281,7 @@ internal sealed class RemoteSourceManager
 internal interface IRemoteBackend
 {
     IReadOnlyList<RemoteNode> List(string relativePath);
-    RemoteRead Open(string relativePath);
+    RemoteRead Open(string relativePath, long offset = 0);
 }
 
 internal sealed class SmbBackend(RemoteConnectionConfig config) : IRemoteBackend
@@ -317,7 +318,7 @@ internal sealed class SmbBackend(RemoteConnectionConfig config) : IRemoteBackend
         }
     }
 
-    public RemoteRead Open(string relativePath)
+    public RemoteRead Open(string relativePath, long offset = 0)
     {
         SmbResources? resources = null;
         try
@@ -332,6 +333,7 @@ internal sealed class SmbBackend(RemoteConnectionConfig config) : IRemoteBackend
             Ensure(status, "SMBファイル情報を取得できません");
             var length = ((FileStandardInformation)information).EndOfFile;
             var stream = new SmbReadStream(resources, handle, length);
+            stream.Position = Math.Min(offset, length);
             resources = null;
             return new RemoteRead(stream, length);
         }
@@ -451,17 +453,40 @@ internal sealed class WebDavBackend(RemoteConnectionConfig config, HttpClient cl
         return ParseListing(limited, requested);
     }
 
-    public RemoteRead Open(string relativePath)
+    public RemoteRead Open(string relativePath, long offset = 0)
     {
         var request = Request(HttpMethod.Get, Url(RemotePaths.NormalizeRelative(relativePath), directory: false));
+        if (offset > 0) request.Headers.Range = new RangeHeaderValue(offset, null);
         var response = client.Send(request, HttpCompletionOption.ResponseHeadersRead);
         try
         {
             CheckResponse(response, "ファイルを開けません");
-            var length = response.Content.Headers.ContentLength ?? -1;
-            return new RemoteRead(new ResponseStream(response.Content.ReadAsStream(), response), length);
+            var responseLength = response.Content.Headers.ContentLength ?? 0;
+            var stream = response.Content.ReadAsStream();
+            long length;
+            if (offset > 0 && response.StatusCode != HttpStatusCode.PartialContent)
+            {
+                length = responseLength;
+                Skip(stream, offset);
+            }
+            else
+            {
+                length = response.Content.Headers.ContentRange?.Length ?? offset + responseLength;
+            }
+            return new RemoteRead(new ResponseStream(stream, response), length);
         }
         catch { response.Dispose(); throw; }
+    }
+
+    private static void Skip(Stream stream, long count)
+    {
+        var buffer = new byte[64 * 1024];
+        while (count > 0)
+        {
+            var read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, count));
+            if (read == 0) break;
+            count -= read;
+        }
     }
 
     private HttpRequestMessage Request(HttpMethod method, string url)

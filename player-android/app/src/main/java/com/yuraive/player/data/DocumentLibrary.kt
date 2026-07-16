@@ -14,6 +14,9 @@ import com.yuraive.player.model.YuraiveGraph
 import com.yuraive.player.model.YuraiveJson
 import com.yuraive.player.model.YuraiveLayout
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
@@ -150,6 +153,7 @@ class DocumentLibrary(private val context: Context) {
     val roots: StateFlow<List<RootGrant>> = rootsMutable
     val knownGraphs: StateFlow<List<LibraryGraph>> = knownGraphsMutable
     val favoriteIds: StateFlow<Set<String>> = favoriteIdsMutable
+    val windowsConnectionStates: StateFlow<Map<String, WindowsConnectionStatus>> = remoteSources.windowsConnectionStates
 
     fun addRoot(uri: Uri, name: String) {
         val updated = (rootsMutable.value.filterNot { it.uri == uri.toString() } + RootGrant(uri.toString(), name)).sortedBy { it.name.lowercase() }
@@ -165,6 +169,14 @@ class DocumentLibrary(private val context: Context) {
         persist(updated)
     }
 
+    suspend fun addWindowsLibrary(qrPayload: String): List<RootGrant> = withContext(Dispatchers.IO) {
+        val grants = remoteSources.pairWindows(qrPayload)
+        val uris = grants.mapTo(mutableSetOf()) { it.uri }
+        val updated = (rootsMutable.value.filterNot { it.uri in uris } + grants).sortedBy { it.name.lowercase() }
+        persist(updated)
+        grants
+    }
+
     fun removeRoot(uri: String) {
         if (remoteSources.isRemoteRoot(uri)) {
             remoteSources.remove(uri)
@@ -173,6 +185,22 @@ class DocumentLibrary(private val context: Context) {
         }
         knownGraphsMutable.value = knownGraphsMutable.value.filterNot { it.ref.rootUri == uri }
         persist(rootsMutable.value.filterNot { it.uri == uri })
+    }
+
+    fun windowsDevices(): List<WindowsDeviceConnection> =
+        remoteSources.windowsDevices(rootsMutable.value.map(RootGrant::uri))
+
+    fun refreshWindowsDevice(deviceId: String) = remoteSources.refreshWindowsDevice(deviceId)
+
+    fun refreshWindowsDevices() = remoteSources.refreshWindowsDevices()
+
+    fun removeWindowsDevice(deviceId: String) {
+        val rootUris = windowsDevices().firstOrNull { it.id == deviceId }?.rootUris.orEmpty().toSet()
+        if (rootUris.isEmpty()) return
+        rootUris.forEach(remoteSources::remove)
+        remoteSources.removeWindowsDevice(deviceId)
+        knownGraphsMutable.value = knownGraphsMutable.value.filterNot { it.ref.rootUri in rootUris }
+        persist(rootsMutable.value.filterNot { it.uri in rootUris })
     }
 
     fun toggleFavorite(graphId: String) {
@@ -200,12 +228,14 @@ class DocumentLibrary(private val context: Context) {
         graphCache.clear()
         validationCache.clear()
         scriptCache.clear()
-        val scanned = rootsMutable.value.map { grant ->
-            runCatching {
-                val root = rootFile(grant)
-                rootCache[grant.uri] = root
-                LibraryRoot(grant, scanDirectory(grant, root, ""))
-            }.getOrElse { LibraryRoot(grant, error = it.message ?: "フォルダを読み込めません") }
+        val scanned = coroutineScope {
+            rootsMutable.value.map { grant -> async {
+                runCatching {
+                    val root = rootFile(grant)
+                    rootCache[grant.uri] = root
+                    LibraryRoot(grant, scanDirectory(grant, root, ""))
+                }.getOrElse { LibraryRoot(grant, error = it.message ?: "フォルダを読み込めません") }
+            } }.awaitAll()
         }
         knownGraphsMutable.value = scanned.flatMap { it.directory?.graphs.orEmpty() }
         scanned

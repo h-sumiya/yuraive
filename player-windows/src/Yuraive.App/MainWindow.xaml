@@ -56,6 +56,7 @@
                             </StackPanel>
                             <StackPanel x:Name="HomeTopActions" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="2">
                                 <Button Style="{StaticResource RoundIconButtonStyle}" Click="HistoryNavButton_Click" ToolTipService.ToolTip="履歴"><FontIcon Glyph="&#xE81C;" /></Button>
+                                <Button x:Name="PairAndroidHeaderButton" Style="{StaticResource RoundIconButtonStyle}" Click="PairAndroidButton_Click" ToolTipService.ToolTip="Androidと接続" Visibility="Collapsed"><FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&#xED14;" /></Button>
                                 <Button Style="{StaticResource RoundIconButtonStyle}" Click="SettingsNavButton_Click" ToolTipService.ToolTip="設定"><FontIcon Glyph="&#xE713;" /></Button>
                             </StackPanel>
                         </Grid>
@@ -249,6 +250,18 @@
                             </StackPanel>
 
                             <StackPanel Spacing="0">
+                                <TextBlock Margin="0,0,0,12" FontSize="18" FontWeight="Bold" Text="端末間接続" />
+                                <Grid MinHeight="82" ColumnSpacing="20">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center" Spacing="4">
+                                        <TextBlock FontWeight="SemiBold" Text="共有を有効化する" />
+                                        <TextBlock x:Name="PairingStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="13" Text="現在0台のデバイスと共有しています" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="ShareLibraryToggle" Grid.Column="1" MinWidth="0" HorizontalAlignment="Right" VerticalAlignment="Center" OnContent="{x:Null}" OffContent="{x:Null}" Toggled="ShareLibraryToggle_Toggled" />
+                                </Grid>
+                            </StackPanel>
+
+                            <StackPanel Spacing="0">
                                 <TextBlock Margin="0,0,0,12" FontSize="18" FontWeight="Bold" Text="プレイヤーコントロール" />
                                 <Grid MinHeight="82" ColumnSpacing="20">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
@@ -293,7 +306,7 @@
                         </Button>
                         <StackPanel Margin="0,0,8,0" HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal" Spacing="2">
                             <Button x:Name="MiniStopButton" Width="40" Height="40" Padding="0" CornerRadius="20" Background="Transparent" BorderThickness="0" Click="StopButton_Click" ToolTipService.ToolTip="再生を終了">
-                                <FontIcon FontSize="17" Glyph="&#xE8BB;" />
+                                <Rectangle Width="12" Height="12" RadiusX="1.5" RadiusY="1.5" Fill="{ThemeResource TextFillColorPrimaryBrush}" />
                             </Button>
                             <Button x:Name="MiniPlayPauseButton" Width="50" Height="50" Padding="0" CornerRadius="25" Background="Transparent" BorderThickness="0" Click="PlayPauseButton_Click" ToolTipService.ToolTip="再生/一時停止">
                                 <FontIcon x:Name="MiniPlayPauseIcon" FontSize="22" Glyph="&#xE768;" />

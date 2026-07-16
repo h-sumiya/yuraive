@@ -174,6 +174,8 @@ import com.yuraive.player.data.LibraryRoot
 import com.yuraive.player.data.PlayerSettings
 import com.yuraive.player.data.RootGrant
 import com.yuraive.player.data.ThemeMode
+import com.yuraive.player.data.WindowsConnectionStatus
+import com.yuraive.player.data.WindowsDeviceConnection
 import com.yuraive.player.data.isContent
 import com.yuraive.player.data.previewGraph
 import com.yuraive.player.model.GraphRef
@@ -263,6 +265,7 @@ private fun CenteredContent(
 @Composable
 fun YuraiveApp(
     addFolder: () -> Unit,
+    pairWindows: () -> Unit,
     exportHistory: () -> Unit,
     ensureNotificationPermission: () -> Unit,
 ) {
@@ -273,6 +276,7 @@ fun YuraiveApp(
     val roots by app.library.roots.collectAsStateWithLifecycle()
     val knownGraphs by app.library.knownGraphs.collectAsStateWithLifecycle()
     val favoriteIds by app.library.favoriteIds.collectAsStateWithLifecycle()
+    val windowsConnectionStates by app.library.windowsConnectionStates.collectAsStateWithLifecycle()
     val player by PlaybackRuntime.player.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var destination by rememberSaveable { mutableStateOf(Destination.LIBRARY) }
@@ -285,12 +289,11 @@ fun YuraiveApp(
     var savedCollectionTitle by rememberSaveable { mutableStateOf<String?>(null) }
     var savedCollectionGraphIds by rememberSaveable { mutableStateOf<ArrayList<String>?>(null) }
     var libraryRoots by remember { mutableStateOf<List<LibraryRoot>>(emptyList()) }
-    var scanning by remember { mutableStateOf(true) }
     var validation by remember { mutableStateOf<Pair<GraphRef, List<ValidationIssue>>?>(null) }
     var inspectedGraph by remember { mutableStateOf<LibraryGraph?>(null) }
-    var validating by remember { mutableStateOf(false) }
     var scanVersion by remember { mutableStateOf(0) }
     var showAddFolderDialog by rememberSaveable { mutableStateOf(false) }
+    val windowsDevices = remember(roots, windowsConnectionStates) { app.library.windowsDevices() }
 
     val activeBrowserRoot = browserRoot ?: browserRootUri?.let { uri ->
         libraryRoots.firstOrNull { it.grant.uri == uri }
@@ -340,9 +343,8 @@ fun YuraiveApp(
     }
 
     LaunchedEffect(roots, scanVersion) {
-        scanning = true
+        libraryRoots = roots.map(::LibraryRoot)
         libraryRoots = app.library.scanAll()
-        scanning = false
     }
 
     LaunchedEffect(savedCollectionTitle, savedCollectionGraphIds) {
@@ -362,7 +364,6 @@ fun YuraiveApp(
 
     val openGraph: (LibraryGraph) -> Unit = { item ->
         if (item.parseError == null) scope.launch {
-            validating = true
             runCatching {
                 val graph = app.library.readGraph(item.ref)
                 item.ref to app.library.validate(item.ref, graph)
@@ -375,7 +376,6 @@ fun YuraiveApp(
             }.onFailure {
                 validation = item.ref to listOf(ValidationIssue(ValidationIssue.Severity.ERROR, it.message ?: "読み込めません"))
             }
-            validating = false
         }
     }
 
@@ -468,10 +468,18 @@ fun YuraiveApp(
                         destination == Destination.LIBRARY -> LibraryScreen(
                             modifier = Modifier.padding(padding),
                             roots = libraryRoots,
-                            scanning = scanning || validating,
+                            windowsDevices = windowsDevices,
                             addFolder = { showAddFolderDialog = true },
-                            refresh = { scanVersion++ },
+                            refresh = {
+                                app.library.refreshWindowsDevices()
+                                scanVersion++
+                            },
                             removeRoot = { app.library.removeRoot(it) },
+                            removeWindowsDevice = app.library::removeWindowsDevice,
+                            refreshWindowsDevice = { deviceId ->
+                                app.library.refreshWindowsDevice(deviceId)
+                                scanVersion++
+                            },
                             browseRoot = { root ->
                                 browserInitialPath = null
                                 if (root.directory?.isContent == true) {
@@ -570,6 +578,7 @@ fun YuraiveApp(
                 library = app.library,
                 onDismiss = { showAddFolderDialog = false },
                 onSelectLocal = addFolder,
+                onSelectWindows = pairWindows,
             )
         }
     }
@@ -658,10 +667,12 @@ private fun MiniPlayer(state: PlaybackUiState, open: () -> Unit, toggle: () -> U
 private fun LibraryScreen(
     modifier: Modifier,
     roots: List<LibraryRoot>,
-    scanning: Boolean,
+    windowsDevices: List<WindowsDeviceConnection>,
     addFolder: () -> Unit,
     refresh: () -> Unit,
     removeRoot: (String) -> Unit,
+    removeWindowsDevice: (String) -> Unit,
+    refreshWindowsDevice: (String) -> Unit,
     browseRoot: (LibraryRoot) -> Unit,
     knownGraphs: List<LibraryGraph>,
     favoriteIds: Set<String>,
@@ -684,6 +695,8 @@ private fun LibraryScreen(
         query = ""
     }
     val normalizedQuery = query.trim()
+    val windowsRootUris = windowsDevices.flatMapTo(mutableSetOf(), WindowsDeviceConnection::rootUris)
+    val localRoots = roots.filterNot { it.grant.uri in windowsRootUris }
     val filteredRoots = if (normalizedQuery.isEmpty()) roots else roots.filter {
         it.grant.name.contains(normalizedQuery, ignoreCase = true)
     }
@@ -762,12 +775,34 @@ private fun LibraryScreen(
                     }
                 }
 
-                gridItems(filteredRoots, key = { "root:${it.grant.uri}" }) { root ->
-                    RootGridCard(root, app, { browseRoot(root) }, { removeRoot(root.grant.uri) })
-                }
                 if (!searching) {
+                    gridItems(localRoots, key = { "root:${it.grant.uri}" }) { root ->
+                        RootGridCard(root, app, { browseRoot(root) }, { removeRoot(root.grant.uri) })
+                    }
                     item(key = "add-folder") { AddFolderCard(addFolder) }
+                    windowsDevices.forEach { device ->
+                        item(key = "windows-device:${device.id}", span = { GridItemSpan(maxLineSpan) }) {
+                            WindowsDeviceHeader(
+                                device = device,
+                                refresh = { refreshWindowsDevice(device.id) },
+                                remove = { removeWindowsDevice(device.id) },
+                            )
+                        }
+                        val deviceRoots = roots.filter { it.grant.uri in device.rootUris }.map { root ->
+                            val prefix = "${device.name} · "
+                            if (root.grant.name.startsWith(prefix)) {
+                                root.copy(grant = root.grant.copy(name = root.grant.name.removePrefix(prefix)))
+                            } else root
+                        }
+                        gridItems(deviceRoots, key = { "root:${it.grant.uri}" }) { root ->
+                            RootGridCard(root, app, { browseRoot(root) }, {}, showDelete = false)
+                        }
+                    }
                 } else {
+                    gridItems(filteredRoots, key = { "root:${it.grant.uri}" }) { root ->
+                        val isWindowsRoot = root.grant.uri in windowsRootUris
+                        RootGridCard(root, app, { browseRoot(root) }, { removeRoot(root.grant.uri) }, showDelete = !isWindowsRoot)
+                    }
                     gridItems(filteredGraphs, key = { "graph:${it.ref.graphId}" }) { graph ->
                         GraphGridCard(graph, graph.ref.graphId in favoriteIds, openGraph, inspectGraph, toggleFavorite)
                     }
@@ -782,7 +817,6 @@ private fun LibraryScreen(
                     }
                 }
             }
-            if (scanning) CircularProgressIndicator(Modifier.align(Alignment.TopCenter).padding(top = 28.dp).size(36.dp))
         }
     }
 }
@@ -810,7 +844,45 @@ private fun QuickActionCard(
 }
 
 @Composable
-private fun RootGridCard(root: LibraryRoot, app: YuraiveApplication, open: () -> Unit, remove: () -> Unit) {
+private fun WindowsDeviceHeader(
+    device: WindowsDeviceConnection,
+    refresh: () -> Unit,
+    remove: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(10.dp).clip(CircleShape).background(
+                when (device.status) {
+                    WindowsConnectionStatus.CONNECTED -> Color(0xFF34C759)
+                    WindowsConnectionStatus.CONNECTING, WindowsConnectionStatus.LOADING -> Color(0xFFFF9500)
+                    WindowsConnectionStatus.OFFLINE -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .4f)
+                },
+            ),
+        )
+        Text(
+            device.name,
+            Modifier.weight(1f).padding(start = 10.dp),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        IconButton(onClick = refresh) { Icon(Icons.Default.Refresh, "再読み込み") }
+        IconButton(onClick = remove) { Icon(Icons.Default.DeleteOutline, "削除") }
+    }
+}
+
+@Composable
+private fun RootGridCard(
+    root: LibraryRoot,
+    app: YuraiveApplication,
+    open: () -> Unit,
+    remove: () -> Unit,
+    showDelete: Boolean = true,
+) {
     val preview = root.previewGraph
     val thumbnailUri = rememberThumbnailUri(preview, app)
     Card(
@@ -833,10 +905,12 @@ private fun RootGridCard(root: LibraryRoot, app: YuraiveApplication, open: () ->
                         )
                     }
                 }
-                IconButton(
-                    onClick = remove,
-                    modifier = Modifier.align(Alignment.TopEnd).background(MaterialTheme.colorScheme.surface.copy(alpha = .85f), CircleShape),
-                ) { Icon(Icons.Default.DeleteOutline, "削除") }
+                if (showDelete) {
+                    IconButton(
+                        onClick = remove,
+                        modifier = Modifier.align(Alignment.TopEnd).background(MaterialTheme.colorScheme.surface.copy(alpha = .85f), CircleShape),
+                    ) { Icon(Icons.Default.DeleteOutline, "削除") }
+                }
             }
             Surface(
                 color = MaterialTheme.colorScheme.surface,

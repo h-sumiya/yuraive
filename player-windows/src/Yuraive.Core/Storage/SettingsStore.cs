@@ -9,6 +9,7 @@ public sealed record PlayerSettings
     public ThemeMode ThemeMode { get; init; } = ThemeMode.System;
     public int AccentIndex { get; init; }
     public long ScriptTimeoutMs { get; init; } = 1_200;
+    public bool ShareLibrary { get; init; }
     public bool ForceShowPlayerControls { get; init; }
     public bool KeepScreenOnInPlayer { get; init; }
 }

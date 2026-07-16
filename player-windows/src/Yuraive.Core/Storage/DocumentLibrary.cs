@@ -23,6 +23,10 @@ public sealed record LibraryRoot(RootGrant Grant, LibraryDirectory? Directory = 
 
 public sealed record LibraryFolder(string Name, string RelativePath);
 
+public sealed record LibraryFileNode(string Name, bool IsDirectory, long Size = 0, long ModifiedAt = 0);
+
+public sealed record LibraryFileChunk(byte[] Data, long TotalLength);
+
 public sealed record LibraryDirectory(
     RootGrant Grant,
     string Name,
@@ -200,6 +204,90 @@ public sealed class DocumentLibrary
             _directoryCache[key] = scanned;
             MergeKnownGraphs(scanned.Graphs);
             return scanned;
+        }, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<LibraryFileNode>> ListFilesAsync(
+        RootGrant grant,
+        string relativePath,
+        CancellationToken cancellationToken = default)
+    {
+        if (relativePath.Length > 0 && !GraphValidator.IsSafeRelativePath(relativePath))
+            throw new ArgumentException("安全でないフォルダパスです", nameof(relativePath));
+        return Task.Run<IReadOnlyList<LibraryFileNode>>(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_remote.IsRemoteRoot(grant.Uri))
+            {
+                return _remote.List(grant.Uri, relativePath)
+                    .Select(node => new LibraryFileNode(node.Name, node.IsDirectory, node.Size, node.ModifiedAt))
+                    .OrderBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
+            var directory = ResolveFromRoot(grant.Uri, relativePath, expectFile: false)
+                ?? throw new DirectoryNotFoundException("フォルダが見つかりません");
+            return Directory.EnumerateFileSystemEntries(directory)
+                .Select(path => new FileInfo(path))
+                .Where(info => (info.Attributes & FileAttributes.ReparsePoint) == 0)
+                .Select(info => new LibraryFileNode(
+                    info.Name,
+                    (info.Attributes & FileAttributes.Directory) != 0,
+                    (info.Attributes & FileAttributes.Directory) != 0 ? 0 : info.Length,
+                    new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds()))
+                .OrderBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }, cancellationToken);
+    }
+
+    public Task<LibraryFileChunk> ReadFileRangeAsync(
+        RootGrant grant,
+        string relativePath,
+        long offset,
+        int count,
+        CancellationToken cancellationToken = default)
+    {
+        if (!GraphValidator.IsSafeRelativePath(relativePath))
+            throw new ArgumentException("安全でないファイルパスです", nameof(relativePath));
+        if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset));
+        if (count is < 1 or > 48 * 1024) throw new ArgumentOutOfRangeException(nameof(count));
+        return Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Stream stream;
+            long totalLength;
+            IDisposable owner;
+            if (_remote.IsRemoteRoot(grant.Uri))
+            {
+                var remote = _remote.Open(grant.Uri, relativePath, offset);
+                owner = remote;
+                stream = remote.Stream;
+                totalLength = remote.TotalLength;
+            }
+            else
+            {
+                var path = ResolveFromRoot(grant.Uri, relativePath, expectFile: true)
+                    ?? throw new FileNotFoundException("ファイルが見つかりません", relativePath);
+                var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                owner = file;
+                file.Position = Math.Min(offset, file.Length);
+                stream = file;
+                totalLength = file.Length;
+            }
+
+            using (owner)
+            {
+                var buffer = new byte[(int)Math.Min(count, Math.Max(0, totalLength - offset))];
+                var read = 0;
+                while (read < buffer.Length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var current = stream.Read(buffer, read, buffer.Length - read);
+                    if (current == 0) break;
+                    read += current;
+                }
+                return new LibraryFileChunk(read == buffer.Length ? buffer : buffer[..read], totalLength);
+            }
         }, cancellationToken);
     }
 

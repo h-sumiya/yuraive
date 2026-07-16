@@ -12,13 +12,16 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using QRCoder;
 using Windows.Graphics;
 using Windows.Storage;
 using Windows.Storage.Pickers;
+using Windows.Storage.Streams;
 using Windows.System;
 using Windows.System.Display;
 using WinRT.Interop;
 using Yuraive.Core;
+using Yuraive.Core.Bridge;
 using Yuraive.App.Playback;
 using Yuraive.Core.Models;
 using Yuraive.Core.Playback;
@@ -35,6 +38,7 @@ public sealed partial class MainWindow : Window
     private readonly SettingsStore _settings;
     private readonly GraphPlaybackEngine _engine;
     private readonly PlaybackStatsEvaluator _stats;
+    private readonly WindowsLibraryBridgeHost _bridge;
     private readonly string? _activatedBundlePath;
     private readonly ObservableCollection<LibraryEntryViewModel> _libraryItems = [];
     private readonly ObservableCollection<HistoryEntryViewModel> _historyItems = [];
@@ -71,6 +75,8 @@ public sealed partial class MainWindow : Window
         AppWindow.GetFromWindowId(windowId).Resize(new SizeInt32(1_280, 820));
 
         _library = new(_paths);
+        _bridge = new(_library, _paths);
+        _bridge.StatusChanged += Bridge_StatusChanged;
         _history = new(_paths);
         _snapshots = new(_paths);
         _settings = new(_paths);
@@ -94,6 +100,8 @@ public sealed partial class MainWindow : Window
         if (_initialized) return;
         _initialized = true;
         ApplySettings();
+        if (_settings.Current.ShareLibrary) _bridge.Start();
+        else UpdatePairingStatus();
         await InitializeButtonLayoutAsync();
         if (!await HandleActivatedBundleAsync())
         {
@@ -290,6 +298,7 @@ public sealed partial class MainWindow : Window
         EmptyLibraryPanel.Visibility = Visibility.Collapsed;
         HistoryPanel.Visibility = Visibility.Collapsed;
         SettingsPanel.Visibility = Visibility.Visible;
+        UpdatePairingStatus();
         ApplySettingsControls();
     }
 
@@ -438,6 +447,17 @@ public sealed partial class MainWindow : Window
     private async void LibraryList_ItemClick(object sender, ItemClickEventArgs e)
     {
         if (e.ClickedItem is not LibraryEntryViewModel item) return;
+        if (_selectedRootUris.Count > 0)
+        {
+            if (item.Kind == LibraryEntryKind.Root && item.Root is not null)
+            {
+                item.RootIsSelected = !item.RootIsSelected;
+                if (item.RootIsSelected) _selectedRootUris.Add(item.Root.Uri);
+                else _selectedRootUris.Remove(item.Root.Uri);
+                UpdateRootSelectionActions();
+            }
+            return;
+        }
         switch (item.Kind)
         {
             case LibraryEntryKind.Add:
@@ -710,9 +730,9 @@ public sealed partial class MainWindow : Window
         if (item.Kind == LibraryEntryKind.Graph && item.Graph is not null)
         {
             await _library.ToggleFavoriteAsync(item.Graph.Ref.GraphId);
+            UpdateGraphFavoriteItem(item);
             UpdateFavoriteIcon(_lastPlaybackState);
-            if (_isSearching) await UpdateSearchResultsAsync();
-            else await RefreshCurrentSectionAsync();
+            if (_section == LibrarySection.Favorites) _libraryItems.Remove(item);
         }
     }
 
@@ -955,7 +975,8 @@ public sealed partial class MainWindow : Window
             favorite.Click += async (_, _) =>
             {
                 await _library.ToggleFavoriteAsync(item.Graph.Ref.GraphId);
-                await RefreshCurrentSectionAsync();
+                UpdateGraphFavoriteItem(item);
+                if (_section == LibrarySection.Favorites) _libraryItems.Remove(item);
                 UpdateFavoriteIcon(_lastPlaybackState);
             };
             menu.Items.Add(favorite);
@@ -1360,6 +1381,13 @@ public sealed partial class MainWindow : Window
         ? (Brush)Application.Current.Resources["PlayerAccentBrush"]
         : null;
 
+    private void UpdateGraphFavoriteItem(LibraryEntryViewModel item)
+    {
+        if (item.Graph is null) return;
+        item.ActionGlyph = _library.FavoriteIds.Contains(item.Graph.Ref.GraphId) ? "\uE735" : "\uE734";
+        item.ActionForeground = FavoriteActionBrush(item.Graph.Ref.GraphId);
+    }
+
     private async void InfoButton_Click(object sender, RoutedEventArgs e)
     {
         var state = _lastPlaybackState;
@@ -1578,6 +1606,61 @@ public sealed partial class MainWindow : Window
         await FileIO.WriteTextAsync(file, await _history.ExportJsonlAsync());
     }
 
+    private async void PairAndroidButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_settings.Current.ShareLibrary) return;
+        while (true)
+        {
+            var qr = new Image
+            {
+                Width = 320,
+                Height = 320,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Source = await CreateQrSourceAsync(_bridge.PairingUri),
+            };
+            var dialog = new ContentDialog
+            {
+                XamlRoot = RootGrid.XamlRoot,
+                Title = "Androidと接続",
+                Content = qr,
+                PrimaryButtonText = "接続コードを更新",
+                CloseButtonText = "閉じる",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            var result = await dialog.ShowAsync();
+            if (result != ContentDialogResult.Primary) break;
+            await _bridge.RegeneratePairingAsync();
+        }
+    }
+
+    private static async Task<BitmapImage> CreateQrSourceAsync(string value)
+    {
+        using var generator = new QRCodeGenerator();
+        using var data = generator.CreateQrCode(value, QRCodeGenerator.ECCLevel.Q);
+        using var code = new PngByteQRCode(data);
+        var bytes = code.GetGraphic(10);
+        using var stream = new InMemoryRandomAccessStream();
+        using (var writer = new DataWriter(stream))
+        {
+            writer.WriteBytes(bytes);
+            await writer.StoreAsync();
+            writer.DetachStream();
+        }
+        stream.Seek(0);
+        var source = new BitmapImage { DecodePixelWidth = 320 };
+        await source.SetSourceAsync(stream);
+        return source;
+    }
+
+    private void Bridge_StatusChanged(object? sender, EventArgs e) => DispatcherQueue.TryEnqueue(UpdatePairingStatus);
+
+    private void UpdatePairingStatus()
+    {
+        PairingStatusText.Text = $"現在{_bridge.ConnectedDeviceCount}台のデバイスと共有しています";
+        PairingStatusText.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+        PairAndroidHeaderButton.Visibility = _settings.Current.ShareLibrary ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private async void ClearHistoryButton_Click(object sender, RoutedEventArgs e)
     {
         var confirm = new ContentDialog { XamlRoot = RootGrid.XamlRoot, Title = "再生履歴を消去しますか？", Content = "保存されているすべての確定済み履歴を削除します。この操作は元に戻せません。", PrimaryButtonText = "消去", CloseButtonText = "キャンセル", DefaultButton = ContentDialogButton.Close };
@@ -1614,6 +1697,7 @@ public sealed partial class MainWindow : Window
             accentButtons[index].BorderThickness = new Thickness(index == selectedAccent ? 3 : 0);
             accentChecks[index].Visibility = index == selectedAccent ? Visibility.Visible : Visibility.Collapsed;
         }
+        ShareLibraryToggle.IsOn = _settings.Current.ShareLibrary;
         ForceControlsToggle.IsOn = _settings.Current.ForceShowPlayerControls;
         KeepScreenToggle.IsOn = _settings.Current.KeepScreenOnInPlayer;
         ScriptTimeoutSlider.Value = Math.Clamp(_settings.Current.ScriptTimeoutMs, 100, 5_000);
@@ -1866,6 +1950,15 @@ public sealed partial class MainWindow : Window
         }
         return null;
     }
+    private async void ShareLibraryToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_settingsInitializing) return;
+        var enabled = ShareLibraryToggle.IsOn;
+        await _settings.UpdateAsync(value => value with { ShareLibrary = enabled });
+        if (enabled) _bridge.Start();
+        else await _bridge.StopAsync();
+        UpdatePairingStatus();
+    }
 
     private static T? FindDescendantByName<T>(DependencyObject element, string name) where T : FrameworkElement
     {
@@ -1883,6 +1976,8 @@ public sealed partial class MainWindow : Window
         UpdateDisplayRequest(false);
         _engine.StateChanged -= Engine_StateChanged;
         await _engine.DisposeAsync();
+        _bridge.StatusChanged -= Bridge_StatusChanged;
+        await _bridge.DisposeAsync();
     }
 
     private static string PlayerSecondaryLabel(PlaybackUiState state)

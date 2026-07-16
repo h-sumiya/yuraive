@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -15,6 +16,8 @@ import androidx.lifecycle.lifecycleScope
 import com.yuraive.player.playback.PlaybackRuntime
 import com.yuraive.player.ui.YuraiveApp
 import kotlinx.coroutines.launch
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 class MainActivity : ComponentActivity() {
     private val openTree = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -36,6 +39,21 @@ class MainActivity : ComponentActivity() {
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    private val scanWindows = registerForActivityResult(ScanContract()) { result ->
+        val payload = result.contents ?: return@registerForActivityResult
+        pairWindowsLibrary(payload)
+    }
+
+    private fun pairWindowsLibrary(payload: String) {
+        lifecycleScope.launch {
+            runCatching { (application as YuraiveApplication).library.addWindowsLibrary(payload) }
+                .onSuccess { Toast.makeText(this@MainActivity, "Windowsのライブラリを追加しました", Toast.LENGTH_SHORT).show() }
+                .onFailure { error ->
+                    Toast.makeText(this@MainActivity, error.message ?: "Windowsに接続できませんでした", Toast.LENGTH_LONG).show()
+                }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -43,10 +61,22 @@ class MainActivity : ComponentActivity() {
         setContent {
             YuraiveApp(
                 addFolder = { openTree.launch(null) },
+                pairWindows = ::scanWindowsLibrary,
                 exportHistory = { createHistory.launch("yuraive-history.jsonl") },
                 ensureNotificationPermission = ::ensureNotificationPermission,
             )
         }
+        intent?.dataString?.takeIf { it.startsWith("yuraive://pair?") }?.let(::pairWindowsLibrary)
+    }
+
+    private fun scanWindowsLibrary() {
+        scanWindows.launch(
+            ScanOptions()
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setPrompt("Windows版Yuraiveに表示されたQRコードを読み取ります")
+                .setBeepEnabled(false)
+                .setOrientationLocked(false),
+        )
     }
 
     private fun ensureNotificationPermission() {
