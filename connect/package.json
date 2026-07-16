@@ -1,0 +1,18 @@
+{
+  "name": "yuraive-connect",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Connection and signaling service for Yuraive players",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "deploy": "npm run typecheck && wrangler deploy",
+    "deploy:dry-run": "npm run typecheck && wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260716.1",
+    "typescript": "~6.0.2",
+    "wrangler": "^4.111.0"
+  }
+}
