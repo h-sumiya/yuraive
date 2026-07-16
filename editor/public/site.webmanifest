@@ -1,18 +1,33 @@
 {
+  "id": "/",
   "name": "Yuraive Editor",
-  "short_name": "Yuraive",
+  "short_name": "Editor",
   "description": "メディアの再生フローを視覚的に構築する Yuraive 公式エディタ",
+  "lang": "ja",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#111418",
   "theme_color": "#171b20",
+  "categories": ["developer tools", "productivity"],
   "icons": [
     {
-      "src": "/favicon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
