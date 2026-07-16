@@ -1,0 +1,26 @@
+{
+  "name": "yuraive-website",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Official website and privacy policy for Yuraive",
+  "homepage": "https://yuraive.com/",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "check": "astro check && tsc --noEmit",
+    "build": "npm run check && astro build",
+    "preview": "astro preview",
+    "cf:dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "deploy:dry-run": "npm run build && wrangler deploy --dry-run"
+  },
+  "dependencies": {
+    "astro": "^7.0.9"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.9",
+    "@cloudflare/workers-types": "^5.20260716.1",
+    "typescript": "~6.0.2",
+    "wrangler": "^4.111.0"
+  }
+}
