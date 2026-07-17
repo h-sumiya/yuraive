@@ -375,16 +375,12 @@ fun YuraiveApp(
                                 roots = libraryRoots,
                                 windowsDevices = windowsDevices,
                                 addFolder = { showAddFolderDialog = true },
-                                refresh = {
-                                    app.library.refreshWindowsDevices()
-                                    scanVersion++
-                                },
+                                refresh = { scanVersion++ },
                                 removeRoot = { app.library.removeRoot(it) },
-                                removeWindowsDevice = app.library::removeWindowsDevice,
-                                refreshWindowsDevice = { deviceId ->
-                                    app.library.refreshWindowsDevice(deviceId)
-                                    scanVersion++
+                                removeWindowsDevice = { deviceId ->
+                                    scope.launch { app.library.removeWindowsDevice(deviceId) }
                                 },
+                                refreshWindowsDevice = { scanVersion++ },
                                 browseRoot = { root ->
                                     browserInitialPath = null
                                     if (root.directory?.isContent == true) {

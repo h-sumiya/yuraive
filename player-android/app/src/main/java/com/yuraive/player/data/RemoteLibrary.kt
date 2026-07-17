@@ -178,8 +178,8 @@ internal class RemoteSourceManager(private val context: Context) {
     val windowsConnectionStates: StateFlow<Map<String, WindowsConnectionStatus>>
         get() = windows.connectionStates
 
-    fun windowsDevices(rootUris: List<String>): List<WindowsDeviceConnection> =
-        windows.devices(rootUris)
+    fun windowsDevices(rootGrants: List<RootGrant>): List<WindowsDeviceConnection> =
+        windows.devices(rootGrants)
 
     fun removeWindowsDevice(deviceId: String) = windows.removeDevice(deviceId)
 

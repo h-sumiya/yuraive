@@ -17,7 +17,9 @@ import java.io.IOException
 import java.io.InputStream
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -204,21 +206,25 @@ class DocumentLibrary(private val context: Context) {
     }
 
     fun windowsDevices(): List<WindowsDeviceConnection> =
-        remoteSources.windowsDevices(rootsMutable.value.map(RootGrant::uri))
+        remoteSources.windowsDevices(rootsMutable.value)
 
-    fun refreshWindowsDevice(deviceId: String) = remoteSources.refreshWindowsDevice(deviceId)
+    suspend fun refreshWindowsDevice(deviceId: String) =
+        withContext(Dispatchers.IO) { remoteSources.refreshWindowsDevice(deviceId) }
 
-    fun refreshWindowsDevices() = remoteSources.refreshWindowsDevices()
+    suspend fun refreshWindowsDevices() =
+        withContext(Dispatchers.IO) { remoteSources.refreshWindowsDevices() }
 
-    fun removeWindowsDevice(deviceId: String) {
-        val rootUris =
-            windowsDevices().firstOrNull { it.id == deviceId }?.rootUris.orEmpty().toSet()
-        if (rootUris.isEmpty()) return
-        rootUris.forEach(remoteSources::remove)
-        remoteSources.removeWindowsDevice(deviceId)
-        knownGraphsMutable.value = knownGraphsMutable.value.filterNot { it.ref.rootUri in rootUris }
-        persist(rootsMutable.value.filterNot { it.uri in rootUris })
-    }
+    suspend fun removeWindowsDevice(deviceId: String) =
+        withContext(Dispatchers.IO + NonCancellable) {
+            val rootUris =
+                windowsDevices().firstOrNull { it.id == deviceId }?.rootUris.orEmpty().toSet()
+            if (rootUris.isEmpty()) return@withContext
+            knownGraphsMutable.value =
+                knownGraphsMutable.value.filterNot { it.ref.rootUri in rootUris }
+            persist(rootsMutable.value.filterNot { it.uri in rootUris })
+            rootUris.forEach(remoteSources::remove)
+            remoteSources.removeWindowsDevice(deviceId)
+        }
 
     fun toggleFavorite(graphId: String) {
         val updated = favoriteIdsMutable.value.toMutableSet()
@@ -409,15 +415,21 @@ class DocumentLibrary(private val context: Context) {
 
     suspend fun assetUri(ref: GraphRef, relativeAssetPath: String): Uri? =
         withContext(Dispatchers.IO) {
-            if (!GraphValidator.isSafeRelativePath(relativeAssetPath)) return@withContext null
-            val file = resolveAsset(ref, relativeAssetPath) ?: return@withContext null
-            file.localFile?.uri
-                ?: remoteSources.materialize(
-                    file.rootUri,
-                    file.relativePath,
-                    file.lastModified,
-                    file.length,
-                )
+            try {
+                if (!GraphValidator.isSafeRelativePath(relativeAssetPath)) return@withContext null
+                val file = resolveAsset(ref, relativeAssetPath) ?: return@withContext null
+                file.localFile?.uri
+                    ?: remoteSources.materialize(
+                        file.rootUri,
+                        file.relativePath,
+                        file.lastModified,
+                        file.length,
+                    )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                null
+            }
         }
 
     suspend fun mediaUri(ref: GraphRef, relativeAssetPath: String): Uri? =

@@ -16,7 +16,10 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -125,7 +128,8 @@ internal class WindowsPeerSourceManager(private val context: Context) {
     private val store = EncryptedWindowsRootStore(context)
     private val configs = ConcurrentHashMap<String, WindowsRootConfig>()
     private val clients = ConcurrentHashMap<String, WindowsPeerClient>()
-    private val activeClientKeys = ConcurrentHashMap<String, String>()
+    private val activeClients = ConcurrentHashMap<String, WindowsPeerClient>()
+    private val clientLock = Any()
     private val connectionStatesMutable =
         MutableStateFlow<Map<String, WindowsConnectionStatus>>(emptyMap())
     val connectionStates: StateFlow<Map<String, WindowsConnectionStatus>> =
@@ -166,43 +170,70 @@ internal class WindowsPeerSourceManager(private val context: Context) {
         store.remove(id)
     }
 
-    fun devices(rootUris: List<String>): List<WindowsDeviceConnection> =
-        rootUris
-            .mapNotNull { rootUri ->
-                if (!isRoot(rootUri)) return@mapNotNull null
-                runCatching { config(rootUri) }.getOrNull()
+    fun devices(rootGrants: List<RootGrant>): List<WindowsDeviceConnection> {
+        val roots =
+            rootGrants.mapNotNull { grant ->
+                val id = rootId(grant.uri) ?: return@mapNotNull null
+                val config = configById(id)
+                val deviceName =
+                    config?.deviceName
+                        ?: grant.name.substringBefore(DEVICE_NAME_SEPARATOR).ifBlank { "Windows" }
+                WindowsDeviceRoot(
+                    deviceId = config?.deviceId ?: "missing:${stableId("missing", deviceName)}",
+                    deviceName = deviceName,
+                    rootUri = grant.uri,
+                    configured = config != null,
+                )
             }
-            .groupBy(WindowsRootConfig::deviceId)
-            .map { (deviceId, roots) ->
+        val configuredDeviceIds =
+            roots.filter(WindowsDeviceRoot::configured).associate { it.deviceName to it.deviceId }
+        return roots
+            .map { root ->
+                root.takeIf(WindowsDeviceRoot::configured)
+                    ?: root.copy(deviceId = configuredDeviceIds[root.deviceName] ?: root.deviceId)
+            }
+            .groupBy(WindowsDeviceRoot::deviceId)
+            .map { (deviceId, deviceRoots) ->
                 WindowsDeviceConnection(
                     id = deviceId,
-                    name = roots.first().deviceName,
-                    rootUris = roots.map { rootUri(it.id) },
+                    name = deviceRoots.first().deviceName,
+                    rootUris = deviceRoots.map(WindowsDeviceRoot::rootUri),
                     status =
-                        connectionStatesMutable.value[deviceId] ?: WindowsConnectionStatus.OFFLINE,
+                        if (deviceRoots.any(WindowsDeviceRoot::configured)) {
+                            connectionStatesMutable.value[deviceId]
+                                ?: WindowsConnectionStatus.OFFLINE
+                        } else {
+                            WindowsConnectionStatus.OFFLINE
+                        },
                 )
             }
             .sortedBy { it.name.lowercase() }
+    }
 
     fun removeDevice(deviceId: String) {
         refreshDevice(deviceId)
     }
 
     fun refreshDevice(deviceId: String) {
-        clients.entries.removeIf { (_, client) ->
-            if (client.deviceId != deviceId) return@removeIf false
-            client.close()
-            true
-        }
-        activeClientKeys.remove(deviceId)
-        connectionStatesMutable.update { it - deviceId }
+        val removed =
+            synchronized(clientLock) {
+                activeClients.remove(deviceId)
+                connectionStatesMutable.update { it - deviceId }
+                clients.entries
+                    .filter { it.value.deviceId == deviceId }
+                    .mapNotNull { (key, client) -> client.takeIf { clients.remove(key, client) } }
+            }
+        removed.forEach(WindowsPeerClient::close)
     }
 
     fun refreshAll() {
-        clients.values.forEach(WindowsPeerClient::close)
-        clients.clear()
-        activeClientKeys.clear()
-        connectionStatesMutable.value = emptyMap()
+        val removed =
+            synchronized(clientLock) {
+                activeClients.clear()
+                connectionStatesMutable.value = emptyMap()
+                clients.values.toList().also { clients.clear() }
+            }
+        removed.forEach(WindowsPeerClient::close)
     }
 
     fun list(rootUri: String, relativePath: String): List<RemoteNode> {
@@ -229,15 +260,24 @@ internal class WindowsPeerSourceManager(private val context: Context) {
 
     private fun client(config: WindowsRootConfig): WindowsPeerClient {
         val key = "${config.endpoint}|${config.room}|${config.secret}"
-        activeClientKeys[config.deviceId] = key
-        return clients.computeIfAbsent(key) {
-            WindowsPeerClient(context, config) { connected ->
-                if (activeClientKeys[config.deviceId] == key) {
-                    connectionStatesMutable.update { states ->
-                        states + (config.deviceId to connected)
+        return synchronized(clientLock) {
+            val client =
+                clients[key]
+                    ?: run {
+                        lateinit var created: WindowsPeerClient
+                        created =
+                            WindowsPeerClient(context, config) { status ->
+                                if (activeClients[config.deviceId] === created) {
+                                    connectionStatesMutable.update { states ->
+                                        states + (config.deviceId to status)
+                                    }
+                                }
+                            }
+                        clients[key] = created
+                        created
                     }
-                }
-            }
+            activeClients[config.deviceId] = client
+            client
         }
     }
 
@@ -257,6 +297,7 @@ internal class WindowsPeerSourceManager(private val context: Context) {
 
     companion object {
         const val ROOT_PREFIX = "yuraive+windows://"
+        private const val DEVICE_NAME_SEPARATOR = " · "
         private val idPattern = Regex("^[a-f0-9]{32}$")
 
         fun rootId(uri: String): String? =
@@ -321,6 +362,13 @@ private sealed interface PeerReply {
     data class Binary(val value: ByteArray, val totalLength: Long) : PeerReply
 }
 
+private data class WindowsDeviceRoot(
+    val deviceId: String,
+    val deviceName: String,
+    val rootUri: String,
+    val configured: Boolean,
+)
+
 private class WindowsPeerClient(
     context: Context,
     private val config: WindowsRootConfig,
@@ -337,6 +385,7 @@ private class WindowsPeerClient(
     private var peer: PeerConnection? = null
     private var channel: DataChannel? = null
     private var connection: CompletableFuture<DataChannel>? = null
+    @Volatile private var closed = false
     private val activeRequests = AtomicInteger()
     private var remoteDescriptionReady = false
     private val queuedCandidates = mutableListOf<IceCandidate>()
@@ -415,14 +464,18 @@ private class WindowsPeerClient(
     }
 
     private fun publishActivityState() {
-        when {
-            channel?.state() == DataChannel.State.OPEN ->
-                connectionChanged(
-                    if (activeRequests.get() > 0) WindowsConnectionStatus.LOADING
-                    else WindowsConnectionStatus.CONNECTED
-                )
-            connection?.isDone == false -> connectionChanged(WindowsConnectionStatus.CONNECTING)
-        }
+        val status =
+            synchronized(lock) {
+                when {
+                    closed -> null
+                    channel?.state() == DataChannel.State.OPEN ->
+                        if (activeRequests.get() > 0) WindowsConnectionStatus.LOADING
+                        else WindowsConnectionStatus.CONNECTED
+                    connection?.isDone == false -> WindowsConnectionStatus.CONNECTING
+                    else -> null
+                }
+            }
+        status?.let(connectionChanged)
     }
 
     private fun request(method: String, rootId: String? = null, path: String? = null): JsonObject {
@@ -449,15 +502,24 @@ private class WindowsPeerClient(
             if (!dataChannel.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false)))
                 throw IOException("Windowsへリクエストを送信できません")
         } catch (error: Throwable) {
-            pending.remove(id)?.completeExceptionally(error)
+            val failure = error as? IOException ?: IOException("Windowsへリクエストを送信できません", error)
+            failCurrentConnection(failure)
+            pending.remove(id)?.completeExceptionally(failure)
         }
     }
 
     private fun await(id: String, future: CompletableFuture<PeerReply>): PeerReply =
         try {
             future.get(15, TimeUnit.SECONDS)
-        } catch (error: Exception) {
-            throw IOException("Windowsから応答がありません", error)
+        } catch (error: TimeoutException) {
+            val failure = IOException("Windowsから応答がありません", error)
+            failCurrentConnection(failure)
+            throw failure
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IOException("Windowsからの応答待ちが中断されました", error)
+        } catch (error: ExecutionException) {
+            throw (error.cause as? IOException ?: IOException("Windowsから応答がありません", error.cause))
         } finally {
             pending.remove(id)
         }
@@ -465,6 +527,7 @@ private class WindowsPeerClient(
     private fun ensureConnected(): DataChannel {
         val future =
             synchronized(lock) {
+                if (closed) throw IOException("Windowsとの接続は再読み込みされました")
                 channel
                     ?.takeIf { it.state() == DataChannel.State.OPEN }
                     ?.let {
@@ -477,25 +540,39 @@ private class WindowsPeerClient(
                     }
             }
         return try {
-            future.get(15, TimeUnit.SECONDS)
+            future.get(15, TimeUnit.SECONDS).takeIf { it.state() == DataChannel.State.OPEN }
+                ?: throw IOException("Windowsとのデータ接続が閉じられました")
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            val failure = IOException("Windowsへの接続待ちが中断されました", error)
+            failConnection(future, failure)
+            throw failure
         } catch (error: Exception) {
-            throw IOException("WindowsにP2P接続できません。両方のアプリとネットワークを確認してください", error)
+            val cause = if (error is ExecutionException) error.cause else error
+            val failure =
+                cause as? IOException
+                    ?: IOException("WindowsにP2P接続できません。両方のアプリとネットワークを確認してください", cause)
+            failConnection(future, failure)
+            throw failure
         }
     }
 
     private fun beginConnection(ready: CompletableFuture<DataChannel>) {
         connectionChanged(WindowsConnectionStatus.CONNECTING)
+        var oldChannel: DataChannel? = null
+        var oldPeer: PeerConnection? = null
+        var oldSocket: WebSocket? = null
         synchronized(lock) {
-            channel?.dispose()
+            oldChannel = channel
+            oldPeer = peer
+            oldSocket = socket
             channel = null
-            peer?.close()
-            peer?.dispose()
             peer = null
-            socket?.cancel()
             socket = null
             remoteDescriptionReady = false
             queuedCandidates.clear()
         }
+        releaseTransport(oldChannel, oldPeer, oldSocket)
         val rtcConfig =
             PeerConnection.RTCConfiguration(
                 listOf(PeerConnection.IceServer.builder(STUN_URL).createIceServer())
@@ -518,6 +595,7 @@ private class WindowsPeerClient(
     private inner class SignalListener(private val ready: CompletableFuture<DataChannel>) :
         WebSocketListener() {
         override fun onMessage(webSocket: WebSocket, text: String) {
+            if (!isCurrentConnection(ready)) return
             runCatching {
                     val message = YuraiveJson.format.parseToJsonElement(text).jsonObject
                     when (message["type"]?.jsonPrimitive?.contentOrNull) {
@@ -530,8 +608,10 @@ private class WindowsPeerClient(
                                     message["candidate"]!!.jsonPrimitive.content,
                                 )
                             synchronized(lock) {
-                                if (remoteDescriptionReady) peer?.addIceCandidate(candidate)
-                                else queuedCandidates += candidate
+                                if (!closed && connection === ready) {
+                                    if (remoteDescriptionReady) peer?.addIceCandidate(candidate)
+                                    else queuedCandidates += candidate
+                                }
                             }
                         }
                         "peer_left" -> failConnection(ready, IOException("Windowsとの接続が閉じられました"))
@@ -545,11 +625,14 @@ private class WindowsPeerClient(
     }
 
     private fun applyOffer(sdp: String, ready: CompletableFuture<DataChannel>) {
-        val current = synchronized(lock) { peer } ?: return
+        val current =
+            synchronized(lock) { peer.takeIf { !closed && connection === ready } } ?: return
         current.setRemoteDescription(
             object : SimpleSdpObserver() {
                 override fun onSetSuccess() {
+                    if (!isCurrentConnection(ready)) return
                     synchronized(lock) {
+                        if (closed || connection !== ready || peer !== current) return
                         remoteDescriptionReady = true
                         queuedCandidates.forEach(current::addIceCandidate)
                         queuedCandidates.clear()
@@ -557,14 +640,16 @@ private class WindowsPeerClient(
                     current.createAnswer(
                         object : SimpleSdpObserver() {
                             override fun onCreateSuccess(description: SessionDescription) {
+                                if (!isCurrentConnection(ready)) return
                                 current.setLocalDescription(
                                     object : SimpleSdpObserver() {
                                         override fun onSetSuccess() {
                                             sendSignal(
+                                                ready,
                                                 buildJsonObject {
                                                     put("type", "answer")
                                                     put("sdp", description.description)
-                                                }
+                                                },
                                             )
                                         }
 
@@ -592,30 +677,39 @@ private class WindowsPeerClient(
         PeerConnection.Observer {
         override fun onIceCandidate(candidate: IceCandidate) {
             sendSignal(
+                ready,
                 buildJsonObject {
                     put("type", "candidate")
                     put("candidate", candidate.sdp)
                     put("sdpMid", candidate.sdpMid ?: "0")
                     put("sdpMLineIndex", candidate.sdpMLineIndex)
-                }
+                },
             )
         }
 
         override fun onDataChannel(value: DataChannel) {
-            synchronized(lock) { channel = value }
+            val accepted =
+                synchronized(lock) {
+                    if (closed || connection !== ready) false
+                    else {
+                        channel = value
+                        true
+                    }
+                }
+            if (!accepted) {
+                releaseTransport(value, null, null)
+                return
+            }
             value.registerObserver(
                 object : DataChannel.Observer {
                     override fun onBufferedAmountChange(previousAmount: Long) = Unit
 
                     override fun onStateChange() {
                         if (value.state() == DataChannel.State.OPEN) {
-                            publishActivityState()
-                            ready.complete(value)
+                            publishConnected(ready, value)
                         }
                         if (value.state() == DataChannel.State.CLOSED) {
-                            connectionChanged(WindowsConnectionStatus.OFFLINE)
-                            if (!ready.isDone)
-                                failConnection(ready, IOException("Windowsとのデータ接続が閉じられました"))
+                            failConnection(ready, IOException("Windowsとのデータ接続が閉じられました"))
                         }
                     }
 
@@ -623,19 +717,17 @@ private class WindowsPeerClient(
                 }
             )
             if (value.state() == DataChannel.State.OPEN) {
-                publishActivityState()
-                ready.complete(value)
+                publishConnected(ready, value)
             }
         }
 
         override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
             when (newState) {
-                PeerConnection.PeerConnectionState.CONNECTED -> publishActivityState()
+                PeerConnection.PeerConnectionState.CONNECTED -> Unit
                 PeerConnection.PeerConnectionState.DISCONNECTED,
                 PeerConnection.PeerConnectionState.FAILED,
                 PeerConnection.PeerConnectionState.CLOSED -> {
-                    connectionChanged(WindowsConnectionStatus.OFFLINE)
-                    if (!ready.isDone) failConnection(ready, IOException("WindowsとのP2P接続に失敗しました"))
+                    failConnection(ready, IOException("WindowsとのP2P接続に失敗しました"))
                 }
                 else -> Unit
             }
@@ -687,35 +779,111 @@ private class WindowsPeerClient(
         }
     }
 
-    private fun sendSignal(value: JsonObject) {
-        socket?.send(value.toString())
+    private fun sendSignal(ready: CompletableFuture<DataChannel>, value: JsonObject) {
+        val currentSocket = synchronized(lock) { socket.takeIf { !closed && connection === ready } }
+        currentSocket?.send(value.toString())
+    }
+
+    private fun isCurrentConnection(ready: CompletableFuture<DataChannel>): Boolean =
+        synchronized(lock) { !closed && connection === ready }
+
+    private fun publishConnected(ready: CompletableFuture<DataChannel>, value: DataChannel) {
+        val status =
+            synchronized(lock) {
+                if (
+                    closed ||
+                        connection !== ready ||
+                        channel !== value ||
+                        value.state() != DataChannel.State.OPEN
+                ) {
+                    null
+                } else if (activeRequests.get() > 0) {
+                    WindowsConnectionStatus.LOADING
+                } else {
+                    WindowsConnectionStatus.CONNECTED
+                }
+            }
+        if (status != null) {
+            connectionChanged(status)
+            ready.complete(value)
+        }
+    }
+
+    private fun failCurrentConnection(error: Throwable) {
+        val ready = synchronized(lock) { connection } ?: return
+        failConnection(ready, error)
     }
 
     private fun failConnection(ready: CompletableFuture<DataChannel>, error: Throwable) {
-        connectionChanged(WindowsConnectionStatus.OFFLINE)
-        ready.completeExceptionally(error)
-        pending.values.forEach { it.completeExceptionally(error) }
-        pending.clear()
+        var oldChannel: DataChannel? = null
+        var oldPeer: PeerConnection? = null
+        var oldSocket: WebSocket? = null
+        synchronized(lock) {
+            if (closed || connection !== ready) return
+            connectionChanged(WindowsConnectionStatus.OFFLINE)
+            ready.completeExceptionally(error)
+            pending.values.forEach { it.completeExceptionally(error) }
+            pending.clear()
+            oldChannel = channel
+            oldPeer = peer
+            oldSocket = socket
+            channel = null
+            peer = null
+            socket = null
+            connection = null
+            remoteDescriptionReady = false
+            queuedCandidates.clear()
+        }
+        releaseTransport(oldChannel, oldPeer, oldSocket)
     }
 
     fun close() {
-        connectionChanged(WindowsConnectionStatus.OFFLINE)
+        val error = IOException("Windowsとの接続は再読み込みされました")
+        var oldChannel: DataChannel? = null
+        var oldPeer: PeerConnection? = null
+        var oldSocket: WebSocket? = null
         synchronized(lock) {
-            channel?.close()
-            channel?.dispose()
+            if (closed) return
+            closed = true
+            connectionChanged(WindowsConnectionStatus.OFFLINE)
+            connection?.completeExceptionally(error)
+            pending.values.forEach { it.completeExceptionally(error) }
+            pending.clear()
+            oldChannel = channel
+            oldPeer = peer
+            oldSocket = socket
             channel = null
-            peer?.close()
-            peer?.dispose()
             peer = null
-            socket?.cancel()
             socket = null
             connection = null
+            remoteDescriptionReady = false
+            queuedCandidates.clear()
         }
+        releaseTransport(oldChannel, oldPeer, oldSocket)
     }
 
     companion object {
         private val factoryLock = Any()
+        private val transportDisposer =
+            Executors.newSingleThreadExecutor { runnable ->
+                Thread(runnable, "yuraive-webrtc-dispose").apply { isDaemon = true }
+            }
         @Volatile private var sharedFactory: PeerConnectionFactory? = null
+
+        private fun releaseTransport(
+            channel: DataChannel?,
+            peer: PeerConnection?,
+            socket: WebSocket?,
+        ) {
+            if (channel == null && peer == null && socket == null) return
+            transportDisposer.execute {
+                runCatching { socket?.cancel() }
+                runCatching { channel?.close() }
+                runCatching { peer?.close() }
+                runCatching { channel?.dispose() }
+                runCatching { peer?.dispose() }
+            }
+        }
 
         private fun factory(context: Context): PeerConnectionFactory =
             sharedFactory
