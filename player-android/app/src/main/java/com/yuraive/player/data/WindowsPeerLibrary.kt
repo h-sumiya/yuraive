@@ -122,11 +122,13 @@ enum class WindowsConnectionStatus {
     CONNECTING,
     LOADING,
     CONNECTED,
+    ERROR,
 }
 
 internal class WindowsPeerSourceManager(private val context: Context) {
     private val store = EncryptedWindowsRootStore(context)
     private val configs = ConcurrentHashMap<String, WindowsRootConfig>()
+    private val pendingConfigs = ConcurrentHashMap<String, WindowsRootConfig>()
     private val clients = ConcurrentHashMap<String, WindowsPeerClient>()
     private val activeClients = ConcurrentHashMap<String, WindowsPeerClient>()
     private val clientLock = Any()
@@ -149,16 +151,22 @@ internal class WindowsPeerSourceManager(private val context: Context) {
                     rootId = "",
                     rootName = "",
                 )
-            val roots = client(temporary).roots()
-            require(roots.isNotEmpty()) { "Windowsのライブラリにフォルダがありません" }
-            roots.map { (rootId, rootName) ->
-                val id = stableId(pairing.deviceId, rootId)
-                val config = temporary.copy(id = id, rootId = rootId, rootName = rootName)
-                store.put(config)
-                configs[id] = config
-                RootGrant(rootUri(id), "${pairing.deviceName} · $rootName")
+            pendingConfigs[pairing.deviceId] = temporary
+            connectionStatesMutable.update {
+                it + (pairing.deviceId to WindowsConnectionStatus.CONNECTING)
             }
+            connectDevice(temporary)
         }
+
+    fun retryDevice(deviceId: String): List<RootGrant> {
+        val config =
+            pendingConfigs[deviceId]
+                ?: configs.values.firstOrNull { it.deviceId == deviceId }
+                ?: error("Windowsとの接続情報がありません")
+        refreshDevice(deviceId)
+        connectionStatesMutable.update { it + (deviceId to WindowsConnectionStatus.CONNECTING) }
+        return connectDevice(config)
+    }
 
     fun isRoot(rootUri: String): Boolean = rootId(rootUri) != null
 
@@ -185,32 +193,52 @@ internal class WindowsPeerSourceManager(private val context: Context) {
                     configured = config != null,
                 )
             }
-        val configuredDeviceIds =
+        val configuredIdsByName =
             roots.filter(WindowsDeviceRoot::configured).associate { it.deviceName to it.deviceId }
-        return roots
-            .map { root ->
-                root.takeIf(WindowsDeviceRoot::configured)
-                    ?: root.copy(deviceId = configuredDeviceIds[root.deviceName] ?: root.deviceId)
-            }
-            .groupBy(WindowsDeviceRoot::deviceId)
-            .map { (deviceId, deviceRoots) ->
-                WindowsDeviceConnection(
-                    id = deviceId,
-                    name = deviceRoots.first().deviceName,
-                    rootUris = deviceRoots.map(WindowsDeviceRoot::rootUri),
-                    status =
-                        if (deviceRoots.any(WindowsDeviceRoot::configured)) {
-                            connectionStatesMutable.value[deviceId]
-                                ?: WindowsConnectionStatus.OFFLINE
-                        } else {
-                            WindowsConnectionStatus.OFFLINE
-                        },
-                )
-            }
-            .sortedBy { it.name.lowercase() }
+        val configuredDevices =
+            roots
+                .map { root ->
+                    root.takeIf(WindowsDeviceRoot::configured)
+                        ?: root.copy(
+                            deviceId = configuredIdsByName[root.deviceName] ?: root.deviceId
+                        )
+                }
+                .groupBy(WindowsDeviceRoot::deviceId)
+                .map { (deviceId, deviceRoots) ->
+                    WindowsDeviceConnection(
+                        id = deviceId,
+                        name = deviceRoots.first().deviceName,
+                        rootUris = deviceRoots.map(WindowsDeviceRoot::rootUri),
+                        status =
+                            if (deviceRoots.any(WindowsDeviceRoot::configured)) {
+                                connectionStatesMutable.value[deviceId]
+                                    ?: WindowsConnectionStatus.OFFLINE
+                            } else {
+                                WindowsConnectionStatus.OFFLINE
+                            },
+                    )
+                }
+        val configuredDeviceIds =
+            configuredDevices.mapTo(mutableSetOf(), WindowsDeviceConnection::id)
+        val pendingDevices =
+            pendingConfigs.values
+                .distinctBy(WindowsRootConfig::deviceId)
+                .filterNot { it.deviceId in configuredDeviceIds }
+                .map { config ->
+                    WindowsDeviceConnection(
+                        id = config.deviceId,
+                        name = config.deviceName,
+                        rootUris = emptyList(),
+                        status =
+                            connectionStatesMutable.value[config.deviceId]
+                                ?: WindowsConnectionStatus.CONNECTING,
+                    )
+                }
+        return (configuredDevices + pendingDevices).sortedBy { it.name.lowercase() }
     }
 
     fun removeDevice(deviceId: String) {
+        pendingConfigs.remove(deviceId)
         refreshDevice(deviceId)
     }
 
@@ -257,6 +285,26 @@ internal class WindowsPeerSourceManager(private val context: Context) {
     }
 
     fun rootUriForId(id: String): String? = configById(id)?.let { rootUri(id) }
+
+    private fun connectDevice(config: WindowsRootConfig): List<RootGrant> =
+        try {
+            val roots = client(config).roots()
+            require(roots.isNotEmpty()) { "Windowsのライブラリにフォルダがありません" }
+            roots
+                .map { (rootId, rootName) ->
+                    val id = stableId(config.deviceId, rootId)
+                    val rootConfig = config.copy(id = id, rootId = rootId, rootName = rootName)
+                    store.put(rootConfig)
+                    configs[id] = rootConfig
+                    RootGrant(rootUri(id), "${config.deviceName} · $rootName")
+                }
+                .also { pendingConfigs.remove(config.deviceId) }
+        } catch (error: Exception) {
+            connectionStatesMutable.update {
+                it + (config.deviceId to WindowsConnectionStatus.ERROR)
+            }
+            throw error
+        }
 
     private fun client(config: WindowsRootConfig): WindowsPeerClient {
         val key = "${config.endpoint}|${config.room}|${config.secret}"

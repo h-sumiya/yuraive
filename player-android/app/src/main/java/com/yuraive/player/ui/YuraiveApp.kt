@@ -380,7 +380,12 @@ fun YuraiveApp(
                                 removeWindowsDevice = { deviceId ->
                                     scope.launch { app.library.removeWindowsDevice(deviceId) }
                                 },
-                                refreshWindowsDevice = { scanVersion++ },
+                                refreshWindowsDevice = { deviceId ->
+                                    scope.launch {
+                                        runCatching { app.library.refreshWindowsDevice(deviceId) }
+                                        scanVersion++
+                                    }
+                                },
                                 browseRoot = { root ->
                                     browserInitialPath = null
                                     if (root.directory?.isContent == true) {

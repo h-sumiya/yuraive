@@ -209,7 +209,18 @@ class DocumentLibrary(private val context: Context) {
         remoteSources.windowsDevices(rootsMutable.value)
 
     suspend fun refreshWindowsDevice(deviceId: String) =
-        withContext(Dispatchers.IO) { remoteSources.refreshWindowsDevice(deviceId) }
+        withContext(Dispatchers.IO) {
+            val previousUris =
+                windowsDevices().firstOrNull { it.id == deviceId }?.rootUris.orEmpty().toSet()
+            val grants = remoteSources.refreshWindowsDevice(deviceId)
+            val currentUris = grants.mapTo(mutableSetOf(), RootGrant::uri)
+            previousUris.filterNot { it in currentUris }.forEach(remoteSources::remove)
+            val updated =
+                (rootsMutable.value.filterNot { it.uri in previousUris || it.uri in currentUris } +
+                        grants)
+                    .sortedBy { it.name.lowercase() }
+            persist(updated)
+        }
 
     suspend fun refreshWindowsDevices() =
         withContext(Dispatchers.IO) { remoteSources.refreshWindowsDevices() }
@@ -218,11 +229,12 @@ class DocumentLibrary(private val context: Context) {
         withContext(Dispatchers.IO + NonCancellable) {
             val rootUris =
                 windowsDevices().firstOrNull { it.id == deviceId }?.rootUris.orEmpty().toSet()
-            if (rootUris.isEmpty()) return@withContext
-            knownGraphsMutable.value =
-                knownGraphsMutable.value.filterNot { it.ref.rootUri in rootUris }
-            persist(rootsMutable.value.filterNot { it.uri in rootUris })
-            rootUris.forEach(remoteSources::remove)
+            if (rootUris.isNotEmpty()) {
+                knownGraphsMutable.value =
+                    knownGraphsMutable.value.filterNot { it.ref.rootUri in rootUris }
+                persist(rootsMutable.value.filterNot { it.uri in rootUris })
+                rootUris.forEach(remoteSources::remove)
+            }
             remoteSources.removeWindowsDevice(deviceId)
         }
 

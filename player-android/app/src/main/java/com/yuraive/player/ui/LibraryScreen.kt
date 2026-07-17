@@ -299,6 +299,16 @@ internal fun LibraryScreen(
                         gridItems(deviceRoots, key = { "root:${it.grant.uri}" }) { root ->
                             RootGridCard(root, app, { browseRoot(root) }, {}, showDelete = false)
                         }
+                        if (
+                            deviceRoots.isEmpty() &&
+                                device.status in
+                                    setOf(
+                                        WindowsConnectionStatus.CONNECTING,
+                                        WindowsConnectionStatus.LOADING,
+                                    )
+                        ) {
+                            item(key = "windows-skeleton:${device.id}") { WindowsRootSkeleton() }
+                        }
                     }
                 } else {
                     gridItems(filteredRoots, key = { "root:${it.grant.uri}" }) { root ->
@@ -381,6 +391,7 @@ internal fun WindowsDeviceHeader(
                         WindowsConnectionStatus.CONNECTED -> Color(0xFF34C759)
                         WindowsConnectionStatus.CONNECTING,
                         WindowsConnectionStatus.LOADING -> Color(0xFFFF9500)
+                        WindowsConnectionStatus.ERROR -> Color(0xFFFF3B30)
                         WindowsConnectionStatus.OFFLINE ->
                             MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .4f)
                     }
@@ -396,6 +407,32 @@ internal fun WindowsDeviceHeader(
         )
         IconButton(onClick = refresh) { Icon(Icons.Default.Refresh, "再読み込み") }
         IconButton(onClick = remove) { Icon(Icons.Default.DeleteOutline, "削除") }
+    }
+}
+
+@Composable
+private fun WindowsRootSkeleton() {
+    Card(
+        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+        colors =
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(Modifier.fillMaxSize().padding(18.dp)) {
+            Spacer(Modifier.weight(1f))
+            Box(
+                Modifier.fillMaxWidth(.72f)
+                    .height(20.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .16f))
+            )
+            Spacer(Modifier.height(10.dp))
+            Box(
+                Modifier.fillMaxWidth(.46f)
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .1f))
+            )
+        }
     }
 }
 

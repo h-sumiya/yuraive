@@ -183,7 +183,7 @@ internal class RemoteSourceManager(private val context: Context) {
 
     fun removeWindowsDevice(deviceId: String) = windows.removeDevice(deviceId)
 
-    fun refreshWindowsDevice(deviceId: String) = windows.refreshDevice(deviceId)
+    fun refreshWindowsDevice(deviceId: String): List<RootGrant> = windows.retryDevice(deviceId)
 
     fun refreshWindowsDevices() = windows.refreshAll()
 
