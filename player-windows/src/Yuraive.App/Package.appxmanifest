@@ -9,7 +9,7 @@
   <Identity
     Name="h-sumiya.Yuraive"
     Publisher="CN=0CAEE31D-460E-4BC5-A8FA-16FA42C46226"
-    Version="1.0.0.4" />
+    Version="1.0.0.0" />
 
   <Properties>
     <DisplayName>Yuraive</DisplayName>

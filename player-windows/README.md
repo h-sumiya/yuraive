@@ -37,6 +37,13 @@ Microsoft Store 提出用の MSIX は次のように生成します。
 dotnet publish player-windows/src/Yuraive.App/Yuraive.App.csproj -c Release -p:Platform=x64 -p:GenerateAppxPackageOnBuild=true
 ```
 
+Store 提出用パッケージは `windows-v<major>.<minor>.<patch>` 形式のタグを push すると GitHub Actions でも生成できます。たとえば初回の `windows-v1.0.0` はパッケージバージョン `1.0.0.0` の `.msixupload` artifact を作成します。
+
+```powershell
+git tag windows-v1.0.0
+git push origin windows-v1.0.0
+```
+
 ## ブランドと Microsoft Store
 
 | 項目                   | 値                                                                                     |
