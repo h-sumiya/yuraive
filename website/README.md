@@ -2,7 +2,7 @@
 
 `yuraive.com` で公開するYuraive公式サイトです。Astroで静的HTMLを生成し、Cloudflare WorkerからStatic Assetsとして配信します。
 
-- `/` は空白ページです。
+- `/` はYuraiveの紹介ページです。
 - `/privacy/` はアプリ、エディタ、公式サイト共通のプライバシーポリシーです。
 - `/privacy` と `/privacy-policy` は `/privacy/` へリダイレクトします。
 

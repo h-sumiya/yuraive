@@ -1,11 +1,218 @@
+---
+import iconUrl from '../../../assets/icon.svg?url'
+import '../styles/home.css'
+
+const features = [
+  'ローカルフォルダー、SMB、WebDAVからライブラリへ追加',
+  'Yuraive作品と音声・画像を再生',
+  'ボタン操作や再生終了によるシーン分岐',
+  '作品ごとのアートワーク、説明、タグを表示',
+  '再生履歴、お気に入り、シャッフル',
+  'グラフ形式のビジュアルエディター',
+  'カスタムレイアウトとStarlarkスクリプト',
+  'Android端末どうしを接続',
+]
+---
+
 <!doctype html>
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width" />
-    <meta name="robots" content="noindex" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="音声や画像の再生順を組み立て、状況に応じて次のメディアを決定できるメディアプレイヤー、Yuraive。"
+    />
+    <meta name="theme-color" content="#14131a" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Yuraive — 再生の流れを自由に組み立てる" />
+    <meta
+      property="og:description"
+      content="音声や画像の再生順をグラフで組み立て、状況に応じて次のメディアを決定できるメディアプレイヤー。"
+    />
+    <meta property="og:url" content="https://yuraive.com/" />
+    <meta property="og:image" content="https://yuraive.com/screenshots/editor.png" />
+    <link rel="icon" href={iconUrl} type="image/svg+xml" />
     <link rel="canonical" href="https://yuraive.com/" />
-    <title>Yuraive</title>
+    <title>Yuraive — 再生の流れを自由に組み立てる</title>
   </head>
-  <body></body>
+  <body>
+    <header class="site-header">
+      <nav class="shell navigation" aria-label="メインナビゲーション">
+        <a class="brand" href="/" aria-label="Yuraive トップ">
+          <img src={iconUrl} width="36" height="36" alt="" />
+          <span>Yuraive</span>
+        </a>
+        <div class="nav-links">
+          <a href="#features">機能</a>
+          <a href="#download">ダウンロード</a>
+          <a href="https://github.com/h-sumiya/yuraive" rel="external noreferrer">GitHub</a>
+          <a class="nav-primary" href="https://editor.yuraive.com/" rel="external noreferrer">
+            Editorを開く <span aria-hidden="true">↗</span>
+          </a>
+        </div>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="shell hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow">Branching media player</p>
+            <h1>再生の流れを、<br />自由に組み立てる。</h1>
+            <p class="hero-description">
+              音声や画像の再生順をグラフで組み立て、再生状況やユーザーの操作に応じて次のメディアを決定できるプレイヤーです。
+            </p>
+            <div class="hero-actions">
+              <a
+                class="button button-light"
+                href="https://editor.yuraive.com/"
+                rel="external noreferrer"
+              >
+                Editorを開く <span aria-hidden="true">↗</span>
+              </a>
+              <a class="button button-quiet" href="#features">できることを見る</a>
+            </div>
+          </div>
+
+          <figure class="hero-visual">
+            <div class="window-bar" aria-hidden="true">
+              <span></span><span></span><span></span>
+              <small>Yuraive Editor</small>
+            </div>
+            <img
+              src="/screenshots/editor.png"
+              width="1901"
+              height="1078"
+              alt="メディアとボタンを線でつないだYuraive Editorのグラフ編集画面"
+              fetchpriority="high"
+            />
+          </figure>
+        </div>
+      </section>
+
+      <section class="downloads" id="download" aria-labelledby="download-title">
+        <div class="shell downloads-inner">
+          <div class="download-heading">
+            <p class="eyebrow accent">Download</p>
+            <h2 id="download-title">Android / Windows</h2>
+          </div>
+          <div class="download-links" aria-label="ダウンロード">
+            <span
+              class="download-link"
+              role="link"
+              aria-disabled="true"
+              aria-label="Android版、準備中"
+            >
+              <span>Android</span>
+              <small>準備中</small>
+            </span>
+            <span
+              class="download-link"
+              role="link"
+              aria-disabled="true"
+              aria-label="Windows版、準備中"
+            >
+              <span>Windows</span>
+              <small>準備中</small>
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section class="features shell" id="features">
+        <div class="section-heading">
+          <p class="eyebrow accent">Features</p>
+          <h2>作品の編集から、<br />再生まで。</h2>
+        </div>
+
+        <ol class="feature-list">
+          {
+            features.map((feature, index) => (
+              <li>
+                <span>{String(index + 1).padStart(2, '0')}</span>
+                <p>{feature}</p>
+              </li>
+            ))
+          }
+        </ol>
+      </section>
+
+      <section class="players">
+        <div class="shell">
+          <div class="section-heading players-heading">
+            <div>
+              <p class="eyebrow accent">Player</p>
+              <h2>再生状況に応じて、<br />次のメディアへ。</h2>
+            </div>
+            <p>再生終了やボタン操作をきっかけに、設定した分岐と確率から次のメディアを選びます。</p>
+          </div>
+
+          <div class="player-screens">
+            <figure class="desktop-screen">
+              <img
+                src="/screenshots/windows-player.png"
+                width="1405"
+                height="913"
+                alt="Windows版Yuraiveの再生画面"
+                loading="lazy"
+              />
+              <figcaption>Windows</figcaption>
+            </figure>
+            <div class="android-screens">
+              <figure class="mobile-screen">
+                <img
+                  src="/screenshots/android-library.png"
+                  width="1080"
+                  height="2400"
+                  alt="Android版Yuraiveのライブラリ画面"
+                  loading="lazy"
+                />
+                <figcaption>Android — Library</figcaption>
+              </figure>
+              <figure class="mobile-screen mobile-screen-offset">
+                <img
+                  src="/screenshots/android-player.png"
+                  width="1080"
+                  height="2400"
+                  alt="Android版Yuraiveの再生画面"
+                  loading="lazy"
+                />
+                <figcaption>Android — Player</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing">
+        <div class="shell closing-inner">
+          <div>
+            <p class="eyebrow">Yuraive Editor</p>
+            <h2>再生の流れを、組み立てる。</h2>
+          </div>
+          <a
+            class="button button-light"
+            href="https://editor.yuraive.com/"
+            rel="external noreferrer"
+          >
+            Editorを開く <span aria-hidden="true">↗</span>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="shell footer-inner">
+        <a class="brand footer-brand" href="/">
+          <img src={iconUrl} width="28" height="28" alt="" />
+          <span>Yuraive</span>
+        </a>
+        <nav aria-label="フッターナビゲーション">
+          <a href="https://github.com/h-sumiya/yuraive" rel="external noreferrer">GitHub</a>
+          <a href="/privacy/">プライバシーポリシー</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
 </html>
