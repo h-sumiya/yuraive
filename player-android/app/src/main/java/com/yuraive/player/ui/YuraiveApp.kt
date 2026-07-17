@@ -35,12 +35,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -61,6 +63,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Check
@@ -202,7 +205,7 @@ import kotlin.math.roundToInt
 import kotlin.math.PI
 import kotlin.math.sin
 
-private enum class Destination { LIBRARY, HISTORY, SETTINGS }
+private enum class Destination { LIBRARY, HISTORY, SETTINGS, LICENSES }
 
 private data class GraphCollection(
     val title: String,
@@ -318,7 +321,10 @@ fun YuraiveApp(
         updateBrowserRoot(null)
         browserInitialPath = null
     }
-    BackHandler(enabled = !showPlayer && activeBrowserRoot == null && collection == null && destination != Destination.LIBRARY) {
+    BackHandler(enabled = !showPlayer && activeBrowserRoot == null && collection == null && destination == Destination.LICENSES) {
+        destination = Destination.SETTINGS
+    }
+    BackHandler(enabled = !showPlayer && activeBrowserRoot == null && collection == null && destination in setOf(Destination.HISTORY, Destination.SETTINGS)) {
         destination = Destination.LIBRARY
     }
     BackHandler(enabled = inspectedGraph != null) { inspectedGraph = null }
@@ -533,11 +539,16 @@ fun YuraiveApp(
                                 updateBrowserRoot(root)
                             },
                         )
-                        else -> SettingsScreen(
+                        destination == Destination.SETTINGS -> SettingsScreen(
                             modifier = Modifier.padding(padding),
                             settings = settings,
                             update = app.settings::update,
                             onBack = { destination = Destination.LIBRARY },
+                            openLicenses = { destination = Destination.LICENSES },
+                        )
+                        else -> LicensesScreen(
+                            modifier = Modifier.padding(padding),
+                            onBack = { destination = Destination.SETTINGS },
                         )
                     }
                 }
@@ -2595,7 +2606,10 @@ private fun SettingsScreen(
     settings: PlayerSettings,
     update: ((PlayerSettings) -> PlayerSettings) -> Unit,
     onBack: () -> Unit,
+    openLicenses: () -> Unit,
 ) {
+    val uriHandler = LocalUriHandler.current
+    val bottomContentPadding = 20.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Scaffold(
         modifier = modifier,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -2610,7 +2624,16 @@ private fun SettingsScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             maxContentWidth = MaxSettingsContentWidth,
         ) { listModifier ->
-        LazyColumn(listModifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(26.dp)) {
+        LazyColumn(
+            listModifier,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 20.dp,
+                top = 20.dp,
+                end = 20.dp,
+                bottom = bottomContentPadding,
+            ),
+            verticalArrangement = Arrangement.spacedBy(26.dp),
+        ) {
             item {
                 SettingGroup("テーマ") {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2690,8 +2713,57 @@ private fun SettingsScreen(
                     )
                 }
             }
+            item {
+                SettingGroup("アプリについて") {
+                    SettingLinkRow(
+                        title = "ライセンス",
+                        external = false,
+                        onClick = openLicenses,
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    SettingLinkRow(
+                        title = "GitHub",
+                        external = true,
+                        onClick = { runCatching { uriHandler.openUri("https://github.com/h-sumiya/yuraive") } },
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    SettingLinkRow(
+                        title = "お問い合わせ",
+                        external = true,
+                        onClick = { runCatching { uriHandler.openUri("https://hiro.red/contact") } },
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    SettingLinkRow(
+                        title = "プライバシーポリシー",
+                        external = true,
+                        onClick = { runCatching { uriHandler.openUri("https://yuraive.com/privacy/") } },
+                    )
+                }
+            }
         }
         }
+    }
+}
+
+@Composable
+private fun SettingLinkRow(
+    title: String,
+    external: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+        Icon(
+            if (external) Icons.AutoMirrored.Filled.OpenInNew else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            if (external) "外部サイトで開く" else "開く",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
