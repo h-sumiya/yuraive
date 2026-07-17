@@ -20,7 +20,7 @@ env:
 jobs:
   package:
     name: Build Microsoft Store package
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
     timeout-minutes: 30
 
     steps:
@@ -32,12 +32,26 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v3
+        with:
+          msbuild-architecture: x64
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: editor/package-lock.json
+
+      - name: Cache Rust build outputs
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            runtime/target
+          key: windows-rust-${{ hashFiles('runtime/Cargo.lock') }}
 
       - name: Set package version from tag
         id: version
@@ -67,15 +81,17 @@ jobs:
       - name: Build Store upload package
         shell: pwsh
         run: |
-          dotnet publish $env:APP_PROJECT `
-            --configuration Release `
-            -p:Platform=x64 `
-            -p:RuntimeIdentifier=win-x64 `
-            -p:GenerateAppxPackageOnBuild=true `
-            -p:UapAppxPackageBuildMode=StoreOnly `
-            -p:AppxBundle=Never `
-            -p:AppxPackageSigningEnabled=false `
-            -p:AppxPackageDir="$env:GITHUB_WORKSPACE\$env:PACKAGE_OUTPUT\"
+          msbuild $env:APP_PROJECT `
+            /restore `
+            /target:Publish `
+            /property:Configuration=Release `
+            /property:Platform=x64 `
+            /property:RuntimeIdentifier=win-x64 `
+            /property:GenerateAppxPackageOnBuild=true `
+            /property:UapAppxPackageBuildMode=StoreOnly `
+            /property:AppxBundle=Never `
+            /property:AppxPackageSigningEnabled=false `
+            /property:AppxPackageDir="$env:GITHUB_WORKSPACE\$env:PACKAGE_OUTPUT\"
 
       - name: Verify Store upload package
         shell: pwsh
