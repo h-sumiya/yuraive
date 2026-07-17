@@ -3,9 +3,11 @@ interface Env {
 }
 
 const securityHeaders = {
-  'content-security-policy': "default-src 'none'; style-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'content-security-policy':
+    "default-src 'none'; style-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   'cross-origin-opener-policy': 'same-origin',
-  'permissions-policy': 'accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()',
+  'permissions-policy':
+    'accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()',
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
@@ -23,20 +25,26 @@ const secure = (response: Response): Response => {
 
 const redirect = (request: Request, pathname: string): Response => {
   const location = new URL(pathname, request.url)
-  return secure(new Response(null, {
-    status: 308,
-    headers: {
-      'cache-control': 'public, max-age=86400',
-      location: location.toString(),
-    },
-  }))
+  return secure(
+    new Response(null, {
+      status: 308,
+      headers: {
+        'cache-control': 'public, max-age=86400',
+        location: location.toString(),
+      },
+    }),
+  )
 }
 
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url)
     const { pathname } = url
-    if (pathname === '/privacy' || pathname === '/privacy-policy' || pathname === '/privacy-policy/') {
+    if (
+      pathname === '/privacy' ||
+      pathname === '/privacy-policy' ||
+      pathname === '/privacy-policy/'
+    ) {
       return redirect(request, '/privacy/')
     }
     if (pathname === '/index.html') return redirect(request, '/')

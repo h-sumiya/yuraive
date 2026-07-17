@@ -13,13 +13,12 @@ import com.yuraive.player.data.DocumentLibrary
 import com.yuraive.player.data.RemoteRead
 import java.io.IOException
 
-internal class LibraryDataSourceFactory(
-    context: Context,
-    private val library: DocumentLibrary,
-) : DataSource.Factory {
+internal class LibraryDataSourceFactory(context: Context, private val library: DocumentLibrary) :
+    DataSource.Factory {
     private val localFactory = DefaultDataSource.Factory(context)
 
-    override fun createDataSource(): DataSource = LibraryDataSource(localFactory.createDataSource(), library)
+    override fun createDataSource(): DataSource =
+        LibraryDataSource(localFactory.createDataSource(), library)
 }
 
 private class LibraryDataSource(
@@ -38,11 +37,13 @@ private class LibraryDataSource(
             val opened = library.openRemoteMedia(dataSpec.uri, dataSpec.position)
             remote = opened
             remoteUri = dataSpec.uri
-            remaining = when {
-                dataSpec.length != C.LENGTH_UNSET.toLong() -> dataSpec.length
-                opened.totalLength >= 0 -> (opened.totalLength - dataSpec.position).coerceAtLeast(0)
-                else -> C.LENGTH_UNSET.toLong()
-            }
+            remaining =
+                when {
+                    dataSpec.length != C.LENGTH_UNSET.toLong() -> dataSpec.length
+                    opened.totalLength >= 0 ->
+                        (opened.totalLength - dataSpec.position).coerceAtLeast(0)
+                    else -> C.LENGTH_UNSET.toLong()
+                }
             remoteTransferStarted = true
             transferStarted(dataSpec)
             return remaining
@@ -59,14 +60,17 @@ private class LibraryDataSource(
         val opened = remote ?: return local.read(buffer, offset, length)
         if (length == 0) return 0
         if (remaining == 0L) return C.RESULT_END_OF_INPUT
-        val requested = if (remaining == C.LENGTH_UNSET.toLong()) length else minOf(length.toLong(), remaining).toInt()
-        val count = try {
-            opened.input.read(buffer, offset, requested)
-        } catch (error: IOException) {
-            throw error
-        } catch (error: Throwable) {
-            throw IOException("リモートメディアの読み込みに失敗しました", error)
-        }
+        val requested =
+            if (remaining == C.LENGTH_UNSET.toLong()) length
+            else minOf(length.toLong(), remaining).toInt()
+        val count =
+            try {
+                opened.input.read(buffer, offset, requested)
+            } catch (error: IOException) {
+                throw error
+            } catch (error: Throwable) {
+                throw IOException("リモートメディアの読み込みに失敗しました", error)
+            }
         if (count < 0) return C.RESULT_END_OF_INPUT
         if (remaining != C.LENGTH_UNSET.toLong()) remaining -= count
         bytesTransferred(count)
@@ -75,7 +79,8 @@ private class LibraryDataSource(
 
     override fun getUri(): Uri? = remoteUri ?: local.uri
 
-    override fun getResponseHeaders(): Map<String, List<String>> = if (remote != null) emptyMap() else local.responseHeaders
+    override fun getResponseHeaders(): Map<String, List<String>> =
+        if (remote != null) emptyMap() else local.responseHeaders
 
     override fun close() {
         val opened = remote

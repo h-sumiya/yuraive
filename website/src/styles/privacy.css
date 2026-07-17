@@ -1,8 +1,6 @@
 :root {
   color-scheme: light dark;
-  font-family:
-    Inter, "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo,
-    sans-serif;
+  font-family: Inter, 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif;
   font-synthesis: none;
   color: #202124;
   background: #ffffff;

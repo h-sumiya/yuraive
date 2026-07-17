@@ -34,7 +34,7 @@ const timingSafeEqual = (left: string, right: string): boolean => {
 
 const sha256 = async (value: string): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 export class SignalingRoom extends DurableObject<Env> {
@@ -108,12 +108,18 @@ export class SignalingRoom extends DurableObject<Env> {
     for (const peer of this.ctx.getWebSockets(counterpart)) peer.send(message)
   }
 
-  async webSocketClose(socket: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+  async webSocketClose(
+    socket: WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean,
+  ): Promise<void> {
     const attachment = socket.deserializeAttachment() as SocketAttachment | null
     socket.close(code, reason || (wasClean ? 'closed' : 'disconnected'))
     if (attachment?.role === 'host' || attachment?.role === 'client') {
-      const hasReplacement = this.ctx.getWebSockets(attachment.role)
-        .some(peer => peer !== socket && peer.readyState < WebSocket.CLOSING)
+      const hasReplacement = this.ctx
+        .getWebSockets(attachment.role)
+        .some((peer) => peer !== socket && peer.readyState < WebSocket.CLOSING)
       if (!hasReplacement) {
         const counterpart = attachment.role === 'host' ? 'client' : 'host'
         for (const peer of this.ctx.getWebSockets(counterpart)) {
@@ -121,7 +127,9 @@ export class SignalingRoom extends DurableObject<Env> {
         }
       }
     }
-    const hasActivePeer = this.ctx.getWebSockets().some(peer => peer.readyState < WebSocket.CLOSING)
+    const hasActivePeer = this.ctx
+      .getWebSockets()
+      .some((peer) => peer.readyState < WebSocket.CLOSING)
     if (!hasActivePeer) await this.ctx.storage.delete('secretHash')
   }
 }

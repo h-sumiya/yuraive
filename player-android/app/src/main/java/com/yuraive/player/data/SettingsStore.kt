@@ -4,7 +4,11 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
-enum class ThemeMode { SYSTEM, LIGHT, DARK }
+enum class ThemeMode {
+    SYSTEM,
+    LIGHT,
+    DARK,
+}
 
 data class PlayerSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -21,8 +25,10 @@ class SettingsStore(context: Context) {
 
     fun update(transform: (PlayerSettings) -> PlayerSettings) {
         val transformed = transform(mutable.value)
-        val value = transformed.copy(scriptTimeoutMs = transformed.scriptTimeoutMs.coerceIn(100, 10_000))
-        preferences.edit()
+        val value =
+            transformed.copy(scriptTimeoutMs = transformed.scriptTimeoutMs.coerceIn(100, 10_000))
+        preferences
+            .edit()
             .putString("theme", value.themeMode.name)
             .putInt("accent", value.accentIndex)
             .putLong("scriptTimeout", value.scriptTimeoutMs)
@@ -32,11 +38,14 @@ class SettingsStore(context: Context) {
         mutable.value = value
     }
 
-    private fun read() = PlayerSettings(
-        themeMode = runCatching { ThemeMode.valueOf(preferences.getString("theme", null) ?: "SYSTEM") }.getOrDefault(ThemeMode.SYSTEM),
-        accentIndex = preferences.getInt("accent", 0),
-        scriptTimeoutMs = preferences.getLong("scriptTimeout", 1_200).coerceIn(100, 10_000),
-        forceShowPlayerControls = preferences.getBoolean("forceShowPlayerControls", false),
-        keepScreenOnInPlayer = preferences.getBoolean("keepScreenOnInPlayer", false),
-    )
+    private fun read() =
+        PlayerSettings(
+            themeMode =
+                runCatching { ThemeMode.valueOf(preferences.getString("theme", null) ?: "SYSTEM") }
+                    .getOrDefault(ThemeMode.SYSTEM),
+            accentIndex = preferences.getInt("accent", 0),
+            scriptTimeoutMs = preferences.getLong("scriptTimeout", 1_200).coerceIn(100, 10_000),
+            forceShowPlayerControls = preferences.getBoolean("forceShowPlayerControls", false),
+            keepScreenOnInPlayer = preferences.getBoolean("keepScreenOnInPlayer", false),
+        )
 }

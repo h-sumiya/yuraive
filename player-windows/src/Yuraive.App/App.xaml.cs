@@ -1,5 +1,5 @@
-using Microsoft.Windows.AppLifecycle;
 using Microsoft.UI.Xaml;
+using Microsoft.Windows.AppLifecycle;
 using Windows.ApplicationModel.Activation;
 using Windows.Storage;
 

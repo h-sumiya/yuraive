@@ -1,0 +1,12 @@
+**/bin/**
+**/build/**
+**/dist*/**
+**/node_modules/**
+**/obj/**
+**/target/**
+**/.astro/**
+**/.gradle/**
+**/package-lock.json
+editor/src/wasm/**
+notes/**
+

@@ -5,9 +5,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.UI;
 using Yuraive.Core.Interop;
 using Yuraive.Core.Models;
-using Windows.UI;
 
 namespace Yuraive.App;
 
@@ -157,8 +157,11 @@ public sealed partial class ButtonLayoutView : UserControl
         if (value == "transparent") return Colors.Transparent;
         var names = new Dictionary<string, Color>(StringComparer.OrdinalIgnoreCase)
         {
-            ["black"] = Colors.Black, ["white"] = Colors.White, ["red"] = Colors.Red,
-            ["green"] = Colors.Green, ["blue"] = Colors.Blue,
+            ["black"] = Colors.Black,
+            ["white"] = Colors.White,
+            ["red"] = Colors.Red,
+            ["green"] = Colors.Green,
+            ["blue"] = Colors.Blue,
         };
         if (names.TryGetValue(value, out var named)) return named;
         if (value.StartsWith('#'))

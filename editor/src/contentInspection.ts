@@ -10,11 +10,12 @@ export type ContentAssetInspection = {
   problem?: 'unsafe' | 'missing'
 }
 
-const isSafeRelativePath = (path: string) => Boolean(path)
-  && !path.startsWith('/')
-  && !path.includes(':')
-  && !path.includes('\\')
-  && path.split('/').every((part) => Boolean(part) && part !== '.' && part !== '..')
+const isSafeRelativePath = (path: string) =>
+  Boolean(path) &&
+  !path.startsWith('/') &&
+  !path.includes(':') &&
+  !path.includes('\\') &&
+  path.split('/').every((part) => Boolean(part) && part !== '.' && part !== '..')
 
 export const expectedContentAssets = (graph: YuraiveGraph) => {
   const expected = new Map<string, Set<ContentAssetKind>>()
@@ -52,16 +53,22 @@ export const inspectContentAssets = (
   exists: (path: string) => boolean,
   embeddedPaths: ReadonlySet<string> = new Set(),
   bundleMode = false,
-): ContentAssetInspection[] => expectedContentAssets(graph).map(({ path, kinds }) => {
-  const safe = isSafeRelativePath(path)
-  const embedded = safe && embeddedPaths.has(path)
-  const requiresEmbedding = bundleMode && kinds.some((kind) => kind === 'script' || kind === 'layout')
-  const recognized = safe && (embedded || (!requiresEmbedding && exists(path)))
-  return {
-    path,
-    kinds,
-    recognized,
-    embedded,
-    ...(!safe ? { problem: 'unsafe' as const } : !recognized ? { problem: 'missing' as const } : {}),
-  }
-})
+): ContentAssetInspection[] =>
+  expectedContentAssets(graph).map(({ path, kinds }) => {
+    const safe = isSafeRelativePath(path)
+    const embedded = safe && embeddedPaths.has(path)
+    const requiresEmbedding =
+      bundleMode && kinds.some((kind) => kind === 'script' || kind === 'layout')
+    const recognized = safe && (embedded || (!requiresEmbedding && exists(path)))
+    return {
+      path,
+      kinds,
+      recognized,
+      embedded,
+      ...(!safe
+        ? { problem: 'unsafe' as const }
+        : !recognized
+          ? { problem: 'missing' as const }
+          : {}),
+    }
+  })

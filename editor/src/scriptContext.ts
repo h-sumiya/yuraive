@@ -11,11 +11,26 @@ type StarlarkContextInput = {
   currentIsFinalized?: boolean
 }
 
-const nonNegativeInteger = (value: number) => Math.max(0, Math.round(Number.isFinite(value) ? value : 0))
+const nonNegativeInteger = (value: number) =>
+  Math.max(0, Math.round(Number.isFinite(value) ? value : 0))
 
-export const createStarlarkContext = ({ graphId, runId, runStartedAt, history, current, trigger, now = new Date(), currentIsFinalized = false }: StarlarkContextInput): StarlarkContext => {
-  const historyActivePlayMs = history.reduce((total, entry) => total + nonNegativeInteger(entry.activePlayMs), 0)
-  const currentActivePlayMs = currentIsFinalized ? 0 : nonNegativeInteger(current?.activePlayMs ?? 0)
+export const createStarlarkContext = ({
+  graphId,
+  runId,
+  runStartedAt,
+  history,
+  current,
+  trigger,
+  now = new Date(),
+  currentIsFinalized = false,
+}: StarlarkContextInput): StarlarkContext => {
+  const historyActivePlayMs = history.reduce(
+    (total, entry) => total + nonNegativeInteger(entry.activePlayMs),
+    0,
+  )
+  const currentActivePlayMs = currentIsFinalized
+    ? 0
+    : nonNegativeInteger(current?.activePlayMs ?? 0)
   return {
     now: now.toISOString(),
     graphId,

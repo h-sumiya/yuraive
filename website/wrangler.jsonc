@@ -9,12 +9,12 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "run_worker_first": true,
-    "html_handling": "none"
+    "html_handling": "none",
   },
   "routes": [
     {
       "pattern": "yuraive.com",
-      "custom_domain": true
-    }
-  ]
+      "custom_domain": true,
+    },
+  ],
 }

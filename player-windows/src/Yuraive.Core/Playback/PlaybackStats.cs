@@ -409,8 +409,15 @@ public static partial class DisplayValidator
         if (type == "badge" && string.IsNullOrWhiteSpace(text)) throw new InvalidDataException($"{path}.text は必須です");
         return new()
         {
-            Type = type, Text = text, Spans = spans, Source = source, Icon = icon, Value = progress,
-            Label = label, Style = style, Children = children,
+            Type = type,
+            Text = text,
+            Spans = spans,
+            Source = source,
+            Icon = icon,
+            Value = progress,
+            Label = label,
+            Style = style,
+            Children = children,
         };
     }
 

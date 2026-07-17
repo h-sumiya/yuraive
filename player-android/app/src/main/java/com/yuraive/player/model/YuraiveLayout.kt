@@ -7,22 +7,32 @@ object YuraiveLayout {
 
     private val styleElement = Regex("""(?is)<style(?:\s[^>]*)?>(.*?)</style\s*>""")
     private val element = Regex("""(?is)<\s*(/?)\s*([a-z][a-z0-9-]*)([^>]*)>""")
-    private val attribute = Regex("""(?is)\b(class|id|name|style|role|aria-label)\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]+)""")
+    private val attribute =
+        Regex(
+            """(?is)\b(class|id|name|style|role|aria-label)\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]+)"""
+        )
     private val allowedElements = setOf("div", "slot")
 
-    fun hasExpectedExtension(path: String): Boolean = path.endsWith(FILE_EXTENSION, ignoreCase = true)
+    fun hasExpectedExtension(path: String): Boolean =
+        path.endsWith(FILE_EXTENSION, ignoreCase = true)
 
     fun sanitize(source: String): Pair<String, String> {
         val css = styleElement.findAll(source).joinToString("\n") { it.groupValues[1] }
         val withoutStyles = source.replace(styleElement, "")
-        val body = element.replace(withoutStyles) { match ->
-            val closing = match.groupValues[1].isNotEmpty()
-            val name = match.groupValues[2].lowercase()
-            if (name !in allowedElements) "" else if (closing) "</$name>" else {
-                val attributes = attribute.findAll(match.groupValues[3]).joinToString(" ") { it.value.trim() }
-                if (attributes.isEmpty()) "<$name>" else "<$name $attributes>"
+        val body =
+            element.replace(withoutStyles) { match ->
+                val closing = match.groupValues[1].isNotEmpty()
+                val name = match.groupValues[2].lowercase()
+                if (name !in allowedElements) ""
+                else if (closing) "</$name>"
+                else {
+                    val attributes =
+                        attribute.findAll(match.groupValues[3]).joinToString(" ") {
+                            it.value.trim()
+                        }
+                    if (attributes.isEmpty()) "<$name>" else "<$name $attributes>"
+                }
             }
-        }
         return css to body
     }
 
@@ -30,27 +40,42 @@ object YuraiveLayout {
         val slots = slotIdentifiers(source)
         val issues = mutableListOf<YuraiveLayoutIssue>()
         if (slots.count(String::isEmpty) != 1) {
-            issues += YuraiveLayoutIssue(ValidationIssue.Severity.ERROR, "name/idのないデフォルトslotが1件必要です")
+            issues +=
+                YuraiveLayoutIssue(ValidationIssue.Severity.ERROR, "name/idのないデフォルトslotが1件必要です")
         }
         val duplicates = slots.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
         if (duplicates.isNotEmpty()) {
-            issues += YuraiveLayoutIssue(ValidationIssue.Severity.ERROR, "slot識別子が重複しています: ${duplicates.joinToString { it.ifEmpty { "(default)" } }}")
+            issues +=
+                YuraiveLayoutIssue(
+                    ValidationIssue.Severity.ERROR,
+                    "slot識別子が重複しています: ${duplicates.joinToString { it.ifEmpty { "(default)" } }}",
+                )
         }
         if (!styleElement.containsMatchIn(source)) {
-            issues += YuraiveLayoutIssue(ValidationIssue.Severity.WARNING, "style要素がありません。ボタンには暗黙の外観が適用されません")
+            issues +=
+                YuraiveLayoutIssue(
+                    ValidationIssue.Severity.WARNING,
+                    "style要素がありません。ボタンには暗黙の外観が適用されません",
+                )
         }
         return issues
     }
 
     fun slotIdentifiers(source: String): List<String> {
         val (_, body) = sanitize(source)
-        return element.findAll(body).filter { it.groupValues[1].isEmpty() && it.groupValues[2].equals("slot", true) }.map { match ->
-            val attributes = attribute.findAll(match.groupValues[3]).associate { attributeMatch ->
-                val raw = attributeMatch.groupValues[2]
-                attributeMatch.groupValues[1].lowercase() to raw.removeSurrounding("\"").removeSurrounding("'").trim()
+        return element
+            .findAll(body)
+            .filter { it.groupValues[1].isEmpty() && it.groupValues[2].equals("slot", true) }
+            .map { match ->
+                val attributes =
+                    attribute.findAll(match.groupValues[3]).associate { attributeMatch ->
+                        val raw = attributeMatch.groupValues[2]
+                        attributeMatch.groupValues[1].lowercase() to
+                            raw.removeSurrounding("\"").removeSurrounding("'").trim()
+                    }
+                attributes["name"] ?: attributes["id"].orEmpty()
             }
-            attributes["name"] ?: attributes["id"].orEmpty()
-        }.toList()
+            .toList()
     }
 
     fun buildDocument(source: String): String {

@@ -42,11 +42,13 @@ import com.yuraive.player.model.YuraiveJson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import kotlin.math.roundToInt
 
 /** JNI entry point for the shared safe HTML/CSS subset interpreter. */
 internal object NativeButtonLayoutEngine {
-    init { System.loadLibrary("yuraive_runtime") }
+    init {
+        System.loadLibrary("yuraive_runtime")
+    }
+
     external fun resolveJsonNative(request: String): String
 }
 
@@ -134,25 +136,36 @@ internal fun ButtonLayoutView(
         val density = LocalDensity.current
         val width = maxWidth.value
         val height = maxHeight.value
-        val response = remember(source, buttons, width, height, density.density, density.fontScale) {
-            if (width <= 0f || height <= 0f) NativeLayoutResponse()
-            else runCatching {
-                val request = NativeLayoutRequest(
-                    source = source,
-                    buttons = buttons,
-                    canvas = NativeLayoutCanvas(width, height, density.density, density.fontScale),
-                )
-                YuraiveJson.format.decodeFromString(
-                    NativeLayoutResponse.serializer(),
-                    NativeButtonLayoutEngine.resolveJsonNative(
-                        YuraiveJson.format.encodeToString(NativeLayoutRequest.serializer(), request),
-                    ),
-                )
-            }.getOrDefault(NativeLayoutResponse())
-        }
-        response.buttons.forEach { button ->
-            NativeButton(button, onPress)
-        }
+        val response =
+            remember(source, buttons, width, height, density.density, density.fontScale) {
+                if (width <= 0f || height <= 0f) NativeLayoutResponse()
+                else
+                    runCatching {
+                            val request =
+                                NativeLayoutRequest(
+                                    source = source,
+                                    buttons = buttons,
+                                    canvas =
+                                        NativeLayoutCanvas(
+                                            width,
+                                            height,
+                                            density.density,
+                                            density.fontScale,
+                                        ),
+                                )
+                            YuraiveJson.format.decodeFromString(
+                                NativeLayoutResponse.serializer(),
+                                NativeButtonLayoutEngine.resolveJsonNative(
+                                    YuraiveJson.format.encodeToString(
+                                        NativeLayoutRequest.serializer(),
+                                        request,
+                                    )
+                                ),
+                            )
+                        }
+                        .getOrDefault(NativeLayoutResponse())
+            }
+        response.buttons.forEach { button -> NativeButton(button, onPress) }
     }
 }
 
@@ -160,18 +173,26 @@ internal fun ButtonLayoutView(
 private fun NativeButton(button: NativeLayoutButton, onPress: (String) -> Unit) {
     val style = button.style
     val shape = RoundedCornerShape(style.borderRadius.coerceAtLeast(0f).dp)
-    var modifier = Modifier
-        .offset(button.x.dp, button.y.dp)
-        .size(button.width.coerceAtLeast(0f).dp, button.height.coerceAtLeast(0f).dp)
-        .zIndex(button.zIndex.toFloat())
-    shadowElevation(style.boxShadow)?.let { elevation -> modifier = modifier.shadow(elevation.dp, shape, clip = false) }
-    modifier = modifier
-        .graphicsLayer { applyCssTransform(style.transform) }
-        .alpha((style.opacity * filterOpacity(style.filter)).coerceIn(0f, 1f))
-        .clip(shape)
-        .background(cssColor(style.backgroundColor, Color.Transparent), shape)
+    var modifier =
+        Modifier.offset(button.x.dp, button.y.dp)
+            .size(button.width.coerceAtLeast(0f).dp, button.height.coerceAtLeast(0f).dp)
+            .zIndex(button.zIndex.toFloat())
+    shadowElevation(style.boxShadow)?.let { elevation ->
+        modifier = modifier.shadow(elevation.dp, shape, clip = false)
+    }
+    modifier =
+        modifier
+            .graphicsLayer { applyCssTransform(style.transform) }
+            .alpha((style.opacity * filterOpacity(style.filter)).coerceIn(0f, 1f))
+            .clip(shape)
+            .background(cssColor(style.backgroundColor, Color.Transparent), shape)
     if (style.borderWidth > 0f) {
-        modifier = modifier.border(style.borderWidth.dp, cssColor(style.borderColor, Color.Transparent), shape)
+        modifier =
+            modifier.border(
+                style.borderWidth.dp,
+                cssColor(style.borderColor, Color.Transparent),
+                shape,
+            )
     }
     if (button.enabled) modifier = modifier.clickable(role = Role.Button) { onPress(button.id) }
 
@@ -186,16 +207,19 @@ private fun NativeButton(button: NativeLayoutButton, onPress: (String) -> Unit) 
             letterSpacing = style.letterSpacing.sp,
             textAlign = textAlign(style.textAlign),
             softWrap = !style.whiteSpace.equals("nowrap", ignoreCase = true),
-            maxLines = if (style.whiteSpace.equals("nowrap", ignoreCase = true)) 1 else Int.MAX_VALUE,
-            overflow = if (style.textOverflow.equals("ellipsis", ignoreCase = true)) TextOverflow.Ellipsis else TextOverflow.Clip,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    start = style.paddingLeft.coerceAtLeast(0f).dp,
-                    top = style.paddingTop.coerceAtLeast(0f).dp,
-                    end = style.paddingRight.coerceAtLeast(0f).dp,
-                    bottom = style.paddingBottom.coerceAtLeast(0f).dp,
-                ),
+            maxLines =
+                if (style.whiteSpace.equals("nowrap", ignoreCase = true)) 1 else Int.MAX_VALUE,
+            overflow =
+                if (style.textOverflow.equals("ellipsis", ignoreCase = true)) TextOverflow.Ellipsis
+                else TextOverflow.Clip,
+            modifier =
+                Modifier.fillMaxWidth()
+                    .padding(
+                        start = style.paddingLeft.coerceAtLeast(0f).dp,
+                        top = style.paddingTop.coerceAtLeast(0f).dp,
+                        end = style.paddingRight.coerceAtLeast(0f).dp,
+                        bottom = style.paddingBottom.coerceAtLeast(0f).dp,
+                    ),
         )
     }
 }
@@ -204,13 +228,20 @@ private fun NativeButton(button: NativeLayoutButton, onPress: (String) -> Unit) 
 private fun ButtonBackground(style: NativeButtonStyle) {
     val uriString = style.backgroundImage
     val context = LocalContext.current
-    val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, uriString) {
-        value = if (uriString.isNullOrBlank()) null else withContext(Dispatchers.IO) {
-            runCatching {
-                context.contentResolver.openInputStream(Uri.parse(uriString))?.use(BitmapFactory::decodeStream)
-            }.getOrNull()
+    val bitmap by
+        produceState<android.graphics.Bitmap?>(initialValue = null, uriString) {
+            value =
+                if (uriString.isNullOrBlank()) null
+                else
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                                context.contentResolver
+                                    .openInputStream(Uri.parse(uriString))
+                                    ?.use(BitmapFactory::decodeStream)
+                            }
+                            .getOrNull()
+                    }
         }
-    }
     bitmap?.let {
         Image(
             bitmap = it.asImageBitmap(),
@@ -222,12 +253,13 @@ private fun ButtonBackground(style: NativeButtonStyle) {
     }
 }
 
-private fun backgroundScale(value: String): ContentScale = when {
-    value.equals("contain", ignoreCase = true) -> ContentScale.Fit
-    value.equals("auto", ignoreCase = true) -> ContentScale.None
-    value.contains("100% 100%", ignoreCase = true) -> ContentScale.FillBounds
-    else -> ContentScale.Crop
-}
+private fun backgroundScale(value: String): ContentScale =
+    when {
+        value.equals("contain", ignoreCase = true) -> ContentScale.Fit
+        value.equals("auto", ignoreCase = true) -> ContentScale.None
+        value.contains("100% 100%", ignoreCase = true) -> ContentScale.FillBounds
+        else -> ContentScale.Crop
+    }
 
 private fun backgroundAlignment(value: String): Alignment {
     val lower = value.lowercase()
@@ -244,46 +276,77 @@ private fun backgroundAlignment(value: String): Alignment {
     }
 }
 
-private fun verticalAlignment(value: String): Alignment = when (value.lowercase()) {
-    "start", "flex-start" -> Alignment.TopCenter
-    "end", "flex-end" -> Alignment.BottomCenter
-    else -> Alignment.Center
-}
+private fun verticalAlignment(value: String): Alignment =
+    when (value.lowercase()) {
+        "start",
+        "flex-start" -> Alignment.TopCenter
+        "end",
+        "flex-end" -> Alignment.BottomCenter
+        else -> Alignment.Center
+    }
 
-private fun textAlign(value: String): TextAlign = when (value.lowercase()) {
-    "left", "start" -> TextAlign.Start
-    "right", "end" -> TextAlign.End
-    "justify" -> TextAlign.Justify
-    else -> TextAlign.Center
-}
+private fun textAlign(value: String): TextAlign =
+    when (value.lowercase()) {
+        "left",
+        "start" -> TextAlign.Start
+        "right",
+        "end" -> TextAlign.End
+        "justify" -> TextAlign.Justify
+        else -> TextAlign.Center
+    }
 
 private fun cssColor(value: String?, fallback: Color): Color {
     if (value.isNullOrBlank()) return fallback
     val text = value.trim().lowercase()
     if (text == "transparent") return Color.Transparent
-    val named = mapOf("black" to Color.Black, "white" to Color.White, "red" to Color.Red, "green" to Color.Green, "blue" to Color.Blue)
-    named[text]?.let { return it }
+    val named =
+        mapOf(
+            "black" to Color.Black,
+            "white" to Color.White,
+            "red" to Color.Red,
+            "green" to Color.Green,
+            "blue" to Color.Blue,
+        )
+    named[text]?.let {
+        return it
+    }
     if (text.startsWith('#')) {
         var hex = text.drop(1)
-        if (hex.length == 3 || hex.length == 4) hex = hex.flatMap { listOf(it, it) }.joinToString("")
+        if (hex.length == 3 || hex.length == 4)
+            hex = hex.flatMap { listOf(it, it) }.joinToString("")
         runCatching {
-            when (hex.length) {
-                6 -> Color(0xff000000L or hex.toLong(16))
-                8 -> { // CSS #RRGGBBAA -> Compose ARGB
-                    val raw = hex.toLong(16)
-                    Color(((raw and 0xff) shl 24) or (raw ushr 8))
+                when (hex.length) {
+                    6 -> Color(0xff000000L or hex.toLong(16))
+                    8 -> { // CSS #RRGGBBAA -> Compose ARGB
+                        val raw = hex.toLong(16)
+                        Color(((raw and 0xff) shl 24) or (raw ushr 8))
+                    }
+                    else -> fallback
                 }
-                else -> fallback
             }
-        }.getOrNull()?.let { return it }
+            .getOrNull()
+            ?.let {
+                return it
+            }
     }
-    val components = Regex("rgba?\\(([^)]*)\\)").matchEntire(text)?.groupValues?.get(1)?.split(',')?.map(String::trim)
+    val components =
+        Regex("rgba?\\(([^)]*)\\)")
+            .matchEntire(text)
+            ?.groupValues
+            ?.get(1)
+            ?.split(',')
+            ?.map(String::trim)
     if (components != null && components.size >= 3) {
         val red = components[0].toFloatOrNull()?.div(255f) ?: return fallback
         val green = components[1].toFloatOrNull()?.div(255f) ?: return fallback
         val blue = components[2].toFloatOrNull()?.div(255f) ?: return fallback
         val alpha = components.getOrNull(3)?.toFloatOrNull() ?: 1f
-        return Color(red.coerceIn(0f, 1f), green.coerceIn(0f, 1f), blue.coerceIn(0f, 1f), alpha.coerceIn(0f, 1f))
+        return Color(
+            red.coerceIn(0f, 1f),
+            green.coerceIn(0f, 1f),
+            blue.coerceIn(0f, 1f),
+            alpha.coerceIn(0f, 1f),
+        )
     }
     return fallback
 }
@@ -292,13 +355,21 @@ private fun androidx.compose.ui.graphics.GraphicsLayerScope.applyCssTransform(va
     if (value.isNullOrBlank() || value.equals("none", ignoreCase = true)) return
     Regex("([a-zA-Z]+)\\(([^)]*)\\)").findAll(value).forEach { match ->
         val name = match.groupValues[1].lowercase()
-        val numbers = match.groupValues[2].split(',', ' ').filter(String::isNotBlank)
-            .map { it.trim().removeSuffix("px").removeSuffix("deg").toFloatOrNull() ?: 0f }
+        val numbers =
+            match.groupValues[2].split(',', ' ').filter(String::isNotBlank).map {
+                it.trim().removeSuffix("px").removeSuffix("deg").toFloatOrNull() ?: 0f
+            }
         when (name) {
-            "translate" -> { translationX = numbers.getOrElse(0) { 0f }; translationY = numbers.getOrElse(1) { 0f } }
+            "translate" -> {
+                translationX = numbers.getOrElse(0) { 0f }
+                translationY = numbers.getOrElse(1) { 0f }
+            }
             "translatex" -> translationX = numbers.getOrElse(0) { 0f }
             "translatey" -> translationY = numbers.getOrElse(0) { 0f }
-            "scale" -> { scaleX = numbers.getOrElse(0) { 1f }; scaleY = numbers.getOrElse(1) { scaleX } }
+            "scale" -> {
+                scaleX = numbers.getOrElse(0) { 1f }
+                scaleY = numbers.getOrElse(1) { scaleX }
+            }
             "rotate" -> rotationZ = numbers.getOrElse(0) { 0f }
         }
     }
@@ -306,11 +377,20 @@ private fun androidx.compose.ui.graphics.GraphicsLayerScope.applyCssTransform(va
 
 private fun shadowElevation(value: String?): Float? {
     if (value.isNullOrBlank() || value.equals("none", ignoreCase = true)) return null
-    val lengths = Regex("-?\\d+(?:\\.\\d+)?px").findAll(value).map { it.value.removeSuffix("px").toFloat() }.toList()
+    val lengths =
+        Regex("-?\\d+(?:\\.\\d+)?px")
+            .findAll(value)
+            .map { it.value.removeSuffix("px").toFloat() }
+            .toList()
     return lengths.getOrNull(2)?.coerceAtLeast(0f) ?: lengths.lastOrNull()?.coerceAtLeast(0f)
 }
 
 private fun filterOpacity(value: String?): Float {
-    val raw = value?.let { Regex("opacity\\(([^)]*)\\)", RegexOption.IGNORE_CASE).find(it)?.groupValues?.get(1) } ?: return 1f
-    return if (raw.trim().endsWith('%')) raw.trim().removeSuffix("%").toFloatOrNull()?.div(100f) ?: 1f else raw.toFloatOrNull() ?: 1f
+    val raw =
+        value?.let {
+            Regex("opacity\\(([^)]*)\\)", RegexOption.IGNORE_CASE).find(it)?.groupValues?.get(1)
+        } ?: return 1f
+    return if (raw.trim().endsWith('%'))
+        raw.trim().removeSuffix("%").toFloatOrNull()?.div(100f) ?: 1f
+    else raw.toFloatOrNull() ?: 1f
 }

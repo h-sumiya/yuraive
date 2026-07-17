@@ -1,7 +1,7 @@
 using System.Text;
+using Xunit;
 using Yuraive.Core.Models;
 using Yuraive.Core.Storage;
-using Xunit;
 
 namespace Yuraive.Core.Tests;
 

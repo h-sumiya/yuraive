@@ -13,43 +13,61 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import com.yuraive.player.playback.PlaybackRuntime
 import com.yuraive.player.ui.YuraiveApp
 import kotlinx.coroutines.launch
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 
 class MainActivity : ComponentActivity() {
-    private val openTree = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri == null) return@registerForActivityResult
-        runCatching {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    private val openTree =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri == null) return@registerForActivityResult
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            val name = DocumentFile.fromTreeUri(this, uri)?.name ?: "フォルダ"
+            (application as YuraiveApplication).library.addRoot(uri, name)
         }
-        val name = DocumentFile.fromTreeUri(this, uri)?.name ?: "フォルダ"
-        (application as YuraiveApplication).library.addRoot(uri, name)
-    }
 
-    private val createHistory = registerForActivityResult(ActivityResultContracts.CreateDocument("application/x-ndjson")) { uri ->
-        if (uri == null) return@registerForActivityResult
-        lifecycleScope.launch {
-            val text = (application as YuraiveApplication).history.exportJsonl()
-            contentResolver.openOutputStream(uri, "wt")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) }
+    private val createHistory =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/x-ndjson")) {
+            uri ->
+            if (uri == null) return@registerForActivityResult
+            lifecycleScope.launch {
+                val text = (application as YuraiveApplication).history.exportJsonl()
+                contentResolver.openOutputStream(uri, "wt")?.bufferedWriter(Charsets.UTF_8)?.use {
+                    it.write(text)
+                }
+            }
         }
-    }
 
-    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
-    private val scanWindows = registerForActivityResult(ScanContract()) { result ->
-        val payload = result.contents ?: return@registerForActivityResult
-        pairWindowsLibrary(payload)
-    }
+    private val scanWindows =
+        registerForActivityResult(ScanContract()) { result ->
+            val payload = result.contents ?: return@registerForActivityResult
+            pairWindowsLibrary(payload)
+        }
 
     private fun pairWindowsLibrary(payload: String) {
         lifecycleScope.launch {
             runCatching { (application as YuraiveApplication).library.addWindowsLibrary(payload) }
-                .onSuccess { Toast.makeText(this@MainActivity, "Windowsのライブラリを追加しました", Toast.LENGTH_SHORT).show() }
+                .onSuccess {
+                    Toast.makeText(this@MainActivity, "Windowsのライブラリを追加しました", Toast.LENGTH_SHORT)
+                        .show()
+                }
                 .onFailure { error ->
-                    Toast.makeText(this@MainActivity, error.message ?: "Windowsに接続できませんでした", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                            this@MainActivity,
+                            error.message ?: "Windowsに接続できませんでした",
+                            Toast.LENGTH_LONG,
+                        )
+                        .show()
                 }
         }
     }
@@ -75,12 +93,16 @@ class MainActivity : ComponentActivity() {
                 .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                 .setPrompt("Windows版Yuraiveに表示されたQRコードを読み取ります")
                 .setBeepEnabled(false)
-                .setOrientationLocked(false),
+                .setOrientationLocked(false)
         )
     }
 
     private fun ensureNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                    PackageManager.PERMISSION_GRANTED
+        ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }

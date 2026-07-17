@@ -7,6 +7,21 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.yuraive.player.model.GraphValidator
 import com.yuraive.player.model.YuraiveJson
+import java.io.IOException
+import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,21 +54,6 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
-import java.io.IOException
-import java.io.InputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.security.KeyStore
-import java.security.MessageDigest
-import java.util.UUID
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 @Serializable
 private data class WindowsRootConfig(
@@ -88,7 +88,11 @@ private data class PairingPayload(
             val room = uri.getQueryParameter("room").orEmpty()
             val secret = uri.getQueryParameter("secret").orEmpty()
             val deviceId = uri.getQueryParameter("device").orEmpty()
-            require(roomPattern.matches(room) && secretPattern.matches(secret) && devicePattern.matches(deviceId)) {
+            require(
+                roomPattern.matches(room) &&
+                    secretPattern.matches(secret) &&
+                    devicePattern.matches(deviceId)
+            ) {
                 "接続コードが壊れています"
             }
             return PairingPayload(
@@ -96,7 +100,8 @@ private data class PairingPayload(
                 room = room,
                 secret = secret,
                 deviceId = deviceId,
-                deviceName = uri.getQueryParameter("name")?.take(80)?.ifBlank { "Windows" } ?: "Windows",
+                deviceName =
+                    uri.getQueryParameter("name")?.take(80)?.ifBlank { "Windows" } ?: "Windows",
             )
         }
     }
@@ -109,38 +114,47 @@ data class WindowsDeviceConnection(
     val status: WindowsConnectionStatus,
 )
 
-enum class WindowsConnectionStatus { OFFLINE, CONNECTING, LOADING, CONNECTED }
+enum class WindowsConnectionStatus {
+    OFFLINE,
+    CONNECTING,
+    LOADING,
+    CONNECTED,
+}
 
 internal class WindowsPeerSourceManager(private val context: Context) {
     private val store = EncryptedWindowsRootStore(context)
     private val configs = ConcurrentHashMap<String, WindowsRootConfig>()
     private val clients = ConcurrentHashMap<String, WindowsPeerClient>()
     private val activeClientKeys = ConcurrentHashMap<String, String>()
-    private val connectionStatesMutable = MutableStateFlow<Map<String, WindowsConnectionStatus>>(emptyMap())
-    val connectionStates: StateFlow<Map<String, WindowsConnectionStatus>> = connectionStatesMutable.asStateFlow()
+    private val connectionStatesMutable =
+        MutableStateFlow<Map<String, WindowsConnectionStatus>>(emptyMap())
+    val connectionStates: StateFlow<Map<String, WindowsConnectionStatus>> =
+        connectionStatesMutable.asStateFlow()
 
-    suspend fun pair(qrPayload: String): List<RootGrant> = withContext(Dispatchers.IO) {
-        val pairing = PairingPayload.parse(qrPayload)
-        val temporary = WindowsRootConfig(
-            id = "pairing",
-            endpoint = pairing.endpoint,
-            room = pairing.room,
-            secret = pairing.secret,
-            deviceId = pairing.deviceId,
-            deviceName = pairing.deviceName,
-            rootId = "",
-            rootName = "",
-        )
-        val roots = client(temporary).roots()
-        require(roots.isNotEmpty()) { "Windowsのライブラリにフォルダがありません" }
-        roots.map { (rootId, rootName) ->
-            val id = stableId(pairing.deviceId, rootId)
-            val config = temporary.copy(id = id, rootId = rootId, rootName = rootName)
-            store.put(config)
-            configs[id] = config
-            RootGrant(rootUri(id), "${pairing.deviceName} · $rootName")
+    suspend fun pair(qrPayload: String): List<RootGrant> =
+        withContext(Dispatchers.IO) {
+            val pairing = PairingPayload.parse(qrPayload)
+            val temporary =
+                WindowsRootConfig(
+                    id = "pairing",
+                    endpoint = pairing.endpoint,
+                    room = pairing.room,
+                    secret = pairing.secret,
+                    deviceId = pairing.deviceId,
+                    deviceName = pairing.deviceName,
+                    rootId = "",
+                    rootName = "",
+                )
+            val roots = client(temporary).roots()
+            require(roots.isNotEmpty()) { "Windowsのライブラリにフォルダがありません" }
+            roots.map { (rootId, rootName) ->
+                val id = stableId(pairing.deviceId, rootId)
+                val config = temporary.copy(id = id, rootId = rootId, rootName = rootName)
+                store.put(config)
+                configs[id] = config
+                RootGrant(rootUri(id), "${pairing.deviceName} · $rootName")
+            }
         }
-    }
 
     fun isRoot(rootUri: String): Boolean = rootId(rootUri) != null
 
@@ -152,17 +166,23 @@ internal class WindowsPeerSourceManager(private val context: Context) {
         store.remove(id)
     }
 
-    fun devices(rootUris: List<String>): List<WindowsDeviceConnection> = rootUris.mapNotNull { rootUri ->
-        if (!isRoot(rootUri)) return@mapNotNull null
-        runCatching { config(rootUri) }.getOrNull()
-    }.groupBy(WindowsRootConfig::deviceId).map { (deviceId, roots) ->
-        WindowsDeviceConnection(
-            id = deviceId,
-            name = roots.first().deviceName,
-            rootUris = roots.map { rootUri(it.id) },
-            status = connectionStatesMutable.value[deviceId] ?: WindowsConnectionStatus.OFFLINE,
-        )
-    }.sortedBy { it.name.lowercase() }
+    fun devices(rootUris: List<String>): List<WindowsDeviceConnection> =
+        rootUris
+            .mapNotNull { rootUri ->
+                if (!isRoot(rootUri)) return@mapNotNull null
+                runCatching { config(rootUri) }.getOrNull()
+            }
+            .groupBy(WindowsRootConfig::deviceId)
+            .map { (deviceId, roots) ->
+                WindowsDeviceConnection(
+                    id = deviceId,
+                    name = roots.first().deviceName,
+                    rootUris = roots.map { rootUri(it.id) },
+                    status =
+                        connectionStatesMutable.value[deviceId] ?: WindowsConnectionStatus.OFFLINE,
+                )
+            }
+            .sortedBy { it.name.lowercase() }
 
     fun removeDevice(deviceId: String) {
         refreshDevice(deviceId)
@@ -195,9 +215,14 @@ internal class WindowsPeerSourceManager(private val context: Context) {
         require(offset >= 0) { "読み込み位置が不正です" }
         val config = config(rootUri)
         val path = normalize(relativePath)
-        val node = client(config).stat(config.rootId, path) ?: throw IOException("ファイルが見つかりません: $relativePath")
+        val node =
+            client(config).stat(config.rootId, path)
+                ?: throw IOException("ファイルが見つかりません: $relativePath")
         require(!node.isDirectory) { "フォルダは開けません" }
-        return RemoteRead(PeerRangeInputStream(client(config), config.rootId, path, offset, node.size), node.size)
+        return RemoteRead(
+            PeerRangeInputStream(client(config), config.rootId, path, offset, node.size),
+            node.size,
+        )
     }
 
     fun rootUriForId(id: String): String? = configById(id)?.let { rootUri(id) }
@@ -208,7 +233,9 @@ internal class WindowsPeerSourceManager(private val context: Context) {
         return clients.computeIfAbsent(key) {
             WindowsPeerClient(context, config) { connected ->
                 if (activeClientKeys[config.deviceId] == key) {
-                    connectionStatesMutable.update { states -> states + (config.deviceId to connected) }
+                    connectionStatesMutable.update { states ->
+                        states + (config.deviceId to connected)
+                    }
                 }
             }
         }
@@ -219,7 +246,8 @@ internal class WindowsPeerSourceManager(private val context: Context) {
         return configById(id) ?: error("Windowsとの接続情報がありません")
     }
 
-    private fun configById(id: String): WindowsRootConfig? = configs[id] ?: store.get(id)?.also { configs[id] = it }
+    private fun configById(id: String): WindowsRootConfig? =
+        configs[id] ?: store.get(id)?.also { configs[id] = it }
 
     private fun normalize(path: String): String {
         val value = path.trim('/')
@@ -231,15 +259,18 @@ internal class WindowsPeerSourceManager(private val context: Context) {
         const val ROOT_PREFIX = "yuraive+windows://"
         private val idPattern = Regex("^[a-f0-9]{32}$")
 
-        fun rootId(uri: String): String? = uri.removePrefix(ROOT_PREFIX)
-            .takeIf { uri.startsWith(ROOT_PREFIX) && idPattern.matches(it) }
+        fun rootId(uri: String): String? =
+            uri.removePrefix(ROOT_PREFIX).takeIf {
+                uri.startsWith(ROOT_PREFIX) && idPattern.matches(it)
+            }
 
         private fun rootUri(id: String) = "$ROOT_PREFIX$id"
 
-        private fun stableId(deviceId: String, rootId: String): String = MessageDigest.getInstance("SHA-256")
-            .digest("$deviceId\u0000$rootId".toByteArray())
-            .take(16)
-            .joinToString("") { "%02x".format(it) }
+        private fun stableId(deviceId: String, rootId: String): String =
+            MessageDigest.getInstance("SHA-256")
+                .digest("$deviceId\u0000$rootId".toByteArray())
+                .take(16)
+                .joinToString("") { "%02x".format(it) }
     }
 }
 
@@ -269,12 +300,14 @@ private class PeerRangeInputStream(
         return copied
     }
 
-    override fun available(): Int = minOf(Int.MAX_VALUE.toLong(), length - position + chunk.size - chunkOffset).toInt()
+    override fun available(): Int =
+        minOf(Int.MAX_VALUE.toLong(), length - position + chunk.size - chunkOffset).toInt()
 
     private fun ensureChunk(): Boolean {
         if (chunkOffset < chunk.size) return true
         if (position >= length) return false
-        chunk = client.read(rootId, path, position, minOf(32 * 1024L, length - position).toInt()).first
+        chunk =
+            client.read(rootId, path, position, minOf(32 * 1024L, length - position).toInt()).first
         chunkOffset = 0
         position += chunk.size
         if (chunk.isEmpty() && position < length) throw IOException("Windowsからファイルを読み込めません")
@@ -284,6 +317,7 @@ private class PeerRangeInputStream(
 
 private sealed interface PeerReply {
     data class Json(val value: JsonObject) : PeerReply
+
     data class Binary(val value: ByteArray, val totalLength: Long) : PeerReply
 }
 
@@ -292,7 +326,9 @@ private class WindowsPeerClient(
     private val config: WindowsRootConfig,
     private val connectionChanged: (WindowsConnectionStatus) -> Unit,
 ) {
-    val deviceId: String get() = config.deviceId
+    val deviceId: String
+        get() = config.deviceId
+
     private val http = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
     private val factory = factory(context)
     private val lock = Any()
@@ -339,31 +375,40 @@ private class WindowsPeerClient(
         }
     }
 
-    fun read(rootId: String, path: String, offset: Long, count: Int): Pair<ByteArray, Long> = trackedRequest {
-        val id = requestId()
-        val future = CompletableFuture<PeerReply>()
-        pending[id] = future
-        val message = buildJsonObject {
-            put("id", id); put("method", "read"); put("rootId", rootId); put("path", path)
-            put("offset", offset); put("count", count)
-        }
-        send(id, message)
-        when (val reply = await(id, future)) {
-            is PeerReply.Binary -> reply.value to reply.totalLength
-            is PeerReply.Json -> {
-                val data = reply.value["data"]?.jsonPrimitive?.contentOrNull
-                    ?: throw IOException("Windowsからファイルデータが返されませんでした")
-                val totalLength = reply.value["totalLength"]?.jsonPrimitive?.long
-                    ?: throw IOException("Windowsからファイルサイズが返されませんでした")
-                Base64.decode(data, Base64.NO_WRAP) to totalLength
+    fun read(rootId: String, path: String, offset: Long, count: Int): Pair<ByteArray, Long> =
+        trackedRequest {
+            val id = requestId()
+            val future = CompletableFuture<PeerReply>()
+            pending[id] = future
+            val message = buildJsonObject {
+                put("id", id)
+                put("method", "read")
+                put("rootId", rootId)
+                put("path", path)
+                put("offset", offset)
+                put("count", count)
+            }
+            send(id, message)
+            when (val reply = await(id, future)) {
+                is PeerReply.Binary -> reply.value to reply.totalLength
+                is PeerReply.Json -> {
+                    val data =
+                        reply.value["data"]?.jsonPrimitive?.contentOrNull
+                            ?: throw IOException("Windowsからファイルデータが返されませんでした")
+                    val totalLength =
+                        reply.value["totalLength"]?.jsonPrimitive?.long
+                            ?: throw IOException("Windowsからファイルサイズが返されませんでした")
+                    Base64.decode(data, Base64.NO_WRAP) to totalLength
+                }
             }
         }
-    }
 
     private inline fun <T> trackedRequest(block: () -> T): T {
         activeRequests.incrementAndGet()
         publishActivityState()
-        return try { block() } finally {
+        return try {
+            block()
+        } finally {
             activeRequests.decrementAndGet()
             publishActivityState()
         }
@@ -371,9 +416,11 @@ private class WindowsPeerClient(
 
     private fun publishActivityState() {
         when {
-            channel?.state() == DataChannel.State.OPEN -> connectionChanged(
-                if (activeRequests.get() > 0) WindowsConnectionStatus.LOADING else WindowsConnectionStatus.CONNECTED,
-            )
+            channel?.state() == DataChannel.State.OPEN ->
+                connectionChanged(
+                    if (activeRequests.get() > 0) WindowsConnectionStatus.LOADING
+                    else WindowsConnectionStatus.CONNECTED
+                )
             connection?.isDone == false -> connectionChanged(WindowsConnectionStatus.CONNECTING)
         }
     }
@@ -383,7 +430,8 @@ private class WindowsPeerClient(
         val future = CompletableFuture<PeerReply>()
         pending[id] = future
         val message = buildJsonObject {
-            put("id", id); put("method", method)
+            put("id", id)
+            put("method", method)
             rootId?.let { put("rootId", it) }
             path?.let { put("path", it) }
         }
@@ -398,127 +446,182 @@ private class WindowsPeerClient(
         try {
             val dataChannel = ensureConnected()
             val bytes = value.toString().toByteArray()
-            if (!dataChannel.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false))) throw IOException("Windowsへリクエストを送信できません")
+            if (!dataChannel.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false)))
+                throw IOException("Windowsへリクエストを送信できません")
         } catch (error: Throwable) {
             pending.remove(id)?.completeExceptionally(error)
         }
     }
 
-    private fun await(id: String, future: CompletableFuture<PeerReply>): PeerReply = try {
-        future.get(15, TimeUnit.SECONDS)
-    } catch (error: Exception) {
-        throw IOException("Windowsから応答がありません", error)
-    } finally {
-        pending.remove(id)
-    }
+    private fun await(id: String, future: CompletableFuture<PeerReply>): PeerReply =
+        try {
+            future.get(15, TimeUnit.SECONDS)
+        } catch (error: Exception) {
+            throw IOException("Windowsから応答がありません", error)
+        } finally {
+            pending.remove(id)
+        }
 
     private fun ensureConnected(): DataChannel {
-        val future = synchronized(lock) {
-            channel?.takeIf { it.state() == DataChannel.State.OPEN }?.let { return it }
-            connection?.takeIf { !it.isDone } ?: CompletableFuture<DataChannel>().also {
-                connection = it
-                beginConnection(it)
+        val future =
+            synchronized(lock) {
+                channel
+                    ?.takeIf { it.state() == DataChannel.State.OPEN }
+                    ?.let {
+                        return it
+                    }
+                connection?.takeIf { !it.isDone }
+                    ?: CompletableFuture<DataChannel>().also {
+                        connection = it
+                        beginConnection(it)
+                    }
             }
+        return try {
+            future.get(15, TimeUnit.SECONDS)
+        } catch (error: Exception) {
+            throw IOException("WindowsにP2P接続できません。両方のアプリとネットワークを確認してください", error)
         }
-        return try { future.get(15, TimeUnit.SECONDS) }
-        catch (error: Exception) { throw IOException("WindowsにP2P接続できません。両方のアプリとネットワークを確認してください", error) }
     }
 
     private fun beginConnection(ready: CompletableFuture<DataChannel>) {
         connectionChanged(WindowsConnectionStatus.CONNECTING)
         synchronized(lock) {
-            channel?.dispose(); channel = null
-            peer?.close(); peer?.dispose(); peer = null
-            socket?.cancel(); socket = null
+            channel?.dispose()
+            channel = null
+            peer?.close()
+            peer?.dispose()
+            peer = null
+            socket?.cancel()
+            socket = null
             remoteDescriptionReady = false
             queuedCandidates.clear()
         }
-        val rtcConfig = PeerConnection.RTCConfiguration(
-            listOf(PeerConnection.IceServer.builder(STUN_URL).createIceServer()),
-        )
-        val createdPeer = factory.createPeerConnection(rtcConfig, PeerObserver(ready))
-            ?: run { ready.completeExceptionally(IOException("WebRTCを初期化できません")); return }
+        val rtcConfig =
+            PeerConnection.RTCConfiguration(
+                listOf(PeerConnection.IceServer.builder(STUN_URL).createIceServer())
+            )
+        val createdPeer =
+            factory.createPeerConnection(rtcConfig, PeerObserver(ready))
+                ?: run {
+                    ready.completeExceptionally(IOException("WebRTCを初期化できません"))
+                    return
+                }
         synchronized(lock) { peer = createdPeer }
-        val request = Request.Builder()
-            .url("${config.endpoint}/${config.room}?role=client")
-            .header("Authorization", "Bearer ${config.secret}")
-            .build()
+        val request =
+            Request.Builder()
+                .url("${config.endpoint}/${config.room}?role=client")
+                .header("Authorization", "Bearer ${config.secret}")
+                .build()
         socket = http.newWebSocket(request, SignalListener(ready))
     }
 
-    private inner class SignalListener(private val ready: CompletableFuture<DataChannel>) : WebSocketListener() {
+    private inner class SignalListener(private val ready: CompletableFuture<DataChannel>) :
+        WebSocketListener() {
         override fun onMessage(webSocket: WebSocket, text: String) {
             runCatching {
-                val message = YuraiveJson.format.parseToJsonElement(text).jsonObject
-                when (message["type"]?.jsonPrimitive?.contentOrNull) {
-                    "offer" -> applyOffer(message["sdp"]!!.jsonPrimitive.content, ready)
-                    "candidate" -> {
-                        val candidate = IceCandidate(
-                            message["sdpMid"]?.jsonPrimitive?.contentOrNull ?: "0",
-                            message["sdpMLineIndex"]?.jsonPrimitive?.int ?: 0,
-                            message["candidate"]!!.jsonPrimitive.content,
-                        )
-                        synchronized(lock) {
-                            if (remoteDescriptionReady) peer?.addIceCandidate(candidate) else queuedCandidates += candidate
+                    val message = YuraiveJson.format.parseToJsonElement(text).jsonObject
+                    when (message["type"]?.jsonPrimitive?.contentOrNull) {
+                        "offer" -> applyOffer(message["sdp"]!!.jsonPrimitive.content, ready)
+                        "candidate" -> {
+                            val candidate =
+                                IceCandidate(
+                                    message["sdpMid"]?.jsonPrimitive?.contentOrNull ?: "0",
+                                    message["sdpMLineIndex"]?.jsonPrimitive?.int ?: 0,
+                                    message["candidate"]!!.jsonPrimitive.content,
+                                )
+                            synchronized(lock) {
+                                if (remoteDescriptionReady) peer?.addIceCandidate(candidate)
+                                else queuedCandidates += candidate
+                            }
                         }
+                        "peer_left" -> failConnection(ready, IOException("Windowsとの接続が閉じられました"))
                     }
-                    "peer_left" -> failConnection(ready, IOException("Windowsとの接続が閉じられました"))
                 }
-            }.onFailure { failConnection(ready, it) }
+                .onFailure { failConnection(ready, it) }
         }
 
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = failConnection(ready, t)
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) =
+            failConnection(ready, t)
     }
 
     private fun applyOffer(sdp: String, ready: CompletableFuture<DataChannel>) {
         val current = synchronized(lock) { peer } ?: return
-        current.setRemoteDescription(object : SimpleSdpObserver() {
-            override fun onSetSuccess() {
-                synchronized(lock) {
-                    remoteDescriptionReady = true
-                    queuedCandidates.forEach(current::addIceCandidate)
-                    queuedCandidates.clear()
-                }
-                current.createAnswer(object : SimpleSdpObserver() {
-                    override fun onCreateSuccess(description: SessionDescription) {
-                        current.setLocalDescription(object : SimpleSdpObserver() {
-                            override fun onSetSuccess() {
-                                sendSignal(buildJsonObject { put("type", "answer"); put("sdp", description.description) })
-                            }
-                            override fun onSetFailure(error: String) = failConnection(ready, IOException(error))
-                        }, description)
+        current.setRemoteDescription(
+            object : SimpleSdpObserver() {
+                override fun onSetSuccess() {
+                    synchronized(lock) {
+                        remoteDescriptionReady = true
+                        queuedCandidates.forEach(current::addIceCandidate)
+                        queuedCandidates.clear()
                     }
-                    override fun onCreateFailure(error: String) = failConnection(ready, IOException(error))
-                }, org.webrtc.MediaConstraints())
-            }
-            override fun onSetFailure(error: String) = failConnection(ready, IOException(error))
-        }, SessionDescription(SessionDescription.Type.OFFER, sdp))
+                    current.createAnswer(
+                        object : SimpleSdpObserver() {
+                            override fun onCreateSuccess(description: SessionDescription) {
+                                current.setLocalDescription(
+                                    object : SimpleSdpObserver() {
+                                        override fun onSetSuccess() {
+                                            sendSignal(
+                                                buildJsonObject {
+                                                    put("type", "answer")
+                                                    put("sdp", description.description)
+                                                }
+                                            )
+                                        }
+
+                                        override fun onSetFailure(error: String) =
+                                            failConnection(ready, IOException(error))
+                                    },
+                                    description,
+                                )
+                            }
+
+                            override fun onCreateFailure(error: String) =
+                                failConnection(ready, IOException(error))
+                        },
+                        org.webrtc.MediaConstraints(),
+                    )
+                }
+
+                override fun onSetFailure(error: String) = failConnection(ready, IOException(error))
+            },
+            SessionDescription(SessionDescription.Type.OFFER, sdp),
+        )
     }
 
-    private inner class PeerObserver(private val ready: CompletableFuture<DataChannel>) : PeerConnection.Observer {
+    private inner class PeerObserver(private val ready: CompletableFuture<DataChannel>) :
+        PeerConnection.Observer {
         override fun onIceCandidate(candidate: IceCandidate) {
-            sendSignal(buildJsonObject {
-                put("type", "candidate"); put("candidate", candidate.sdp)
-                put("sdpMid", candidate.sdpMid ?: "0"); put("sdpMLineIndex", candidate.sdpMLineIndex)
-            })
+            sendSignal(
+                buildJsonObject {
+                    put("type", "candidate")
+                    put("candidate", candidate.sdp)
+                    put("sdpMid", candidate.sdpMid ?: "0")
+                    put("sdpMLineIndex", candidate.sdpMLineIndex)
+                }
+            )
         }
 
         override fun onDataChannel(value: DataChannel) {
             synchronized(lock) { channel = value }
-            value.registerObserver(object : DataChannel.Observer {
-                override fun onBufferedAmountChange(previousAmount: Long) = Unit
-                override fun onStateChange() {
-                    if (value.state() == DataChannel.State.OPEN) {
-                        publishActivityState()
-                        ready.complete(value)
+            value.registerObserver(
+                object : DataChannel.Observer {
+                    override fun onBufferedAmountChange(previousAmount: Long) = Unit
+
+                    override fun onStateChange() {
+                        if (value.state() == DataChannel.State.OPEN) {
+                            publishActivityState()
+                            ready.complete(value)
+                        }
+                        if (value.state() == DataChannel.State.CLOSED) {
+                            connectionChanged(WindowsConnectionStatus.OFFLINE)
+                            if (!ready.isDone)
+                                failConnection(ready, IOException("Windowsとのデータ接続が閉じられました"))
+                        }
                     }
-                    if (value.state() == DataChannel.State.CLOSED) {
-                        connectionChanged(WindowsConnectionStatus.OFFLINE)
-                        if (!ready.isDone) failConnection(ready, IOException("Windowsとのデータ接続が閉じられました"))
-                    }
+
+                    override fun onMessage(buffer: DataChannel.Buffer) = receiveData(buffer)
                 }
-                override fun onMessage(buffer: DataChannel.Buffer) = receiveData(buffer)
-            })
+            )
             if (value.state() == DataChannel.State.OPEN) {
                 publishActivityState()
                 ready.complete(value)
@@ -539,13 +642,21 @@ private class WindowsPeerClient(
         }
 
         override fun onSignalingChange(newState: PeerConnection.SignalingState) = Unit
+
         override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) = Unit
+
         override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
+
         override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) = Unit
+
         override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
+
         override fun onAddStream(stream: MediaStream) = Unit
+
         override fun onRemoveStream(stream: MediaStream) = Unit
+
         override fun onRenegotiationNeeded() = Unit
+
         override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) = Unit
     }
 
@@ -559,10 +670,18 @@ private class WindowsPeerClient(
             pending.remove(id)?.complete(PeerReply.Binary(bytes.copyOfRange(40, bytes.size), total))
         } else {
             runCatching {
-                val value = YuraiveJson.format.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject
+                val value =
+                    YuraiveJson.format.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject
                 val id = value["id"]!!.jsonPrimitive.content
                 if (value["ok"]?.jsonPrimitive?.booleanOrNull != true) {
-                    pending.remove(id)?.completeExceptionally(IOException(value["error"]?.jsonPrimitive?.contentOrNull ?: "Windowsで読み込みに失敗しました"))
+                    pending
+                        .remove(id)
+                        ?.completeExceptionally(
+                            IOException(
+                                value["error"]?.jsonPrimitive?.contentOrNull
+                                    ?: "Windowsで読み込みに失敗しました"
+                            )
+                        )
                 } else pending.remove(id)?.complete(PeerReply.Json(value))
             }
         }
@@ -598,16 +717,23 @@ private class WindowsPeerClient(
         private val factoryLock = Any()
         @Volatile private var sharedFactory: PeerConnectionFactory? = null
 
-        private fun factory(context: Context): PeerConnectionFactory = sharedFactory ?: synchronized(factoryLock) {
-            sharedFactory ?: run {
-                PeerConnectionFactory.initialize(
-                    PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
-                        .setEnableInternalTracer(false)
-                        .createInitializationOptions(),
-                )
-                PeerConnectionFactory.builder().createPeerConnectionFactory().also { sharedFactory = it }
-            }
-        }
+        private fun factory(context: Context): PeerConnectionFactory =
+            sharedFactory
+                ?: synchronized(factoryLock) {
+                    sharedFactory
+                        ?: run {
+                            PeerConnectionFactory.initialize(
+                                PeerConnectionFactory.InitializationOptions.builder(
+                                        context.applicationContext
+                                    )
+                                    .setEnableInternalTracer(false)
+                                    .createInitializationOptions()
+                            )
+                            PeerConnectionFactory.builder().createPeerConnectionFactory().also {
+                                sharedFactory = it
+                            }
+                        }
+                }
 
         private fun requestId(): String = UUID.randomUUID().toString().replace("-", "")
     }
@@ -615,8 +741,11 @@ private class WindowsPeerClient(
 
 private open class SimpleSdpObserver : SdpObserver {
     override fun onCreateSuccess(description: SessionDescription) = Unit
+
     override fun onSetSuccess() = Unit
+
     override fun onCreateFailure(error: String) = Unit
+
     override fun onSetFailure(error: String) = Unit
 }
 
@@ -632,36 +761,59 @@ private class EncryptedWindowsRootStore(context: Context) {
         payload[0] = cipher.iv.size.toByte()
         cipher.iv.copyInto(payload, 1)
         encrypted.copyInto(payload, 1 + cipher.iv.size)
-        preferences.edit().putString(config.id, Base64.encodeToString(payload, Base64.NO_WRAP)).apply()
+        preferences
+            .edit()
+            .putString(config.id, Base64.encodeToString(payload, Base64.NO_WRAP))
+            .apply()
     }
 
-    fun get(id: String): WindowsRootConfig? = preferences.getString(id, null)?.let { encoded ->
-        runCatching {
-            val payload = Base64.decode(encoded, Base64.NO_WRAP)
-            val ivSize = payload.first().toInt() and 0xff
-            require(ivSize in 12..16 && payload.size > ivSize + 1)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, payload.copyOfRange(1, ivSize + 1)))
-            cipher.updateAAD(id.toByteArray())
-            YuraiveJson.format.decodeFromString<WindowsRootConfig>(cipher.doFinal(payload.copyOfRange(ivSize + 1, payload.size)).decodeToString())
-                .also { require(it.id == id) }
-        }.getOrNull()
-    }
+    fun get(id: String): WindowsRootConfig? =
+        preferences.getString(id, null)?.let { encoded ->
+            runCatching {
+                    val payload = Base64.decode(encoded, Base64.NO_WRAP)
+                    val ivSize = payload.first().toInt() and 0xff
+                    require(ivSize in 12..16 && payload.size > ivSize + 1)
+                    val cipher = Cipher.getInstance(TRANSFORMATION)
+                    cipher.init(
+                        Cipher.DECRYPT_MODE,
+                        key(),
+                        GCMParameterSpec(128, payload.copyOfRange(1, ivSize + 1)),
+                    )
+                    cipher.updateAAD(id.toByteArray())
+                    YuraiveJson.format
+                        .decodeFromString<WindowsRootConfig>(
+                            cipher
+                                .doFinal(payload.copyOfRange(ivSize + 1, payload.size))
+                                .decodeToString()
+                        )
+                        .also { require(it.id == id) }
+                }
+                .getOrNull()
+        }
 
-    fun remove(id: String) { preferences.edit().remove(id).apply() }
+    fun remove(id: String) {
+        preferences.edit().remove(id).apply()
+    }
 
     private fun key(): SecretKey {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
-            init(
-                KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .build(),
-            )
-        }.generateKey()
+        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let {
+            return it
+        }
+        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+            .apply {
+                init(
+                    KeyGenParameterSpec.Builder(
+                            KEY_ALIAS,
+                            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                        )
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                        .setKeySize(256)
+                        .build()
+                )
+            }
+            .generateKey()
     }
 
     companion object {

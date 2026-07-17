@@ -1,0 +1,333 @@
+/* Starlark workspace */
+.tree-entry.script .tree-entry-main .icon,
+.tab.script > .icon,
+.script-tool {
+  color: #c99be7;
+}
+.tree-entry.layout .tree-entry-main .icon,
+.tab.layout > .icon {
+  color: #83cdb3;
+}
+.tab i {
+  margin-left: auto;
+}
+.tab i + button {
+  margin-left: 0;
+}
+.tab.script.active {
+  box-shadow: inset 0 2px #a96fd0;
+}
+.tab.layout.active {
+  box-shadow: inset 0 2px #5ab18f;
+}
+.tree-context-menu {
+  width: 235px;
+}
+.tree-context-menu > label {
+  padding: 3px 7px 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-context-menu.create,
+.tree-context-menu.rename {
+  width: 270px;
+}
+.graph-node.script-node {
+  border-color: #594669;
+  background: #211c27;
+}
+.graph-node.script-node .node-type-icon {
+  background: #372943;
+  color: #d4a8ef;
+}
+.graph-node.script-node .compact-links {
+  color: #b28ac9;
+  font:
+    8px ui-monospace,
+    monospace;
+}
+.script-reference {
+  display: flex;
+  min-width: 0;
+}
+.script-reference select {
+  min-width: 0;
+  flex: 1;
+}
+.script-reference .icon-button {
+  flex: 0 0 27px;
+  height: 27px;
+  margin-left: 3px;
+  border: 1px solid #3b454f;
+  color: #c99be7;
+}
+.script-node-identity .node-color {
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  color: white;
+}
+.script-node-hint {
+  display: flex;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid #41344a;
+  border-radius: 3px;
+  background: #211b27;
+  color: #a78fb5;
+  font-size: 8px;
+  line-height: 1.5;
+}
+.script-node-hint .icon {
+  color: #ca9ce5;
+}
+
+.script-editor-pane {
+  grid-row: 2 / -1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 38px minmax(0, 1fr) 28px;
+  background: #101419;
+}
+.script-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 8px 0 13px;
+  border-bottom: 1px solid var(--border);
+  background: #1a1f25;
+}
+.script-breadcrumb {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #697681;
+  font:
+    9px ui-monospace,
+    monospace;
+}
+.script-breadcrumb strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c1cad2;
+  font-weight: 500;
+}
+.script-breadcrumb i {
+  padding: 2px 5px;
+  border-radius: 8px;
+  background: #4a3a20;
+  color: #e0b86b;
+  font:
+    7px system-ui,
+    sans-serif;
+}
+.script-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.script-actions select {
+  height: 25px;
+  min-width: 110px;
+  padding: 0 6px;
+  border: 1px solid #37414a;
+  border-radius: 3px;
+  background: #20262c;
+  color: #b8c1c9;
+  font:
+    9px ui-monospace,
+    monospace;
+}
+.script-editor-host {
+  min-height: 0;
+  overflow: hidden;
+}
+.script-editor-host .cm-editor {
+  height: 100%;
+}
+.script-editor-host .cm-scroller {
+  overflow: auto;
+}
+.script-editor-host .cm-focused {
+  outline: none;
+}
+.script-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0 9px 0 12px;
+  border-top: 1px solid #262e36;
+  background: #171c21;
+  color: #74808b;
+  font:
+    8px ui-monospace,
+    monospace;
+}
+.script-status > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.script-status > div:first-child span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.script-status > div:last-child {
+  flex: 0 0 auto;
+}
+.script-status.success strong {
+  color: var(--success);
+}
+.script-status.error {
+  background: #281c20;
+  color: #d18c93;
+}
+.script-status.error strong {
+  color: var(--danger);
+}
+.script-inspector .panel-title small {
+  color: #a978c9;
+  font:
+    8px ui-monospace,
+    monospace;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.script-file-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: #1a1e24;
+}
+.script-file-card > span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  background: #33253e;
+  color: #cd9de8;
+}
+.script-file-card > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.script-file-card strong,
+.script-file-card small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.script-file-card strong {
+  font-size: 11px;
+}
+.script-file-card small {
+  color: var(--faint);
+  font:
+    8px ui-monospace,
+    monospace;
+}
+.script-side-section {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.script-side-section h3 {
+  margin: 0 0 8px;
+  color: #8f9aa4;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.outline-function {
+  height: 27px;
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  padding: 0 5px;
+  border-radius: 2px;
+  color: #adb7c0;
+  font:
+    9px ui-monospace,
+    monospace;
+}
+.outline-function:hover {
+  background: var(--bg-hover);
+}
+.outline-function > span {
+  color: #ca97e6;
+}
+.outline-function small {
+  color: var(--faint);
+}
+.script-side-section pre {
+  max-height: 180px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid #303840;
+  background: #11151a;
+  color: #aebbc5;
+  font:
+    8px/1.5 ui-monospace,
+    monospace;
+  white-space: pre-wrap;
+}
+.script-running {
+  color: #d6aa62;
+  font-size: 9px;
+}
+.script-test-error {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  border-left: 2px solid var(--danger);
+  background: #281c20;
+  color: #c88e94;
+  font-size: 8px;
+  line-height: 1.45;
+}
+.script-prints {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 7px;
+}
+.script-prints code {
+  padding: 3px 5px;
+  background: #11151a;
+  color: #91aab9;
+  font-size: 8px;
+}
+.script-api {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+.script-api h3:not(:first-child) {
+  margin-top: 10px;
+}
+.script-api code {
+  color: #b9d38f;
+  font:
+    8px ui-monospace,
+    monospace;
+}
+.script-api span {
+  margin-bottom: 3px;
+  color: #697681;
+  font-size: 8px;
+}

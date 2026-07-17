@@ -1,6 +1,5 @@
 package com.yuraive.player.model
 
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonObject
@@ -29,11 +28,7 @@ data class YuraiveMetadata(
     val socialLinks: List<SocialLink> = emptyList(),
 )
 
-@Serializable
-data class SocialLink(
-    val label: String,
-    val url: String,
-)
+@Serializable data class SocialLink(val label: String, val url: String)
 
 @Serializable
 data class PlayerControlSettings(
@@ -51,16 +46,17 @@ data class PlayerControlSettings(
 ) {
     companion object {
         val Default = PlayerControlSettings()
-        val AllEnabled = PlayerControlSettings(
-            allowStop = true,
-            showSeekBar = true,
-            showPlaybackTime = true,
-            allowSeek = true,
-            showSceneName = true,
-            showFileName = true,
-            allowNext = true,
-            allowPrevious = true,
-        )
+        val AllEnabled =
+            PlayerControlSettings(
+                allowStop = true,
+                showSeekBar = true,
+                showPlaybackTime = true,
+                allowSeek = true,
+                showSceneName = true,
+                showFileName = true,
+                allowNext = true,
+                allowPrevious = true,
+            )
     }
 }
 
@@ -77,15 +73,10 @@ data class YuraiveNode(
     val editor: JsonObject? = null,
 )
 
-@Serializable
-data class ScriptCall(val path: String, val function: String? = null)
+@Serializable data class ScriptCall(val path: String, val function: String? = null)
 
 @Serializable
-data class MediaCandidate(
-    val id: String,
-    val weight: Double,
-    val source: YuraiveMediaSource,
-)
+data class MediaCandidate(val id: String, val weight: Double, val source: YuraiveMediaSource)
 
 @Serializable
 data class YuraiveMediaSource(
@@ -101,11 +92,9 @@ data class YuraiveMediaSource(
     val imageTransition: ImageTransition? = null,
 )
 
-@Serializable
-data class ImageTransition(val type: String, val durationMs: Long)
+@Serializable data class ImageTransition(val type: String, val durationMs: Long)
 
-@Serializable
-data class Transition(val to: String, val weight: Double)
+@Serializable data class Transition(val to: String, val weight: Double)
 
 @Serializable
 data class YuraiveButton(
@@ -120,8 +109,7 @@ data class YuraiveButton(
     val editor: JsonObject? = null,
 )
 
-@Serializable
-data class VisibilityRange(val fromMs: Long, val toMs: Long? = null)
+@Serializable data class VisibilityRange(val fromMs: Long, val toMs: Long? = null)
 
 @Serializable
 data class ButtonRenderStyle(
@@ -146,15 +134,19 @@ data class ButtonRenderResult(
 )
 
 @Serializable
-data class GraphRef(
-    val rootUri: String,
-    val rootName: String,
-    val relativePath: String,
-) {
-    val fileName: String get() = relativePath.substringAfterLast('/')
-    val parentPath: String get() = relativePath.substringBeforeLast('/', "")
-    val contentFolderName: String get() = parentPath.substringAfterLast('/').ifBlank { rootName }
-    val graphId: String get() = "$rootUri::${if (relativePath.endsWith(".yuraive", ignoreCase = true) && !relativePath.endsWith(".yuraive.json", ignoreCase = true)) relativePath.dropLast(".yuraive".length) + ".yuraive.json" else relativePath}"
+data class GraphRef(val rootUri: String, val rootName: String, val relativePath: String) {
+    val fileName: String
+        get() = relativePath.substringAfterLast('/')
+
+    val parentPath: String
+        get() = relativePath.substringBeforeLast('/', "")
+
+    val contentFolderName: String
+        get() = parentPath.substringAfterLast('/').ifBlank { rootName }
+
+    val graphId: String
+        get() =
+            "$rootUri::${if (relativePath.endsWith(".yuraive", ignoreCase = true) && !relativePath.endsWith(".yuraive.json", ignoreCase = true)) relativePath.dropLast(".yuraive".length) + ".yuraive.json" else relativePath}"
 }
 
 @Serializable
@@ -196,12 +188,11 @@ data class PlaybackSnapshot(
     val savedAt: String,
 )
 
-data class ValidationIssue(
-    val severity: Severity,
-    val message: String,
-    val path: String? = null,
-) {
-    enum class Severity { ERROR, WARNING }
+data class ValidationIssue(val severity: Severity, val message: String, val path: String? = null) {
+    enum class Severity {
+        ERROR,
+        WARNING,
+    }
 }
 
 @Serializable
@@ -216,12 +207,13 @@ data class RenderedButton(
 )
 
 object YuraiveJson {
-    val format = kotlinx.serialization.json.Json {
-        ignoreUnknownKeys = true
-        explicitNulls = false
-        encodeDefaults = true
-        isLenient = false
-    }
+    val format =
+        kotlinx.serialization.json.Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+            encodeDefaults = true
+            isLenient = false
+        }
 }
 
 @Serializable
@@ -231,11 +223,7 @@ data class GraphMetadataPreview(
     val thumbnail: String? = null,
 )
 
-@Serializable
-data class BundledTextAsset(
-    val kind: String,
-    val content: String,
-)
+@Serializable data class BundledTextAsset(val kind: String, val content: String)
 
 @Serializable
 private data class BundleDecodeResult(
@@ -245,18 +233,21 @@ private data class BundleDecodeResult(
     val error: String? = null,
 )
 
-data class DecodedBundle(
-    val graphJson: String,
-    val textAssets: Map<String, BundledTextAsset>,
-)
+data class DecodedBundle(val graphJson: String, val textAssets: Map<String, BundledTextAsset>)
 
 internal object NativeBundleDecoder {
-    init { System.loadLibrary("yuraive_runtime") }
+    init {
+        System.loadLibrary("yuraive_runtime")
+    }
 
     external fun decodeNative(input: ByteArray): String
 
     fun decode(input: ByteArray): DecodedBundle {
-        val result = YuraiveJson.format.decodeFromString(BundleDecodeResult.serializer(), decodeNative(input))
+        val result =
+            YuraiveJson.format.decodeFromString(
+                BundleDecodeResult.serializer(),
+                decodeNative(input),
+            )
         require(result.error == null) { result.error ?: "Yuraiveバンドルを読み込めません" }
         require(result.bundleVersion == 1 && result.graphJson != null) { "Yuraiveバンドルの内容が不正です" }
         return DecodedBundle(result.graphJson, result.textAssets)
@@ -272,19 +263,26 @@ private data class MetadataPrefixResult(
 
 internal sealed interface MetadataPrefixRead {
     data class Found(val metadata: GraphMetadataPreview?) : MetadataPrefixRead
+
     data object Missing : MetadataPrefixRead
+
     data object NeedMore : MetadataPrefixRead
+
     data class Invalid(val message: String) : MetadataPrefixRead
 }
 
 internal object GraphMetadataExtractor {
     fun read(prefix: String): MetadataPrefixRead {
-        val result = runCatching {
-            YuraiveJson.format.decodeFromString(
-                MetadataPrefixResult.serializer(),
-                NativeGraphMetadataExtractor.extractNative(prefix),
-            )
-        }.getOrElse { return MetadataPrefixRead.Invalid(it.message ?: "メタデータを解析できません") }
+        val result =
+            runCatching {
+                    YuraiveJson.format.decodeFromString(
+                        MetadataPrefixResult.serializer(),
+                        NativeGraphMetadataExtractor.extractNative(prefix),
+                    )
+                }
+                .getOrElse {
+                    return MetadataPrefixRead.Invalid(it.message ?: "メタデータを解析できません")
+                }
         return when (result.status) {
             "found" -> MetadataPrefixRead.Found(result.metadata)
             "missing" -> MetadataPrefixRead.Missing
@@ -295,7 +293,9 @@ internal object GraphMetadataExtractor {
 }
 
 private object NativeGraphMetadataExtractor {
-    init { System.loadLibrary("yuraive_runtime") }
+    init {
+        System.loadLibrary("yuraive_runtime")
+    }
 
     external fun extractNative(prefix: String): String
 }
@@ -325,23 +325,34 @@ object GraphValidator {
         graph.playerControls.values.forEach { control -> control.layout?.let(::add) }
     }
 
-    fun isSafeRelativePath(path: String): Boolean = path.isNotBlank() &&
-        !path.startsWith('/') && ':' !in path && '\\' !in path && path.split('/').none { it == "." || it == ".." || it.isBlank() }
+    fun isSafeRelativePath(path: String): Boolean =
+        path.isNotBlank() &&
+            !path.startsWith('/') &&
+            ':' !in path &&
+            '\\' !in path &&
+            path.split('/').none { it == "." || it == ".." || it.isBlank() }
 }
 
 private object NativeGraphValidator {
-    init { System.loadLibrary("yuraive_runtime") }
-
-    fun validate(json: String): List<ValidationIssue> = YuraiveJson.format.decodeFromString(
-        ListSerializer(NativeValidationIssue.serializer()),
-        validateJsonNative(json),
-    ).map { issue ->
-        ValidationIssue(
-            severity = if (issue.severity == "WARNING") ValidationIssue.Severity.WARNING else ValidationIssue.Severity.ERROR,
-            message = issue.message,
-            path = issue.path,
-        )
+    init {
+        System.loadLibrary("yuraive_runtime")
     }
+
+    fun validate(json: String): List<ValidationIssue> =
+        YuraiveJson.format
+            .decodeFromString(
+                ListSerializer(NativeValidationIssue.serializer()),
+                validateJsonNative(json),
+            )
+            .map { issue ->
+                ValidationIssue(
+                    severity =
+                        if (issue.severity == "WARNING") ValidationIssue.Severity.WARNING
+                        else ValidationIssue.Severity.ERROR,
+                    message = issue.message,
+                    path = issue.path,
+                )
+            }
 
     private external fun validateJsonNative(json: String): String
 }

@@ -358,14 +358,18 @@ mod tests {
         assert!(decode_bundle(&bad_magic).unwrap_err().contains("マジック"));
 
         let unsafe_path = bundle("{}", &[("../secret.star", "x = 1", 1)]);
-        assert!(decode_bundle(&unsafe_path)
-            .unwrap_err()
-            .contains("安全でない"));
+        assert!(
+            decode_bundle(&unsafe_path)
+                .unwrap_err()
+                .contains("安全でない")
+        );
 
         let mut truncated = bundle("{}", &[]);
         truncated.pop();
-        assert!(decode_bundle(&truncated)
-            .unwrap_err()
-            .contains("本文サイズ"));
+        assert!(
+            decode_bundle(&truncated)
+                .unwrap_err()
+                .contains("本文サイズ")
+        );
     }
 }

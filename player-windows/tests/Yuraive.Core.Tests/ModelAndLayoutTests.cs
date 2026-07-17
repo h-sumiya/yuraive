@@ -1,5 +1,5 @@
-using Yuraive.Core.Models;
 using Xunit;
+using Yuraive.Core.Models;
 
 namespace Yuraive.Core.Tests;
 

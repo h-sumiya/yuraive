@@ -21,17 +21,19 @@ class StarlarkRuntime(private val library: DocumentLibrary) {
         loadedScripts: Map<String, String>? = null,
     ): JsonElement {
         val scripts = loadedScripts ?: library.readScriptSources(ref, call.path)
-        val request = NativeStarlarkRequest(
-            path = call.path,
-            functionName = call.function?.takeIf(String::isNotBlank) ?: defaultFunction,
-            args = listOf(context),
-            scripts = scripts,
-            timeoutMs = timeoutMs.coerceIn(100, 10_000),
-        )
-        return withContext(Dispatchers.Default) {
-            val response = YuraiveJson.format.decodeFromString<NativeStarlarkResponse>(
-                NativeStarlarkEngine.run(YuraiveJson.format.encodeToString(request)),
+        val request =
+            NativeStarlarkRequest(
+                path = call.path,
+                functionName = call.function?.takeIf(String::isNotBlank) ?: defaultFunction,
+                args = listOf(context),
+                scripts = scripts,
+                timeoutMs = timeoutMs.coerceIn(100, 10_000),
             )
+        return withContext(Dispatchers.Default) {
+            val response =
+                YuraiveJson.format.decodeFromString<NativeStarlarkResponse>(
+                    NativeStarlarkEngine.run(YuraiveJson.format.encodeToString(request))
+                )
             response.error?.let(::error)
             response.value ?: JsonNull
         }
@@ -55,7 +57,9 @@ private data class NativeStarlarkResponse(
 )
 
 private object NativeStarlarkEngine {
-    init { System.loadLibrary("yuraive_runtime") }
+    init {
+        System.loadLibrary("yuraive_runtime")
+    }
 
     fun run(requestJson: String): String = runJsonNative(requestJson)
 

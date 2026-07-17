@@ -1,7 +1,22 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { buildLayoutFragment, syncLayoutRoot, updateLayoutVariables, type LayoutButton } from './layout'
+import {
+  buildLayoutFragment,
+  syncLayoutRoot,
+  updateLayoutVariables,
+  type LayoutButton,
+} from './layout'
 
-export function LayoutFrame({ source, buttons, onPress, className }: { source: string; buttons: LayoutButton[]; onPress?: (id: string) => void; className?: string }) {
+export function LayoutFrame({
+  source,
+  buttons,
+  onPress,
+  className,
+}: {
+  source: string
+  buttons: LayoutButton[]
+  onPress?: (id: string) => void
+  className?: string
+}) {
   const host = useRef<HTMLDivElement>(null)
   const fragment = useMemo(() => buildLayoutFragment(source), [source])
   const latest = useRef({ buttons, onPress })
@@ -21,7 +36,9 @@ export function LayoutFrame({ source, buttons, onPress, className }: { source: s
     root.innerHTML = fragment
     sync()
   }, [fragment])
-  useEffect(() => { sync() }, [buttons, onPress])
+  useEffect(() => {
+    sync()
+  }, [buttons, onPress])
   useEffect(() => {
     const current = host.current
     if (!current) return
@@ -30,5 +47,5 @@ export function LayoutFrame({ source, buttons, onPress, className }: { source: s
     return () => observer.disconnect()
   }, [fragment])
 
-  return <div ref={host} className={className} title="ボタンレイアウト"/>
+  return <div ref={host} className={className} title="ボタンレイアウト" />
 }

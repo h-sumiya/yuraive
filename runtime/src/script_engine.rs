@@ -1,6 +1,7 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use starlark::PrintHandler;
 use starlark::environment::{FrozenModule, Globals, GlobalsBuilder, LibraryExtension, Module};
 use starlark::eval::{Evaluator, ReturnFileLoader};
 use starlark::starlark_module;
@@ -9,7 +10,6 @@ use starlark::values::dict::{DictMut, DictRef};
 use starlark::values::list::{AllocList, ListRef};
 use starlark::values::list_or_tuple::UnpackListOrTuple;
 use starlark::values::{Heap, Value};
-use starlark::PrintHandler;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 

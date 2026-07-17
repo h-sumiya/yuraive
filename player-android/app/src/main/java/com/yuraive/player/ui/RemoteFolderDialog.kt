@@ -67,7 +67,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class RemoteFolderStep { SOURCE, CONNECTION, BROWSER }
+private enum class RemoteFolderStep {
+    SOURCE,
+    CONNECTION,
+    BROWSER,
+}
 
 @Composable
 internal fun RemoteFolderDialog(
@@ -100,25 +104,28 @@ internal fun RemoteFolderDialog(
     var loading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    fun currentConfig(): RemoteConnectionConfig = when (protocol ?: RemoteProtocol.SMB) {
-        RemoteProtocol.SMB -> RemoteConnectionConfig(
-            protocol = RemoteProtocol.SMB,
-            displayName = smbName,
-            host = smbHost,
-            port = smbPort.toIntOrNull() ?: 0,
-            share = smbShare,
-            domain = smbDomain,
-            username = smbUsername,
-            password = smbPassword,
-        )
-        RemoteProtocol.WEBDAV -> RemoteConnectionConfig(
-            protocol = RemoteProtocol.WEBDAV,
-            displayName = webDavName,
-            endpoint = webDavEndpoint,
-            username = webDavUsername,
-            password = webDavPassword,
-        )
-    }
+    fun currentConfig(): RemoteConnectionConfig =
+        when (protocol ?: RemoteProtocol.SMB) {
+            RemoteProtocol.SMB ->
+                RemoteConnectionConfig(
+                    protocol = RemoteProtocol.SMB,
+                    displayName = smbName,
+                    host = smbHost,
+                    port = smbPort.toIntOrNull() ?: 0,
+                    share = smbShare,
+                    domain = smbDomain,
+                    username = smbUsername,
+                    password = smbPassword,
+                )
+            RemoteProtocol.WEBDAV ->
+                RemoteConnectionConfig(
+                    protocol = RemoteProtocol.WEBDAV,
+                    displayName = webDavName,
+                    endpoint = webDavEndpoint,
+                    username = webDavUsername,
+                    password = webDavPassword,
+                )
+        }
 
     fun loadPath(path: String, openBrowser: Boolean = false) {
         if (loading) return
@@ -136,8 +143,9 @@ internal fun RemoteFolderDialog(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                errorMessage = error.message?.takeIf(String::isNotBlank)
-                    ?: if (openBrowser) "接続できませんでした" else "フォルダを読み込めませんでした"
+                errorMessage =
+                    error.message?.takeIf(String::isNotBlank)
+                        ?: if (openBrowser) "接続できませんでした" else "フォルダを読み込めませんでした"
             } finally {
                 loading = false
             }
@@ -166,9 +174,10 @@ internal fun RemoteFolderDialog(
     fun addCurrentFolder() {
         if (loading || loadedPath != currentPath) return
         val config = currentConfig()
-        val fallbackName = currentPath.substringAfterLast('/').ifBlank {
-            if (config.protocol == RemoteProtocol.SMB) config.share.trim() else ""
-        }
+        val fallbackName =
+            currentPath.substringAfterLast('/').ifBlank {
+                if (config.protocol == RemoteProtocol.SMB) config.share.trim() else ""
+            }
         loading = true
         errorMessage = null
         scope.launch {
@@ -209,19 +218,17 @@ internal fun RemoteFolderDialog(
     BackHandler { navigateBack() }
     Dialog(
         onDismissRequest = { if (!loading) navigateBack() },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            dismissOnClickOutside = false,
-        ),
+        properties =
+            DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false),
     ) {
         Surface(
-            modifier = Modifier
-                .widthIn(max = 560.dp)
-                .fillMaxWidth(.94f)
-                .then(
-                    if (step == RemoteFolderStep.SOURCE) Modifier.wrapContentHeight()
-                    else Modifier.fillMaxHeight(.90f)
-                ),
+            modifier =
+                Modifier.widthIn(max = 560.dp)
+                    .fillMaxWidth(.94f)
+                    .then(
+                        if (step == RemoteFolderStep.SOURCE) Modifier.wrapContentHeight()
+                        else Modifier.fillMaxHeight(.90f)
+                    ),
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 3.dp,
@@ -231,77 +238,116 @@ internal fun RemoteFolderDialog(
                 else Modifier.fillMaxSize()
             ) {
                 RemoteDialogHeader(
-                    title = when (step) {
-                        RemoteFolderStep.SOURCE -> "フォルダを追加"
-                        RemoteFolderStep.CONNECTION -> when (protocol) {
-                            RemoteProtocol.SMB -> "SMB に接続"
-                            RemoteProtocol.WEBDAV -> "WebDAV に接続"
-                            null -> "リモートに接続"
-                        }
-                        RemoteFolderStep.BROWSER -> "フォルダを選択"
-                    },
+                    title =
+                        when (step) {
+                            RemoteFolderStep.SOURCE -> "フォルダを追加"
+                            RemoteFolderStep.CONNECTION ->
+                                when (protocol) {
+                                    RemoteProtocol.SMB -> "SMB に接続"
+                                    RemoteProtocol.WEBDAV -> "WebDAV に接続"
+                                    null -> "リモートに接続"
+                                }
+                            RemoteFolderStep.BROWSER -> "フォルダを選択"
+                        },
                     onClose = onDismiss,
                 )
                 if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
 
                 when (step) {
-                    RemoteFolderStep.SOURCE -> SourceSelection(
-                        modifier = Modifier.fillMaxWidth(),
-                        onLocal = {
-                            onDismiss()
-                            onSelectLocal()
-                        },
-                        onRemote = { selected ->
-                            protocol = selected
-                            errorMessage = null
-                            step = RemoteFolderStep.CONNECTION
-                        },
-                        onWindows = {
-                            onDismiss()
-                            onSelectWindows()
-                        },
-                    )
-                    RemoteFolderStep.CONNECTION -> ConnectionForm(
-                        modifier = Modifier.weight(1f),
-                        protocol = protocol ?: RemoteProtocol.SMB,
-                        smbHost = smbHost,
-                        onSmbHostChange = { smbHost = it; errorMessage = null },
-                        smbPort = smbPort,
-                        onSmbPortChange = { smbPort = it.filter(Char::isDigit); errorMessage = null },
-                        smbShare = smbShare,
-                        onSmbShareChange = { smbShare = it; errorMessage = null },
-                        smbDomain = smbDomain,
-                        onSmbDomainChange = { smbDomain = it; errorMessage = null },
-                        smbUsername = smbUsername,
-                        onSmbUsernameChange = { smbUsername = it; errorMessage = null },
-                        smbPassword = smbPassword,
-                        onSmbPasswordChange = { smbPassword = it; errorMessage = null },
-                        smbName = smbName,
-                        onSmbNameChange = { smbName = it; errorMessage = null },
-                        webDavEndpoint = webDavEndpoint,
-                        onWebDavEndpointChange = { webDavEndpoint = it; errorMessage = null },
-                        webDavUsername = webDavUsername,
-                        onWebDavUsernameChange = { webDavUsername = it; errorMessage = null },
-                        webDavPassword = webDavPassword,
-                        onWebDavPasswordChange = { webDavPassword = it; errorMessage = null },
-                        webDavName = webDavName,
-                        onWebDavNameChange = { webDavName = it; errorMessage = null },
-                        errorMessage = errorMessage,
-                    )
-                    RemoteFolderStep.BROWSER -> RemoteFolderBrowser(
-                        modifier = Modifier.weight(1f),
-                        currentPath = currentPath,
-                        folders = folders,
-                        loading = loading,
-                        errorMessage = errorMessage,
-                        onOpen = { loadPath(it.relativePath) },
-                        onRetry = { loadPath(currentPath) },
-                    )
+                    RemoteFolderStep.SOURCE ->
+                        SourceSelection(
+                            modifier = Modifier.fillMaxWidth(),
+                            onLocal = {
+                                onDismiss()
+                                onSelectLocal()
+                            },
+                            onRemote = { selected ->
+                                protocol = selected
+                                errorMessage = null
+                                step = RemoteFolderStep.CONNECTION
+                            },
+                            onWindows = {
+                                onDismiss()
+                                onSelectWindows()
+                            },
+                        )
+                    RemoteFolderStep.CONNECTION ->
+                        ConnectionForm(
+                            modifier = Modifier.weight(1f),
+                            protocol = protocol ?: RemoteProtocol.SMB,
+                            smbHost = smbHost,
+                            onSmbHostChange = {
+                                smbHost = it
+                                errorMessage = null
+                            },
+                            smbPort = smbPort,
+                            onSmbPortChange = {
+                                smbPort = it.filter(Char::isDigit)
+                                errorMessage = null
+                            },
+                            smbShare = smbShare,
+                            onSmbShareChange = {
+                                smbShare = it
+                                errorMessage = null
+                            },
+                            smbDomain = smbDomain,
+                            onSmbDomainChange = {
+                                smbDomain = it
+                                errorMessage = null
+                            },
+                            smbUsername = smbUsername,
+                            onSmbUsernameChange = {
+                                smbUsername = it
+                                errorMessage = null
+                            },
+                            smbPassword = smbPassword,
+                            onSmbPasswordChange = {
+                                smbPassword = it
+                                errorMessage = null
+                            },
+                            smbName = smbName,
+                            onSmbNameChange = {
+                                smbName = it
+                                errorMessage = null
+                            },
+                            webDavEndpoint = webDavEndpoint,
+                            onWebDavEndpointChange = {
+                                webDavEndpoint = it
+                                errorMessage = null
+                            },
+                            webDavUsername = webDavUsername,
+                            onWebDavUsernameChange = {
+                                webDavUsername = it
+                                errorMessage = null
+                            },
+                            webDavPassword = webDavPassword,
+                            onWebDavPasswordChange = {
+                                webDavPassword = it
+                                errorMessage = null
+                            },
+                            webDavName = webDavName,
+                            onWebDavNameChange = {
+                                webDavName = it
+                                errorMessage = null
+                            },
+                            errorMessage = errorMessage,
+                        )
+                    RemoteFolderStep.BROWSER ->
+                        RemoteFolderBrowser(
+                            modifier = Modifier.weight(1f),
+                            currentPath = currentPath,
+                            folders = folders,
+                            loading = loading,
+                            errorMessage = errorMessage,
+                            onOpen = { loadPath(it.relativePath) },
+                            onRetry = { loadPath(currentPath) },
+                        )
                 }
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    modifier =
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -309,9 +355,15 @@ internal fun RemoteFolderDialog(
                         RemoteFolderStep.SOURCE -> TextButton(onClick = onDismiss) { Text("キャンセル") }
                         RemoteFolderStep.CONNECTION -> {
                             TextButton(onClick = ::navigateBack, enabled = !loading) { Text("戻る") }
-                            Button(onClick = { loadPath("", openBrowser = true) }, enabled = !loading) {
+                            Button(
+                                onClick = { loadPath("", openBrowser = true) },
+                                enabled = !loading,
+                            ) {
                                 if (loading) {
-                                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    CircularProgressIndicator(
+                                        Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                    )
                                     Spacer(Modifier.size(8.dp))
                                 }
                                 Text("接続")
@@ -319,7 +371,11 @@ internal fun RemoteFolderDialog(
                         }
                         RemoteFolderStep.BROWSER -> {
                             TextButton(onClick = ::navigateBack, enabled = !loading) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, Modifier.size(18.dp))
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    null,
+                                    Modifier.size(18.dp),
+                                )
                                 Spacer(Modifier.size(4.dp))
                                 Text(if (currentPath.isEmpty()) "接続設定" else "上へ")
                             }
@@ -340,16 +396,20 @@ internal fun RemoteFolderDialog(
 }
 
 @Composable
-private fun RemoteDialogHeader(
-    title: String,
-    onClose: () -> Unit,
-) {
+private fun RemoteDialogHeader(title: String, onClose: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 22.dp, top = 18.dp, end = 12.dp, bottom = 14.dp),
+        modifier =
+            Modifier.fillMaxWidth()
+                .padding(start = 22.dp, top = 18.dp, end = 12.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(
+            title,
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+        )
         IconButton(onClick = onClose) { Icon(Icons.Default.Close, "閉じる") }
     }
 }
@@ -370,8 +430,12 @@ private fun SourceSelection(
             SourceButton("Windows", Icons.Default.Computer, Modifier.weight(1f), onWindows)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SourceButton("SMB", Icons.Default.Dns, Modifier.weight(1f)) { onRemote(RemoteProtocol.SMB) }
-            SourceButton("WebDAV", Icons.Default.Cloud, Modifier.weight(1f)) { onRemote(RemoteProtocol.WEBDAV) }
+            SourceButton("SMB", Icons.Default.Dns, Modifier.weight(1f)) {
+                onRemote(RemoteProtocol.SMB)
+            }
+            SourceButton("WebDAV", Icons.Default.Cloud, Modifier.weight(1f)) {
+                onRemote(RemoteProtocol.WEBDAV)
+            }
         }
     }
 }
@@ -389,7 +453,8 @@ private fun SourceButton(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border =
+            androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
             modifier = Modifier.fillMaxSize().padding(8.dp),
@@ -438,7 +503,8 @@ private fun ConnectionForm(
 ) {
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 14.dp),
+        contentPadding =
+            androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (protocol == RemoteProtocol.SMB) {
@@ -490,9 +556,7 @@ private fun ConnectionForm(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            item {
-                PasswordField(smbPassword, onSmbPasswordChange)
-            }
+            item { PasswordField(smbPassword, onSmbPasswordChange) }
             item {
                 OutlinedTextField(
                     value = smbName,
@@ -562,7 +626,11 @@ private fun RemoteFolderBrowser(
     onRetry: () -> Unit,
 ) {
     Column(modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp)) {
-        Text("現在地", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "現在地",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Text(
             if (currentPath.isEmpty()) "/" else "/$currentPath",
             fontWeight = FontWeight.SemiBold,
@@ -574,7 +642,11 @@ private fun RemoteFolderBrowser(
         Spacer(Modifier.height(6.dp))
         errorMessage?.let { message ->
             RemoteError(message)
-            OutlinedButton(onClick = onRetry, enabled = !loading, modifier = Modifier.padding(top = 8.dp)) {
+            OutlinedButton(
+                onClick = onRetry,
+                enabled = !loading,
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
                 Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
                 Spacer(Modifier.size(6.dp))
                 Text("再試行")
@@ -614,7 +686,12 @@ private fun RemoteFolderBrowser(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Icon(Icons.Default.Folder, null, Modifier.size(38.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(
+                        Icons.Default.Folder,
+                        null,
+                        Modifier.size(38.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Text("サブフォルダはありません", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }

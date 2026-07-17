@@ -14,14 +14,18 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     react(),
-    ...(mode === 'native' ? [] : [VitePWA({
-      manifest: false,
-      injectRegister: 'script-defer',
-      registerType: 'prompt',
-      workbox: {
-        globPatterns: ['**/*.{css,html,js,png,svg,wasm,webmanifest}'],
-        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
-      },
-    })]),
+    ...(mode === 'native'
+      ? []
+      : [
+          VitePWA({
+            manifest: false,
+            injectRegister: 'script-defer',
+            registerType: 'prompt',
+            workbox: {
+              globPatterns: ['**/*.{css,html,js,png,svg,wasm,webmanifest}'],
+              maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
+            },
+          }),
+        ]),
   ],
 }))

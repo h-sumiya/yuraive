@@ -5,3 +5,4 @@ notes/*
 
 # Tool-generated local runtime state.
 .mono/
+node_modules/

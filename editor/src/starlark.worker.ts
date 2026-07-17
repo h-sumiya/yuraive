@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
-type CompatibleValue = null | boolean | number | string | CompatibleValue[] | { [key: string]: CompatibleValue }
+type CompatibleValue =
+  null | boolean | number | string | CompatibleValue[] | { [key: string]: CompatibleValue }
 
 type RunRequest = {
   id: string
@@ -27,19 +28,38 @@ self.onmessage = async (event: MessageEvent<RunRequest>) => {
     const runtime = await runtimeModule
     ready ??= runtime.default()
     await ready
-    const response = JSON.parse(runtime.runStarlarkJson(JSON.stringify({
-      path: request.path,
-      functionName: request.functionName,
-      args: request.args,
-      scripts: request.scripts,
-      timeoutMs: request.timeoutMs,
-    }))) as RuntimeResponse
+    const response = JSON.parse(
+      runtime.runStarlarkJson(
+        JSON.stringify({
+          path: request.path,
+          functionName: request.functionName,
+          args: request.args,
+          scripts: request.scripts,
+          timeoutMs: request.timeoutMs,
+        }),
+      ),
+    ) as RuntimeResponse
     if (response.error) {
-      self.postMessage({ id: request.id, ok: false, error: response.error, prints: response.prints ?? [] })
+      self.postMessage({
+        id: request.id,
+        ok: false,
+        error: response.error,
+        prints: response.prints ?? [],
+      })
     } else {
-      self.postMessage({ id: request.id, ok: true, value: response.value ?? null, prints: response.prints ?? [] })
+      self.postMessage({
+        id: request.id,
+        ok: true,
+        value: response.value ?? null,
+        prints: response.prints ?? [],
+      })
     }
   } catch (error) {
-    self.postMessage({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), prints: [] })
+    self.postMessage({
+      id: request.id,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      prints: [],
+    })
   }
 }

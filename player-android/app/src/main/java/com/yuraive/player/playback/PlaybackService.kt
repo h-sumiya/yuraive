@@ -2,7 +2,6 @@ package com.yuraive.player.playback
 
 import android.app.PendingIntent
 import android.content.Intent
-import android.os.IBinder
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Player
@@ -20,9 +19,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.decodeFromString
@@ -34,71 +33,88 @@ class PlaybackService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private lateinit var engine: GraphPlaybackEngine
     private var mediaSession: MediaSession? = null
-    private val sessionCallback = object : MediaSession.Callback {
-        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult =
-            MediaSession.ConnectionResult.accept(
-                MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS,
-                playerCommands(PlaybackRuntime.state.value.controls),
-            )
+    private val sessionCallback =
+        object : MediaSession.Callback {
+            override fun onConnect(
+                session: MediaSession,
+                controller: MediaSession.ControllerInfo,
+            ): MediaSession.ConnectionResult =
+                MediaSession.ConnectionResult.accept(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS,
+                    playerCommands(PlaybackRuntime.state.value.controls),
+                )
 
-        override fun onPlayerCommandRequest(session: MediaSession, controller: MediaSession.ControllerInfo, playerCommand: Int): Int {
-            val controls = PlaybackRuntime.state.value.controls
-            if (playerCommand == Player.COMMAND_STOP || playerCommand in navigationCommands) return SessionResult.RESULT_ERROR_PERMISSION_DENIED
-            if (!controls.allowSeek && playerCommand in seekCommands) return SessionResult.RESULT_ERROR_PERMISSION_DENIED
-            return SessionResult.RESULT_SUCCESS
+            override fun onPlayerCommandRequest(
+                session: MediaSession,
+                controller: MediaSession.ControllerInfo,
+                playerCommand: Int,
+            ): Int {
+                val controls = PlaybackRuntime.state.value.controls
+                if (playerCommand == Player.COMMAND_STOP || playerCommand in navigationCommands)
+                    return SessionResult.RESULT_ERROR_PERMISSION_DENIED
+                if (!controls.allowSeek && playerCommand in seekCommands)
+                    return SessionResult.RESULT_ERROR_PERMISSION_DENIED
+                return SessionResult.RESULT_SUCCESS
+            }
         }
-    }
 
     override fun onCreate() {
         super.onCreate()
         val library = (application as com.yuraive.player.YuraiveApplication).library
-        player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(
-                DefaultMediaSourceFactory(this)
-                    .setDataSourceFactory(LibraryDataSourceFactory(this, library)),
-            )
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .setUsage(C.USAGE_MEDIA)
-                    .build(),
-                true,
-            )
-            .setHandleAudioBecomingNoisy(true)
-            .build()
+        player =
+            ExoPlayer.Builder(this)
+                .setMediaSourceFactory(
+                    DefaultMediaSourceFactory(this)
+                        .setDataSourceFactory(LibraryDataSourceFactory(this, library))
+                )
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                        .setUsage(C.USAGE_MEDIA)
+                        .build(),
+                    true,
+                )
+                .setHandleAudioBecomingNoisy(true)
+                .build()
         engine = GraphPlaybackEngine(this, player, scope)
         PlaybackRuntime.attachPlayer(player)
-        val sessionActivity = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val session = MediaSession.Builder(this, player)
-            .setSessionActivity(sessionActivity)
-            .setCallback(sessionCallback)
-            .build()
+        val sessionActivity =
+            PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+        val session =
+            MediaSession.Builder(this, player)
+                .setSessionActivity(sessionActivity)
+                .setCallback(sessionCallback)
+                .build()
         mediaSession = session
         // Commands arrive through explicit service intents rather than a MediaController. Register
         // the session eagerly so MediaSessionService can publish its notification and promote the
         // service to a mediaPlayback foreground service before the first controller connects.
         addSession(session)
         scope.launch {
-            PlaybackRuntime.state.map { it.controls }.distinctUntilChanged().collect { controls ->
-                mediaSession?.let { activeSession ->
-                    activeSession.connectedControllers.forEach { controller ->
-                        activeSession.setAvailableCommands(
-                            controller,
-                            MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS,
-                            playerCommands(controls),
-                        )
+            PlaybackRuntime.state
+                .map { it.controls }
+                .distinctUntilChanged()
+                .collect { controls ->
+                    mediaSession?.let { activeSession ->
+                        activeSession.connectedControllers.forEach { controller ->
+                            activeSession.setAvailableCommands(
+                                controller,
+                                MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS,
+                                playerCommands(controls),
+                            )
+                        }
                     }
                 }
-            }
         }
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
+        mediaSession
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -106,15 +122,34 @@ class PlaybackService : MediaSessionService() {
             commandMutex.withLock {
                 when (intent?.action) {
                     ACTION_INITIALIZE -> engine.restore(autoPlay = false)
-                    ACTION_PLAY_GRAPH -> intent.getStringExtra(EXTRA_GRAPH_REF)?.let {
-                        engine.start(YuraiveJson.format.decodeFromString<GraphRef>(it))
+                    ACTION_PLAY_GRAPH ->
+                        intent.getStringExtra(EXTRA_GRAPH_REF)?.let {
+                            engine.start(YuraiveJson.format.decodeFromString<GraphRef>(it))
+                        }
+                    ACTION_TOGGLE -> {
+                        engine.restore(false)
+                        engine.toggle()
                     }
-                    ACTION_TOGGLE -> { engine.restore(false); engine.toggle() }
-                    ACTION_SEEK -> { engine.restore(false); engine.seek(intent.getLongExtra(EXTRA_POSITION, 0)) }
-                    ACTION_BUTTON -> { engine.restore(false); intent.getStringExtra(EXTRA_BUTTON_ID)?.let { engine.pressButton(it) } }
-                    ACTION_RESTART -> { engine.restore(false); engine.restart() }
-                    ACTION_NEXT -> { engine.restore(false); engine.next() }
-                    ACTION_PREVIOUS -> { engine.restore(false); engine.previous() }
+                    ACTION_SEEK -> {
+                        engine.restore(false)
+                        engine.seek(intent.getLongExtra(EXTRA_POSITION, 0))
+                    }
+                    ACTION_BUTTON -> {
+                        engine.restore(false)
+                        intent.getStringExtra(EXTRA_BUTTON_ID)?.let { engine.pressButton(it) }
+                    }
+                    ACTION_RESTART -> {
+                        engine.restore(false)
+                        engine.restart()
+                    }
+                    ACTION_NEXT -> {
+                        engine.restore(false)
+                        engine.next()
+                    }
+                    ACTION_PREVIOUS -> {
+                        engine.restore(false)
+                        engine.previous()
+                    }
                     ACTION_STOP -> {
                         if (engine.stop()) stopSelf()
                     }
@@ -137,19 +172,22 @@ class PlaybackService : MediaSessionService() {
     }
 
     companion object {
-        private val navigationCommands = setOf(
-            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
-            Player.COMMAND_SEEK_TO_PREVIOUS,
-            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
-            Player.COMMAND_SEEK_TO_NEXT,
-        )
-        private val seekCommands = navigationCommands + setOf(
-            Player.COMMAND_SEEK_TO_DEFAULT_POSITION,
-            Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
-            Player.COMMAND_SEEK_TO_MEDIA_ITEM,
-            Player.COMMAND_SEEK_BACK,
-            Player.COMMAND_SEEK_FORWARD,
-        )
+        private val navigationCommands =
+            setOf(
+                Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+                Player.COMMAND_SEEK_TO_PREVIOUS,
+                Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+                Player.COMMAND_SEEK_TO_NEXT,
+            )
+        private val seekCommands =
+            navigationCommands +
+                setOf(
+                    Player.COMMAND_SEEK_TO_DEFAULT_POSITION,
+                    Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
+                    Player.COMMAND_SEEK_TO_MEDIA_ITEM,
+                    Player.COMMAND_SEEK_BACK,
+                    Player.COMMAND_SEEK_FORWARD,
+                )
 
         private fun playerCommands(controls: PlayerControlSettings): Player.Commands =
             MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()

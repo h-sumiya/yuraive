@@ -31,7 +31,52 @@ run = "dotnet test player-windows/tests/Yuraive.Core.Tests/Yuraive.Core.Tests.cs
 description = "Run the WinUI 3 desktop player (x64)"
 run = "dotnet run --project player-windows/src/Yuraive.App/Yuraive.App.csproj -p:Platform=x64 -p:BaseOutputPath=bin/windows-run/"
 
+[tasks.formatWeb]
+description = "Format web, configuration, and documentation files"
+run = "npm run format"
+
+[tasks.formatAndroid]
+description = "Format Kotlin and Gradle Kotlin DSL files"
+dir = "player-android"
+run = "./gradlew spotlessApply"
+
+[tasks.formatRuntime]
+description = "Format Rust sources"
+dir = "runtime"
+run = "cargo fmt"
+
+[tasks.formatWindows]
+description = "Format C# sources"
+run = "dotnet format player-windows/Yuraive.Windows.slnx"
+
+[tasks.format]
+description = "Format every supported source file"
+depends = ["formatWeb", "formatAndroid", "formatRuntime", "formatWindows"]
+
+[tasks.formatWebCheck]
+description = "Check web, configuration, and documentation formatting"
+run = "npm run format:check"
+
+[tasks.formatAndroidCheck]
+description = "Check Kotlin and Gradle Kotlin DSL formatting"
+dir = "player-android"
+run = "./gradlew spotlessCheck"
+
+[tasks.formatRuntimeCheck]
+description = "Check Rust formatting"
+dir = "runtime"
+run = "cargo fmt --check"
+
+[tasks.formatWindowsCheck]
+description = "Check C# formatting"
+run = "dotnet format player-windows/Yuraive.Windows.slnx --verify-no-changes --no-restore"
+
+[tasks.formatCheck]
+description = "Check formatting for every supported source file"
+depends = ["formatWebCheck", "formatAndroidCheck", "formatRuntimeCheck", "formatWindowsCheck"]
+
 [tools]
 node = "latest"
 gradle = "8.11.1"
 rust = "stable"
+dotnet = "9.0.312"

@@ -14,8 +14,8 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -50,36 +50,87 @@ internal data class OpenSourceNotice(
     @RawRes val licenseTextResources: List<Int>,
 )
 
-internal val openSourceNotices = listOf(
-    OpenSourceNotice("AndroidX・Jetpack Compose", "Compose BOM 2025.04.01", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
-    OpenSourceNotice("Kotlin", "2.1.20", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
-    OpenSourceNotice("kotlinx.coroutines", "1.10.2", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
-    OpenSourceNotice("kotlinx.serialization", "1.8.1", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
-    OpenSourceNotice("OkHttp", "5.4.0", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
-    OpenSourceNotice("SMBJ", "0.14.0", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
-    OpenSourceNotice("ZXing Android Embedded", "4.3.0", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
-    OpenSourceNotice("WebRTC Android SDK", "144.7559.09", "BSD-3-Clause", listOf(R.raw.license_bsd_3_clause_webrtc)),
-    OpenSourceNotice("SLF4J", "2.0.17", "MIT", listOf(R.raw.license_mit_slf4j)),
-    OpenSourceNotice("Starlark Rust", "0.14.2", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
-    OpenSourceNotice("Taffy", "0.12.1", "MIT", listOf(R.raw.license_mit_taffy)),
-    OpenSourceNotice("anyhow", "1.0.103", "MIT OR Apache-2.0", listOf(R.raw.license_mit, R.raw.license_apache_2_0)),
-    OpenSourceNotice("fastrand", "2.4.1", "Apache-2.0 OR MIT", listOf(R.raw.license_apache_2_0, R.raw.license_mit)),
-    OpenSourceNotice("jni", "0.21.1", "MIT OR Apache-2.0", listOf(R.raw.license_mit, R.raw.license_apache_2_0)),
-    OpenSourceNotice("serde", "1.0.228", "MIT OR Apache-2.0", listOf(R.raw.license_mit, R.raw.license_apache_2_0)),
-    OpenSourceNotice("serde_json", "1.0.150", "MIT OR Apache-2.0", listOf(R.raw.license_mit, R.raw.license_apache_2_0)),
-    OpenSourceNotice("unicode-width", "0.2.2", "MIT OR Apache-2.0", listOf(R.raw.license_mit, R.raw.license_apache_2_0)),
-)
+internal val openSourceNotices =
+    listOf(
+        OpenSourceNotice(
+            "AndroidX・Jetpack Compose",
+            "Compose BOM 2025.04.01",
+            "Apache-2.0",
+            listOf(R.raw.license_apache_2_0),
+        ),
+        OpenSourceNotice("Kotlin", "2.1.20", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
+        OpenSourceNotice(
+            "kotlinx.coroutines",
+            "1.10.2",
+            "Apache-2.0",
+            listOf(R.raw.license_apache_2_0),
+        ),
+        OpenSourceNotice(
+            "kotlinx.serialization",
+            "1.8.1",
+            "Apache-2.0",
+            listOf(R.raw.license_apache_2_0),
+        ),
+        OpenSourceNotice("OkHttp", "5.4.0", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
+        OpenSourceNotice("SMBJ", "0.14.0", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
+        OpenSourceNotice(
+            "ZXing Android Embedded",
+            "4.3.0",
+            "Apache-2.0",
+            listOf(R.raw.license_apache_2_0),
+        ),
+        OpenSourceNotice(
+            "WebRTC Android SDK",
+            "144.7559.09",
+            "BSD-3-Clause",
+            listOf(R.raw.license_bsd_3_clause_webrtc),
+        ),
+        OpenSourceNotice("SLF4J", "2.0.17", "MIT", listOf(R.raw.license_mit_slf4j)),
+        OpenSourceNotice("Starlark Rust", "0.14.2", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
+        OpenSourceNotice("Taffy", "0.12.1", "MIT", listOf(R.raw.license_mit_taffy)),
+        OpenSourceNotice(
+            "anyhow",
+            "1.0.103",
+            "MIT OR Apache-2.0",
+            listOf(R.raw.license_mit, R.raw.license_apache_2_0),
+        ),
+        OpenSourceNotice(
+            "fastrand",
+            "2.4.1",
+            "Apache-2.0 OR MIT",
+            listOf(R.raw.license_apache_2_0, R.raw.license_mit),
+        ),
+        OpenSourceNotice(
+            "jni",
+            "0.21.1",
+            "MIT OR Apache-2.0",
+            listOf(R.raw.license_mit, R.raw.license_apache_2_0),
+        ),
+        OpenSourceNotice(
+            "serde",
+            "1.0.228",
+            "MIT OR Apache-2.0",
+            listOf(R.raw.license_mit, R.raw.license_apache_2_0),
+        ),
+        OpenSourceNotice(
+            "serde_json",
+            "1.0.150",
+            "MIT OR Apache-2.0",
+            listOf(R.raw.license_mit, R.raw.license_apache_2_0),
+        ),
+        OpenSourceNotice(
+            "unicode-width",
+            "0.2.2",
+            "MIT OR Apache-2.0",
+            listOf(R.raw.license_mit, R.raw.license_apache_2_0),
+        ),
+    )
 
 @Composable
-internal fun LicensesScreen(
-    modifier: Modifier,
-    onBack: () -> Unit,
-) {
+internal fun LicensesScreen(modifier: Modifier, onBack: () -> Unit) {
     var selectedName by rememberSaveable { mutableStateOf<String?>(null) }
     val selectedNotice = openSourceNotices.firstOrNull { it.name == selectedName }
-    val navigateBack = {
-        if (selectedNotice == null) onBack() else selectedName = null
-    }
+    val navigateBack = { if (selectedNotice == null) onBack() else selectedName = null }
 
     BackHandler(enabled = selectedNotice != null) { selectedName = null }
 
@@ -102,10 +153,7 @@ internal fun LicensesScreen(
             )
         },
     ) { padding ->
-        Box(
-            Modifier.fillMaxSize().padding(padding),
-            contentAlignment = Alignment.TopCenter,
-        ) {
+        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
             if (selectedNotice == null) {
                 LicenseList(
                     modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
@@ -122,26 +170,29 @@ internal fun LicensesScreen(
 }
 
 @Composable
-private fun LicenseList(
-    modifier: Modifier,
-    onSelect: (OpenSourceNotice) -> Unit,
-) {
-    val bottomContentPadding = 12.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+private fun LicenseList(modifier: Modifier, onSelect: (OpenSourceNotice) -> Unit) {
+    val bottomContentPadding =
+        12.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     LazyColumn(
         modifier.fillMaxHeight(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 20.dp,
-            top = 12.dp,
-            end = 20.dp,
-            bottom = bottomContentPadding,
-        ),
+        contentPadding =
+            androidx.compose.foundation.layout.PaddingValues(
+                start = 20.dp,
+                top = 12.dp,
+                end = 20.dp,
+                bottom = bottomContentPadding,
+            ),
     ) {
         item {
             Column(
                 Modifier.fillMaxWidth().padding(vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text("Yuraive", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "Yuraive",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
                 Text(
                     "Copyright © 2026 h-sumiya. All rights reserved.",
                     style = MaterialTheme.typography.bodySmall,
@@ -158,16 +209,10 @@ private fun LicenseList(
         }
         items(openSourceNotices, key = OpenSourceNotice::name) { notice ->
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onSelect(notice) }
-                    .padding(vertical = 14.dp),
+                Modifier.fillMaxWidth().clickable { onSelect(notice) }.padding(vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(
-                    Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
-                ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text(notice.name, fontWeight = FontWeight.SemiBold)
                     Text(
                         "${notice.version} · ${notice.license}",
@@ -187,31 +232,35 @@ private fun LicenseList(
 }
 
 @Composable
-private fun LicenseDetail(
-    notice: OpenSourceNotice,
-    modifier: Modifier,
-) {
+private fun LicenseDetail(notice: OpenSourceNotice, modifier: Modifier) {
     val resources = LocalContext.current.resources
-    val bottomContentPadding = 20.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val licenseText = remember(notice) {
-        notice.licenseTextResources.joinToString("\n\n────────────────────\n\n") { resourceId ->
-            resources.openRawResource(resourceId).bufferedReader().use { it.readText() }
+    val bottomContentPadding =
+        20.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val licenseText =
+        remember(notice) {
+            notice.licenseTextResources.joinToString("\n\n────────────────────\n\n") { resourceId ->
+                resources.openRawResource(resourceId).bufferedReader().use { it.readText() }
+            }
         }
-    }
 
     LazyColumn(
         modifier.fillMaxHeight(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 20.dp,
-            top = 20.dp,
-            end = 20.dp,
-            bottom = bottomContentPadding,
-        ),
+        contentPadding =
+            androidx.compose.foundation.layout.PaddingValues(
+                start = 20.dp,
+                top = 20.dp,
+                end = 20.dp,
+                bottom = bottomContentPadding,
+            ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(notice.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    notice.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
                 Text(
                     "${notice.version} · ${notice.license}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

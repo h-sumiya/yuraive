@@ -30,6 +30,10 @@
     <EditorSourceRoot>$(MSBuildProjectDirectory)\..\..\..\editor</EditorSourceRoot>
   </PropertyGroup>
 
+  <ItemGroup>
+    <RustSource Include="$(MSBuildProjectDirectory)\..\..\..\runtime\src\**\*.rs" />
+  </ItemGroup>
+
   <!-- XBF and MSIX packaging invoke Windows-native SDK tools. Linux CI still
        compiles the complete generated C# surface; Windows builds remain packaged. -->
   <PropertyGroup Condition="'$(OS)' != 'Windows_NT'">
@@ -74,7 +78,7 @@
   </ItemGroup>
 
   <Target Name="BuildRustRuntime" BeforeTargets="CoreCompile"
-          Inputs="$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.toml;$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.lock;$(MSBuildProjectDirectory)\..\..\..\runtime\src\lib.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\bundle.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\layout_engine.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\script_engine.rs"
+          Inputs="$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.toml;$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.lock;@(RustSource)"
           Outputs="$(RustDll)">
     <Exec WorkingDirectory="$(MSBuildProjectDirectory)\..\..\..\runtime"
           Command="cargo build --release --locked" />

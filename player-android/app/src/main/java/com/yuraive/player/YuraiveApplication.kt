@@ -4,8 +4,8 @@ import android.app.Application
 import com.yuraive.player.data.DocumentLibrary
 import com.yuraive.player.data.HistoryStore
 import com.yuraive.player.data.SettingsStore
-import com.yuraive.player.playback.PlaybackStatsEvaluator
 import com.yuraive.player.data.SnapshotStore
+import com.yuraive.player.playback.PlaybackStatsEvaluator
 
 class YuraiveApplication : Application() {
     val settings by lazy { SettingsStore(this) }

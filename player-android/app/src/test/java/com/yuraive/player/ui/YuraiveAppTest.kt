@@ -9,11 +9,36 @@ import org.junit.Test
 class YuraiveAppTest {
     @Test
     fun buildPlaybackSessionsAggregatesRunsAndSortsNewestFirst() {
-        val entries = listOf(
-            historyEntry("a-2", "run-a", "graph-a", "2026-07-14T01:02:00Z", "2026-07-14T01:03:00Z", 20_000, "stopped"),
-            historyEntry("b-1", "run-b", "graph-b", "2026-07-14T02:00:00Z", "2026-07-14T02:01:00Z", 30_000, "completed"),
-            historyEntry("a-1", "run-a", "graph-a", "2026-07-14T01:00:00Z", "2026-07-14T01:01:00Z", 10_000, "completed"),
-        )
+        val entries =
+            listOf(
+                historyEntry(
+                    "a-2",
+                    "run-a",
+                    "graph-a",
+                    "2026-07-14T01:02:00Z",
+                    "2026-07-14T01:03:00Z",
+                    20_000,
+                    "stopped",
+                ),
+                historyEntry(
+                    "b-1",
+                    "run-b",
+                    "graph-b",
+                    "2026-07-14T02:00:00Z",
+                    "2026-07-14T02:01:00Z",
+                    30_000,
+                    "completed",
+                ),
+                historyEntry(
+                    "a-1",
+                    "run-a",
+                    "graph-a",
+                    "2026-07-14T01:00:00Z",
+                    "2026-07-14T01:01:00Z",
+                    10_000,
+                    "completed",
+                ),
+            )
 
         val sessions = buildPlaybackSessions(entries)
 
@@ -56,18 +81,19 @@ class YuraiveAppTest {
         endedAt: String,
         activePlayMs: Long,
         endReason: String,
-    ) = PlaybackHistoryEntry(
-        id = id,
-        runId = runId,
-        graphId = graphId,
-        nodeId = "node",
-        mediaId = "media",
-        startedAt = startedAt,
-        endedAt = endedAt,
-        mediaDurationMs = 60_000,
-        activePlayMs = activePlayMs,
-        startPositionMs = 0,
-        endPositionMs = activePlayMs,
-        endReason = endReason,
-    )
+    ) =
+        PlaybackHistoryEntry(
+            id = id,
+            runId = runId,
+            graphId = graphId,
+            nodeId = "node",
+            mediaId = "media",
+            startedAt = startedAt,
+            endedAt = endedAt,
+            mediaDurationMs = 60_000,
+            activePlayMs = activePlayMs,
+            startPositionMs = 0,
+            endPositionMs = activePlayMs,
+            endReason = endReason,
+        )
 }

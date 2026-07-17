@@ -28,12 +28,13 @@ android {
     kotlinOptions { jvmTarget = "17" }
 
     packaging {
-        resources.excludes += setOf(
-            "META-INF/DEPENDENCIES",
-            "META-INF/LICENSE*",
-            "META-INF/NOTICE*",
-            "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
-        )
+        resources.excludes +=
+            setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
+            )
         // build-android.sh already strips these with the matching NDK toolchain.
         jniLibs.keepDebugSymbols += "**/libyuraive_runtime.so"
     }
@@ -42,7 +43,10 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 
@@ -50,29 +54,42 @@ android {
 }
 
 val rustJniOutput = layout.buildDirectory.dir("generated/rustJniLibs")
-val buildRustRuntime by tasks.registering(Exec::class) {
-    workingDir(rootProject.projectDir)
-    commandLine("bash", rootProject.file("../runtime/build-android.sh"), rustJniOutput.get().asFile)
-    inputs.files(
-        rootProject.file("../runtime/Cargo.toml"),
-        rootProject.file("../runtime/Cargo.lock"),
-        rootProject.file("../runtime/build-android.sh"),
-        fileTree(rootProject.file("../runtime/src")),
-    )
-    outputs.dir(rustJniOutput)
-}
+val buildRustRuntime by
+    tasks.registering(Exec::class) {
+        workingDir(rootProject.projectDir)
+        commandLine(
+            "bash",
+            rootProject.file("../runtime/build-android.sh"),
+            rustJniOutput.get().asFile,
+        )
+        inputs.files(
+            rootProject.file("../runtime/Cargo.toml"),
+            rootProject.file("../runtime/Cargo.lock"),
+            rootProject.file("../runtime/build-android.sh"),
+            fileTree(rootProject.file("../runtime/src")),
+        )
+        outputs.dir(rustJniOutput)
+    }
 
-val testRustRuntime by tasks.registering(Exec::class) {
-    workingDir(rootProject.projectDir)
-    commandLine("cargo", "test", "--manifest-path", rootProject.file("../runtime/Cargo.toml"), "--locked")
-    inputs.files(
-        rootProject.file("../runtime/Cargo.toml"),
-        rootProject.file("../runtime/Cargo.lock"),
-        fileTree(rootProject.file("../runtime/src")),
-    )
-}
+val testRustRuntime by
+    tasks.registering(Exec::class) {
+        workingDir(rootProject.projectDir)
+        commandLine(
+            "cargo",
+            "test",
+            "--manifest-path",
+            rootProject.file("../runtime/Cargo.toml"),
+            "--locked",
+        )
+        inputs.files(
+            rootProject.file("../runtime/Cargo.toml"),
+            rootProject.file("../runtime/Cargo.lock"),
+            fileTree(rootProject.file("../runtime/src")),
+        )
+    }
 
 tasks.named("preBuild").configure { dependsOn(buildRustRuntime) }
+
 tasks.matching { it.name == "testDebugUnitTest" }.configureEach { dependsOn(testRustRuntime) }
 
 dependencies {

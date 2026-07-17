@@ -24,5 +24,4 @@ class GraphValidatorTest {
         assertFalse(GraphValidator.isSafeRelativePath("audio\\rain.ogg"))
         assertFalse(GraphValidator.isSafeRelativePath("audio/./rain.ogg"))
     }
-
 }

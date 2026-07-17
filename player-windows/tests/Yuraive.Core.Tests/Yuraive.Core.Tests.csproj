@@ -7,6 +7,10 @@
     <IsTestProject>true</IsTestProject>
     <EnableWindowsTargeting Condition="'$(OS)' != 'Windows_NT'">true</EnableWindowsTargeting>
   </PropertyGroup>
+
+  <ItemGroup>
+    <RustSource Include="$(MSBuildProjectDirectory)\..\..\..\runtime\src\**\*.rs" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -24,7 +28,7 @@
   </PropertyGroup>
 
   <Target Name="BuildRustRuntime" BeforeTargets="CoreCompile"
-          Inputs="$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.toml;$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.lock;$(MSBuildProjectDirectory)\..\..\..\runtime\src\lib.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\bundle.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\layout_engine.rs;$(MSBuildProjectDirectory)\..\..\..\runtime\src\script_engine.rs"
+          Inputs="$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.toml;$(MSBuildProjectDirectory)\..\..\..\runtime\Cargo.lock;@(RustSource)"
           Outputs="$(RustDll)">
     <Exec WorkingDirectory="$(MSBuildProjectDirectory)\..\..\..\runtime"
           Command="cargo build --release --locked" />

@@ -8,21 +8,21 @@
   "routes": [
     {
       "pattern": "connect.yuraive.com",
-      "custom_domain": true
-    }
+      "custom_domain": true,
+    },
   ],
   "durable_objects": {
     "bindings": [
       {
         "name": "SIGNALING_ROOMS",
-        "class_name": "SignalingRoom"
-      }
-    ]
+        "class_name": "SignalingRoom",
+      },
+    ],
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["SignalingRoom"]
-    }
-  ]
+      "new_sqlite_classes": ["SignalingRoom"],
+    },
+  ],
 }

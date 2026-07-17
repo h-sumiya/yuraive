@@ -1,6 +1,7 @@
 import type { ScriptDocument } from './types'
 
-type CompatibleValue = null | boolean | number | string | CompatibleValue[] | { [key: string]: CompatibleValue }
+type CompatibleValue =
+  null | boolean | number | string | CompatibleValue[] | { [key: string]: CompatibleValue }
 
 export type StarlarkRunResult = {
   value: CompatibleValue
@@ -42,7 +43,10 @@ const stopWorker = (reason: string) => {
 
 const getWorker = () => {
   if (worker) return worker
-  worker = new Worker(new URL('./starlark.worker.ts', import.meta.url), { type: 'module', name: 'yuraive-starlark' })
+  worker = new Worker(new URL('./starlark.worker.ts', import.meta.url), {
+    type: 'module',
+    name: 'yuraive-starlark',
+  })
   worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const item = pending.get(event.data.id)
     if (!item) return
@@ -52,7 +56,12 @@ const getWorker = () => {
     if (!event.data.ok) {
       recycleAfterIdle = true
       item.reject(new Error(event.data.error || 'Starlarkの実行に失敗しました'))
-    } else item.resolve({ value: event.data.value ?? null, prints: event.data.prints ?? [], durationMs: performance.now() - item.startedAt })
+    } else
+      item.resolve({
+        value: event.data.value ?? null,
+        prints: event.data.prints ?? [],
+        durationMs: performance.now() - item.startedAt,
+      })
     if (completedRuns >= 100) recycleAfterIdle = true
     if (recycleAfterIdle && pending.size === 0) {
       worker?.terminate()
@@ -65,37 +74,47 @@ const getWorker = () => {
   return worker
 }
 
-export const scriptsToRecord = (scripts: ScriptDocument[]) => Object.fromEntries(scripts.map((script) => [script.path, script.content]))
+export const scriptsToRecord = (scripts: ScriptDocument[]) =>
+  Object.fromEntries(scripts.map((script) => [script.path, script.content]))
 
-export const runStarlark = ({ scripts, path, functionName, args = [], timeoutMs = 1200 }: {
+export const runStarlark = ({
+  scripts,
+  path,
+  functionName,
+  args = [],
+  timeoutMs = 1200,
+}: {
   scripts: ScriptDocument[]
   path: string
   functionName: string
   args?: unknown[]
   timeoutMs?: number
-}) => new Promise<StarlarkRunResult>((resolve, reject) => {
-  const id = crypto.randomUUID()
-  const current = getWorker()
-  const executionTimeoutMs = Math.min(10_000, Math.max(100, Math.round(timeoutMs)))
-  const hardTimeoutMs = Math.max(10_000, executionTimeoutMs + 5_000)
-  const timer = window.setTimeout(() => {
-    if (!pending.has(id)) return
-    stopWorker(`Starlarkの実行が${executionTimeoutMs}msを超えたため停止しました`)
-  }, hardTimeoutMs)
-  pending.set(id, { resolve, reject, timer, startedAt: performance.now() })
-  current.postMessage({
-    id,
-    path,
-    functionName,
-    args,
-    scripts: scriptsToRecord(scripts),
-    timeoutMs: executionTimeoutMs,
+}) =>
+  new Promise<StarlarkRunResult>((resolve, reject) => {
+    const id = crypto.randomUUID()
+    const current = getWorker()
+    const executionTimeoutMs = Math.min(10_000, Math.max(100, Math.round(timeoutMs)))
+    const hardTimeoutMs = Math.max(10_000, executionTimeoutMs + 5_000)
+    const timer = window.setTimeout(() => {
+      if (!pending.has(id)) return
+      stopWorker(`Starlarkの実行が${executionTimeoutMs}msを超えたため停止しました`)
+    }, hardTimeoutMs)
+    pending.set(id, { resolve, reject, timer, startedAt: performance.now() })
+    current.postMessage({
+      id,
+      path,
+      functionName,
+      args,
+      scripts: scriptsToRecord(scripts),
+      timeoutMs: executionTimeoutMs,
+    })
   })
-})
 
 export const resetStarlarkRuntime = () => stopWorker('Starlark Workerをリセットしました')
 
 export const parseStarlarkErrorLocation = (message: string) => {
-  const match = message.match(/(?::|\s)(\d+):(\d+)(?::|\s)/) ?? message.match(/line\s+(\d+)(?:.*column\s+(\d+))?/i)
+  const match =
+    message.match(/(?::|\s)(\d+):(\d+)(?::|\s)/) ??
+    message.match(/line\s+(\d+)(?:.*column\s+(\d+))?/i)
   return match ? { line: Number(match[1]), column: Number(match[2] ?? 1) } : undefined
 }

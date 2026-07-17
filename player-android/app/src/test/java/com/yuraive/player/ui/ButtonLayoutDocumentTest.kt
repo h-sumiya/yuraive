@@ -1,7 +1,7 @@
 package com.yuraive.player.ui
 
-import com.yuraive.player.model.YuraiveLayout
 import com.yuraive.player.model.ValidationIssue
+import com.yuraive.player.model.YuraiveLayout
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,7 +9,8 @@ import org.junit.Test
 class ButtonLayoutDocumentTest {
     @Test
     fun keepsSupportedLayoutMarkupAndRemovesExecutableMarkup() {
-        val source = """
+        val source =
+            """
             <style>.stage { display: grid }</style>
             <script>alert('no')</script>
             <div class="stage" onclick="alert(1)">
@@ -17,7 +18,8 @@ class ButtonLayoutDocumentTest {
               <slot></slot>
               <img src="https://example.com/tracker.png">
             </div>
-        """.trimIndent()
+            """
+                .trimIndent()
 
         val (css, body) = YuraiveLayout.sanitize(source)
         assertTrue(css.contains("display: grid"))
@@ -31,7 +33,8 @@ class ButtonLayoutDocumentTest {
 
     @Test
     fun playerDocumentContainsOnlyAResetBeforeAuthorStyles() {
-        val document = YuraiveLayout.buildDocument("<style>.yuraive-button{color:red}</style><slot></slot>")
+        val document =
+            YuraiveLayout.buildDocument("<style>.yuraive-button{color:red}</style><slot></slot>")
         assertTrue(document.contains(".yuraive-button{all:unset"))
         assertTrue(document.contains(".yuraive-button{color:red}"))
         assertFalse(document.contains("#574de5"))
@@ -39,10 +42,19 @@ class ButtonLayoutDocumentTest {
 
     @Test
     fun validatesDefaultAndDuplicateSlots() {
-        assertTrue(YuraiveLayout.validate("<style></style><slot name=\"actions\"></slot>").any { it.severity == ValidationIssue.Severity.ERROR })
-        val valid = YuraiveLayout.validate("<style></style><slot id=\"actions\"></slot><slot></slot>")
+        assertTrue(
+            YuraiveLayout.validate("<style></style><slot name=\"actions\"></slot>").any {
+                it.severity == ValidationIssue.Severity.ERROR
+            }
+        )
+        val valid =
+            YuraiveLayout.validate("<style></style><slot id=\"actions\"></slot><slot></slot>")
         assertTrue(valid.isEmpty())
-        assertTrue(YuraiveLayout.validate("<style></style><slot></slot><slot></slot>").any { it.message.contains("重複") })
+        assertTrue(
+            YuraiveLayout.validate("<style></style><slot></slot><slot></slot>").any {
+                it.message.contains("重複")
+            }
+        )
     }
 
     @Test

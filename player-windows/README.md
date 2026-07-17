@@ -39,17 +39,17 @@ dotnet publish player-windows/src/Yuraive.App/Yuraive.App.csproj -c Release -p:P
 
 ## ブランドと Microsoft Store
 
-| 項目 | 値 |
-| --- | --- |
-| アプリ名 | `Yuraive` |
-| 公開サイト | `https://yuraive.com` |
-| エディタ | `https://editor.yuraive.com` |
-| Package Identity Name | `h-sumiya.Yuraive` |
-| Publisher | `CN=0CAEE31D-460E-4BC5-A8FA-16FA42C46226` |
-| Publisher display name | `h-sumiya` |
-| Package Family Name | `h-sumiya.Yuraive_45bv5107ybs6g` |
-| Package SID | `S-1-15-2-3791779760-2730826886-836300522-2627406885-3025252485-2297235786-4168071393` |
-| Microsoft Store ID | `9N3VN7TLM99W` |
+| 項目                   | 値                                                                                     |
+| ---------------------- | -------------------------------------------------------------------------------------- |
+| アプリ名               | `Yuraive`                                                                              |
+| 公開サイト             | `https://yuraive.com`                                                                  |
+| エディタ               | `https://editor.yuraive.com`                                                           |
+| Package Identity Name  | `h-sumiya.Yuraive`                                                                     |
+| Publisher              | `CN=0CAEE31D-460E-4BC5-A8FA-16FA42C46226`                                              |
+| Publisher display name | `h-sumiya`                                                                             |
+| Package Family Name    | `h-sumiya.Yuraive_45bv5107ybs6g`                                                       |
+| Package SID            | `S-1-15-2-3791779760-2730826886-836300522-2627406885-3025252485-2297235786-4168071393` |
+| Microsoft Store ID     | `9N3VN7TLM99W`                                                                         |
 
 `Package.appxmanifest` はこの Store identity と、`.yuraive` バンドルの関連付けを使用します。Windows 用の PNG / ICO 資産は [`assets/icon.svg`](../assets/icon.svg) から生成しています。
 
