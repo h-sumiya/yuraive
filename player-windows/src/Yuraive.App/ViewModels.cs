@@ -67,3 +67,12 @@ public sealed class HistoryEntryViewModel
     public PlaybackHistoryEntry? Entry { get; init; }
     public LibraryGraph? Graph { get; init; }
 }
+
+public sealed record OpenSourceNoticeViewModel(
+    string Name,
+    string Version,
+    string License,
+    IReadOnlyList<string> LicenseResourceNames)
+{
+    public string Summary => $"{Version} · {License}";
+}

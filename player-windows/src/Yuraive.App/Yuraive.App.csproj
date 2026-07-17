@@ -40,10 +40,25 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3719.77" GeneratePathProperty="true" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="0.4.0" />
     <PackageReference Include="QRCoder" Version="1.7.0" />
     <ProjectReference Include="..\Yuraive.Core\Yuraive.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\..\player-android\app\src\main\res\raw\license_*.txt">
+      <LogicalName>Yuraive.App.Licenses.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="$(PkgMicrosoft_WindowsAppSDK)\license.txt"
+                      LogicalName="Yuraive.App.Licenses.windows_app_sdk_license.txt" />
+    <EmbeddedResource Include="$(PkgMicrosoft_WindowsAppSDK)\NOTICE.txt"
+                      LogicalName="Yuraive.App.Licenses.windows_app_sdk_notice.txt" />
+    <EmbeddedResource Include="$(PkgMicrosoft_Web_WebView2)\LICENSE.txt"
+                      LogicalName="Yuraive.App.Licenses.webview2_license.txt" />
+    <EmbeddedResource Include="$(PkgMicrosoft_Web_WebView2)\NOTICE.txt"
+                      LogicalName="Yuraive.App.Licenses.webview2_notice.txt" />
   </ItemGroup>
 
   <PropertyGroup>

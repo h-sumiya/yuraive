@@ -31,6 +31,21 @@ namespace Yuraive.App;
 
 public sealed partial class MainWindow : Window
 {
+    private static readonly IReadOnlyList<OpenSourceNoticeViewModel> OpenSourceNotices =
+    [
+        new("Windows App SDK", "2.2.0", "Microsoft Software License Terms", ["windows_app_sdk_license.txt", "windows_app_sdk_notice.txt"]),
+        new("Microsoft Edge WebView2 SDK", "1.0.3719.77", "BSD-3-Clause", ["webview2_license.txt", "webview2_notice.txt"]),
+        new("QRCoder", "1.7.0", "MIT", ["license_mit.txt"]),
+        new("Starlark Rust", "0.14.2", "Apache-2.0", ["license_apache_2_0.txt"]),
+        new("Taffy", "0.12.1", "MIT", ["license_mit_taffy.txt"]),
+        new("anyhow", "1.0.103", "MIT OR Apache-2.0", ["license_mit.txt", "license_apache_2_0.txt"]),
+        new("fastrand", "2.4.1", "Apache-2.0 OR MIT", ["license_apache_2_0.txt", "license_mit.txt"]),
+        new("jni", "0.21.1", "MIT OR Apache-2.0", ["license_mit.txt", "license_apache_2_0.txt"]),
+        new("serde", "1.0.228", "MIT OR Apache-2.0", ["license_mit.txt", "license_apache_2_0.txt"]),
+        new("serde_json", "1.0.150", "MIT OR Apache-2.0", ["license_mit.txt", "license_apache_2_0.txt"]),
+        new("unicode-width", "0.2.2", "MIT OR Apache-2.0", ["license_mit.txt", "license_apache_2_0.txt"]),
+    ];
+
     private readonly Yuraive.Core.Storage.AppDataPaths _paths = new();
     private readonly DocumentLibrary _library;
     private readonly HistoryStore _history;
@@ -85,6 +100,7 @@ public sealed partial class MainWindow : Window
         _engine.StateChanged += Engine_StateChanged;
         LibraryList.ItemsSource = _libraryItems;
         HistoryList.ItemsSource = _historyItems;
+        LicensesList.ItemsSource = OpenSourceNotices;
         RootGrid.Loaded += RootGrid_Loaded;
         RootGrid.SizeChanged += RootGrid_SizeChanged;
         RootGrid.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(RootGrid_PointerPressed), true);
@@ -261,6 +277,7 @@ public sealed partial class MainWindow : Window
         LibraryScreen.Visibility = Visibility.Collapsed;
         EmptyLibraryPanel.Visibility = Visibility.Collapsed;
         SettingsPanel.Visibility = Visibility.Collapsed;
+        LicensesPanel.Visibility = Visibility.Collapsed;
         HistoryPanel.Visibility = Visibility.Visible;
         var entries = await _history.ReadAllAsync();
         var graphs = (await _library.ResolveGraphsAsync(entries.Select(entry => entry.GraphId)))
@@ -297,6 +314,7 @@ public sealed partial class MainWindow : Window
         LibraryScreen.Visibility = Visibility.Collapsed;
         EmptyLibraryPanel.Visibility = Visibility.Collapsed;
         HistoryPanel.Visibility = Visibility.Collapsed;
+        LicensesPanel.Visibility = Visibility.Collapsed;
         SettingsPanel.Visibility = Visibility.Visible;
         UpdatePairingStatus();
         ApplySettingsControls();
@@ -306,7 +324,47 @@ public sealed partial class MainWindow : Window
     {
         HistoryPanel.Visibility = Visibility.Collapsed;
         SettingsPanel.Visibility = Visibility.Collapsed;
+        LicensesPanel.Visibility = Visibility.Collapsed;
         LibraryScreen.Visibility = Visibility.Visible;
+    }
+
+    private void ShowLicenses()
+    {
+        _section = LibrarySection.Licenses;
+        LibraryScreen.Visibility = Visibility.Collapsed;
+        EmptyLibraryPanel.Visibility = Visibility.Collapsed;
+        HistoryPanel.Visibility = Visibility.Collapsed;
+        SettingsPanel.Visibility = Visibility.Collapsed;
+        LicensesPanel.Visibility = Visibility.Visible;
+        ShowLicenseList();
+    }
+
+    private void ShowLicenseList()
+    {
+        LicensesTitle.Text = "ライセンス";
+        LicenseDetailContent.Visibility = Visibility.Collapsed;
+        LicenseListContent.Visibility = Visibility.Visible;
+    }
+
+    private void ShowLicenseDetail(OpenSourceNoticeViewModel notice)
+    {
+        LicensesTitle.Text = "ライセンス詳細";
+        LicenseDetailName.Text = notice.Name;
+        LicenseDetailSummary.Text = notice.Summary;
+        LicenseDetailText.Text = string.Join(
+            "\n\n────────────────────\n\n",
+            notice.LicenseResourceNames.Select(ReadLicenseResource));
+        LicenseListContent.Visibility = Visibility.Collapsed;
+        LicenseDetailContent.Visibility = Visibility.Visible;
+        LicenseDetailContent.ChangeView(null, 0, null, true);
+    }
+
+    private static string ReadLicenseResource(string name)
+    {
+        using var stream = typeof(MainWindow).Assembly.GetManifestResourceStream($"Yuraive.App.Licenses.{name}");
+        if (stream is null) return $"ライセンス本文を読み込めませんでした ({name})";
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private async Task ShowCollectionAsync(string title, IEnumerable<LibraryGraph> graphs, LibrarySection section = LibrarySection.Collection)
@@ -847,6 +905,17 @@ public sealed partial class MainWindow : Window
             await ShowRootsAsync();
             return;
         }
+        if (_section == LibrarySection.Licenses)
+        {
+            if (LicenseDetailContent.Visibility == Visibility.Visible)
+            {
+                ShowLicenseList();
+                return;
+            }
+            _section = LibrarySection.Settings;
+            ShowSettings();
+            return;
+        }
         if (_section is LibrarySection.History or LibrarySection.Settings or LibrarySection.Favorites or LibrarySection.Collection)
         {
             await ShowRootsAsync();
@@ -874,6 +943,13 @@ public sealed partial class MainWindow : Window
         _section = LibrarySection.Library;
         await OpenDirectoryAsync(root, graph.Ref.ParentPath);
     }
+
+    private void LicensesList_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is OpenSourceNoticeViewModel notice) ShowLicenseDetail(notice);
+    }
+
+    private async void LicenseBackButton_Click(object sender, RoutedEventArgs e) => await GoBackAsync();
 
     private async Task<LibraryDirectory?> SafeInspectDirectoryAsync(RootGrant root, string path)
     {
@@ -1074,6 +1150,23 @@ public sealed partial class MainWindow : Window
 
     private async void HistoryNavButton_Click(object sender, RoutedEventArgs e) { _section = LibrarySection.History; await ShowHistoryAsync(); }
     private void SettingsNavButton_Click(object sender, RoutedEventArgs e) { _section = LibrarySection.Settings; ShowSettings(); }
+    private void LicensesLink_Click(object sender, RoutedEventArgs e) => ShowLicenses();
+    private async void GitHubLink_Click(object sender, RoutedEventArgs e) => await OpenExternalUriAsync("https://github.com/h-sumiya/yuraive");
+    private async void ContactLink_Click(object sender, RoutedEventArgs e) => await OpenExternalUriAsync("https://hiro.red/contact");
+    private async void PrivacyLink_Click(object sender, RoutedEventArgs e) => await OpenExternalUriAsync("https://yuraive.com/privacy/");
+
+    private async Task OpenExternalUriAsync(string uri)
+    {
+        try
+        {
+            if (!await Launcher.LaunchUriAsync(new Uri(uri)))
+                await ShowMessageAsync("リンクを開けません", uri);
+        }
+        catch (Exception error)
+        {
+            await ShowMessageAsync("リンクを開けません", error.Message);
+        }
+    }
 
     private async Task RefreshCurrentSectionAsync()
     {
@@ -2041,6 +2134,6 @@ public sealed partial class MainWindow : Window
         public List<(string Name, LibraryAssetInspection Asset)> Files { get; } = [];
     }
 
-    private enum LibrarySection { Library, Favorites, Collection, History, Settings }
+    private enum LibrarySection { Library, Favorites, Collection, History, Settings, Licenses }
 
 }

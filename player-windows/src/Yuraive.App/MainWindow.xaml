@@ -286,6 +286,89 @@
                                 <Grid><TextBlock FontSize="18" FontWeight="Bold" Text="スクリプトのタイムアウト" /><TextBlock x:Name="ScriptTimeoutText" HorizontalAlignment="Right" Foreground="{StaticResource PlayerAccentBrush}" FontWeight="SemiBold" /></Grid>
                                 <Slider x:Name="ScriptTimeoutSlider" Minimum="100" Maximum="5000" StepFrequency="100" ValueChanged="ScriptTimeoutSlider_ValueChanged" />
                             </StackPanel>
+
+                            <StackPanel Spacing="0">
+                                <TextBlock Margin="0,0,0,8" FontSize="18" FontWeight="Bold" Text="アプリについて" />
+                                <Button Style="{StaticResource SettingsLinkButtonStyle}" Click="LicensesLink_Click" AutomationProperties.Name="ライセンスを開く">
+                                    <Grid Padding="4,0">
+                                        <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="ライセンス" />
+                                        <FontIcon HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE76C;" />
+                                    </Grid>
+                                </Button>
+                                <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                                <Button Style="{StaticResource SettingsLinkButtonStyle}" Click="GitHubLink_Click" AutomationProperties.Name="GitHubを外部サイトで開く">
+                                    <Grid Padding="4,0">
+                                        <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="GitHub" />
+                                        <FontIcon HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE8A7;" />
+                                    </Grid>
+                                </Button>
+                                <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                                <Button Style="{StaticResource SettingsLinkButtonStyle}" Click="ContactLink_Click" AutomationProperties.Name="お問い合わせを外部サイトで開く">
+                                    <Grid Padding="4,0">
+                                        <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="お問い合わせ" />
+                                        <FontIcon HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE8A7;" />
+                                    </Grid>
+                                </Button>
+                                <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                                <Button Style="{StaticResource SettingsLinkButtonStyle}" Click="PrivacyLink_Click" AutomationProperties.Name="プライバシーポリシーを外部サイトで開く">
+                                    <Grid Padding="4,0">
+                                        <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="プライバシーポリシー" />
+                                        <FontIcon HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE8A7;" />
+                                    </Grid>
+                                </Button>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
+                <Grid x:Name="LicensesPanel" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="64" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                    <Grid Margin="12,4">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Button Style="{StaticResource RoundIconButtonStyle}" Click="LicenseBackButton_Click" ToolTipService.ToolTip="戻る"><FontIcon Glyph="&#xE72B;" /></Button>
+                        <TextBlock x:Name="LicensesTitle" Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" FontSize="22" FontWeight="Bold" Text="ライセンス" />
+                    </Grid>
+
+                    <Grid x:Name="LicenseListContent" Grid.Row="1" MaxWidth="720" Margin="20,4,20,20" HorizontalAlignment="Stretch">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                        <StackPanel Margin="4,8,4,12" Spacing="4">
+                            <TextBlock FontSize="18" FontWeight="Bold" Text="Yuraive" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="13" Text="Copyright © 2026 h-sumiya. All rights reserved." />
+                        </StackPanel>
+                        <StackPanel Grid.Row="1">
+                            <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                            <TextBlock Margin="4,22,4,8" FontSize="18" FontWeight="Bold" Text="オープンソースソフトウェア" />
+                        </StackPanel>
+                        <ListView x:Name="LicensesList" Grid.Row="2" IsItemClickEnabled="True" ItemClick="LicensesList_ItemClick" SelectionMode="None">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid MinHeight="62" Padding="4,8">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <StackPanel VerticalAlignment="Center" Spacing="3">
+                                            <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="13" Text="{Binding Summary}" />
+                                        </StackPanel>
+                                        <FontIcon Grid.Column="1" Margin="16,0,4,0" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE76C;" />
+                                        <Rectangle Grid.ColumnSpan="2" Height="1" VerticalAlignment="Bottom" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Grid>
+
+                    <ScrollViewer x:Name="LicenseDetailContent" Grid.Row="1" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
+                        <StackPanel MaxWidth="720" Margin="20,12,20,28" HorizontalAlignment="Stretch" Spacing="16">
+                            <StackPanel Spacing="4">
+                                <TextBlock x:Name="LicenseDetailName" FontSize="22" FontWeight="Bold" TextWrapping="Wrap" />
+                                <TextBlock x:Name="LicenseDetailSummary" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <TextBlock x:Name="LicenseDetailText" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
