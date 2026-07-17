@@ -6,6 +6,7 @@
     <RootNamespace>Yuraive.App</RootNamespace>
     <AssemblyName>Yuraive</AssemblyName>
     <ApplicationTitle>Yuraive</ApplicationTitle>
+    <DefaultLanguage>ja-JP</DefaultLanguage>
     <Product>Yuraive</Product>
     <Authors>h-sumiya</Authors>
     <Company>h-sumiya</Company>
