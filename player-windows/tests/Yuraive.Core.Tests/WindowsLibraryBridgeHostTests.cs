@@ -19,7 +19,10 @@ public sealed class WindowsLibraryBridgeHostTests
         var after = bridge.Identity;
         Assert.NotEqual(before.Room, after.Room);
         Assert.NotEqual(before.Secret, after.Secret);
+        Assert.NotEqual(before.Fingerprint, after.Fingerprint);
         Assert.Equal(before.DeviceId, after.DeviceId);
         Assert.Equal(before.DeviceName, after.DeviceName);
+        Assert.Contains("v=2", bridge.PairingUri, StringComparison.Ordinal);
+        Assert.Contains($"pin={after.Fingerprint}", bridge.PairingUri, StringComparison.Ordinal);
     }
 }

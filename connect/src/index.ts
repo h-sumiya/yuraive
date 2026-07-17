@@ -21,7 +21,21 @@ const json = (body: unknown, status = 200): Response =>
 
 const ROOM_PATTERN = /^[A-Za-z0-9_-]{22,64}$/
 const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/
-const FORWARDED_TYPES = new Set(['offer', 'answer', 'candidate'])
+const SIGNAL_MAGIC = new Uint8Array([0x59, 0x53, 0x47, 0x31]) // YSG1
+const SIGNAL_READY = new Uint8Array([...SIGNAL_MAGIC, 1])
+const SIGNAL_PEER_LEFT = new Uint8Array([...SIGNAL_MAGIC, 2])
+const SIGNAL_CANDIDATES = 3
+const MAX_SIGNAL_BYTES = 4 * 1024
+
+const validCandidateFrame = (message: ArrayBuffer): boolean => {
+  const bytes = new Uint8Array(message)
+  return (
+    bytes.length >= 6 &&
+    bytes.length <= MAX_SIGNAL_BYTES &&
+    SIGNAL_MAGIC.every((value, index) => bytes[index] === value) &&
+    bytes[4] === SIGNAL_CANDIDATES
+  )
+}
 
 const timingSafeEqual = (left: string, right: string): boolean => {
   if (left.length !== right.length) return false
@@ -74,28 +88,16 @@ export class SignalingRoom extends DurableObject<Env> {
     const counterpart: SocketRole = role === 'host' ? 'client' : 'host'
     const peers = this.ctx.getWebSockets(counterpart)
     if (peers.length > 0) {
-      server.send(JSON.stringify({ type: 'peer_ready' }))
-      for (const peer of peers) peer.send(JSON.stringify({ type: 'peer_ready' }))
+      server.send(SIGNAL_READY)
+      for (const peer of peers) peer.send(SIGNAL_READY)
     }
 
     return new Response(null, { status: 101, webSocket: client })
   }
 
   webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
-    if (typeof message !== 'string' || message.length > 128 * 1024) {
+    if (typeof message === 'string' || !validCandidateFrame(message)) {
       socket.close(1009, 'invalid_message')
-      return
-    }
-
-    let type: unknown
-    try {
-      type = (JSON.parse(message) as { type?: unknown }).type
-    } catch {
-      socket.close(1007, 'invalid_json')
-      return
-    }
-    if (typeof type !== 'string' || !FORWARDED_TYPES.has(type)) {
-      socket.close(1008, 'invalid_signal')
       return
     }
 
@@ -123,7 +125,7 @@ export class SignalingRoom extends DurableObject<Env> {
       if (!hasReplacement) {
         const counterpart = attachment.role === 'host' ? 'client' : 'host'
         for (const peer of this.ctx.getWebSockets(counterpart)) {
-          if (peer.readyState < WebSocket.CLOSING) peer.send(JSON.stringify({ type: 'peer_left' }))
+          if (peer.readyState < WebSocket.CLOSING) peer.send(SIGNAL_PEER_LEFT)
         }
       }
     }
@@ -142,7 +144,7 @@ export default {
       return json({ service: 'yuraive-connect', status: 'ok' })
     }
 
-    const match = /^\/v1\/rooms\/([^/]+)$/.exec(url.pathname)
+    const match = /^\/v2\/rooms\/([^/]+)$/.exec(url.pathname)
     if (request.method === 'GET' && match !== null) {
       const room = match[1]
       if (!ROOM_PATTERN.test(room)) return json({ error: 'invalid_room' }, 400)

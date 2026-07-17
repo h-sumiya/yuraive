@@ -18,6 +18,7 @@ public sealed class AppDataPaths
     public string Library => Path.Combine(Root, "library.json");
     public string RemoteConnections => Path.Combine(Root, "remote-connections.dat");
     public string RemoteCache => EnsureDirectory("remote-cache");
+    public string P2pHostCache => EnsureDirectory("p2p-host");
     public string WindowsPairing => Path.Combine(Root, "windows-pairing.dat");
 
     private string EnsureDirectory(string name)

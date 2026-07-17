@@ -1,12 +1,18 @@
 # Yuraive Rust Runtime
 
-`yuraive-runtime` contains the platform-independent Yuraive v1 validator and Starlark engine.
+`yuraive-runtime` contains the platform-independent Yuraive v1 validator, Starlark engine,
+and native P2P transport.
 The same Rust Starlark implementation is exposed through JNI to the Android player and
 through WebAssembly to the editor.
 It also decodes the header-prefixed protobuf used by `.yuraive` player bundles for
 the Android and Windows storage layers. Bundle encoding stays in TypeScript so
 exporting does not need to load WebAssembly.
 The wire format is documented in [BUNDLE_FORMAT.md](./BUNDLE_FORMAT.md).
+
+The P2P runtime owns Cloudflare WebSocket signaling, same-socket STUN discovery and UDP
+hole punching, certificate-pinned QUIC, the binary request protocol, parallel 128 KiB block
+scheduling, and the persistent partial-file cache. Android uses JNI and Windows uses C ABI
+entry points; platform code only supplies file metadata and bytes.
 
 Android file existence checks stay in the Kotlin storage layer because they depend on
 the Storage Access Framework. JSON structure, graph transitions, node/button/control

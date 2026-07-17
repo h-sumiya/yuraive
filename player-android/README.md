@@ -47,6 +47,8 @@ cd player-android
 
 SMB・WebDAV の接続情報と認証情報は Android Keystore の鍵で暗号化して保存します。端末が Tailscale に接続されていれば、tailnet 内の HTTPS WebDAV URL や SMB ホストも利用できます。
 
+Windows版の「Androidと接続」に表示されるQRコードを読み取ると、Cloudflareを待ち合わせだけに使うQUIC直接接続でWindowsライブラリを追加できます。メディア本体はCloudflareを経由しません。直接UDP経路を作れないネットワークでは接続エラーになり、ライブラリの再読み込み操作で再試行できます。
+
 設定の「すべての再生コントロールを表示・許可」を有効にすると、コンテンツ側の`playerControls`を一時的に上書きできます。JSON仕様は[YURAIVE_v1_SPEC.md](../notes/YURAIVE_v1_SPEC.md)を参照してください。
 
 編集用の`*.yuraive.json`に加えて、スクリプトとレイアウトを内包した配布用`*.yuraive`も読み込めます。

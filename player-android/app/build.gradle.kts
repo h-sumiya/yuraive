@@ -109,7 +109,6 @@ dependencies {
 
     implementation("com.hierynomus:smbj:0.14.0")
     implementation("com.squareup.okhttp3:okhttp:5.4.0")
-    implementation("io.github.webrtc-sdk:android:144.7559.09")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
 

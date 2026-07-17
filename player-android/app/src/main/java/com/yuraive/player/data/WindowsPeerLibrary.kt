@@ -1,25 +1,22 @@
 package com.yuraive.player.data
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import com.yuraive.player.model.GraphValidator
 import com.yuraive.player.model.YuraiveJson
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.security.KeyStore
 import java.security.MessageDigest
-import java.util.UUID
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -34,29 +31,16 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
-import org.webrtc.DataChannel
-import org.webrtc.IceCandidate
-import org.webrtc.MediaStream
-import org.webrtc.PeerConnection
-import org.webrtc.PeerConnectionFactory
-import org.webrtc.RtpReceiver
-import org.webrtc.SdpObserver
-import org.webrtc.SessionDescription
 
 @Serializable
 private data class WindowsRootConfig(
@@ -64,6 +48,7 @@ private data class WindowsRootConfig(
     val endpoint: String,
     val room: String,
     val secret: String,
+    val fingerprint: String,
     val deviceId: String,
     val deviceName: String,
     val rootId: String,
@@ -74,26 +59,29 @@ private data class PairingPayload(
     val endpoint: String,
     val room: String,
     val secret: String,
+    val fingerprint: String,
     val deviceId: String,
     val deviceName: String,
 ) {
     companion object {
         private val roomPattern = Regex("^[A-Za-z0-9_-]{22,64}$")
-        private val secretPattern = Regex("^[A-Za-z0-9_-]{43}$")
+        private val tokenPattern = Regex("^[A-Za-z0-9_-]{43}$")
         private val devicePattern = Regex("^[A-Za-z0-9_-]{22,64}$")
 
         fun parse(value: String): PairingPayload {
             val uri = Uri.parse(value)
             require(uri.scheme == "yuraive" && uri.host == "pair") { "Yuraiveの接続用QRコードではありません" }
-            require(uri.getQueryParameter("v") == "1") { "未対応の接続コードです" }
+            require(uri.getQueryParameter("v") == "2") { "未対応の接続コードです" }
             val endpoint = uri.getQueryParameter("endpoint").orEmpty().trimEnd('/')
             require(endpoint == SIGNALING_ENDPOINT) { "接続先が正しくありません" }
             val room = uri.getQueryParameter("room").orEmpty()
             val secret = uri.getQueryParameter("secret").orEmpty()
+            val fingerprint = uri.getQueryParameter("pin").orEmpty()
             val deviceId = uri.getQueryParameter("device").orEmpty()
             require(
                 roomPattern.matches(room) &&
-                    secretPattern.matches(secret) &&
+                    tokenPattern.matches(secret) &&
+                    tokenPattern.matches(fingerprint) &&
                     devicePattern.matches(deviceId)
             ) {
                 "接続コードが壊れています"
@@ -102,6 +90,7 @@ private data class PairingPayload(
                 endpoint = endpoint,
                 room = room,
                 secret = secret,
+                fingerprint = fingerprint,
                 deviceId = deviceId,
                 deviceName =
                     uri.getQueryParameter("name")?.take(80)?.ifBlank { "Windows" } ?: "Windows",
@@ -137,6 +126,28 @@ internal class WindowsPeerSourceManager(private val context: Context) {
     val connectionStates: StateFlow<Map<String, WindowsConnectionStatus>> =
         connectionStatesMutable.asStateFlow()
 
+    init {
+        val connectivity =
+            context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        var activeNetwork = connectivity.activeNetwork
+        connectivity.registerDefaultNetworkCallback(
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    val previous = activeNetwork
+                    activeNetwork = network
+                    if (previous != null && previous != network) refreshAll()
+                }
+
+                override fun onLost(network: Network) {
+                    if (activeNetwork == network) {
+                        activeNetwork = null
+                        refreshAll()
+                    }
+                }
+            }
+        )
+    }
+
     suspend fun pair(qrPayload: String): List<RootGrant> =
         withContext(Dispatchers.IO) {
             val pairing = PairingPayload.parse(qrPayload)
@@ -146,6 +157,7 @@ internal class WindowsPeerSourceManager(private val context: Context) {
                     endpoint = pairing.endpoint,
                     room = pairing.room,
                     secret = pairing.secret,
+                    fingerprint = pairing.fingerprint,
                     deviceId = pairing.deviceId,
                     deviceName = pairing.deviceName,
                     rootId = "",
@@ -170,7 +182,7 @@ internal class WindowsPeerSourceManager(private val context: Context) {
 
     fun isRoot(rootUri: String): Boolean = rootId(rootUri) != null
 
-    fun hasConfig(id: String): Boolean = configById(id) != null
+    fun hasConfig(rootUri: String): Boolean = rootId(rootUri)?.let(::configById) != null
 
     fun remove(rootUri: String) {
         val id = rootId(rootUri) ?: return
@@ -266,8 +278,7 @@ internal class WindowsPeerSourceManager(private val context: Context) {
 
     fun list(rootUri: String, relativePath: String): List<RemoteNode> {
         val config = config(rootUri)
-        val path = normalize(relativePath)
-        return client(config).list(config.rootId, path)
+        return client(config).list(config.rootId, normalize(relativePath))
     }
 
     fun open(rootUri: String, relativePath: String, offset: Long = 0): RemoteRead {
@@ -307,7 +318,7 @@ internal class WindowsPeerSourceManager(private val context: Context) {
         }
 
     private fun client(config: WindowsRootConfig): WindowsPeerClient {
-        val key = "${config.endpoint}|${config.room}|${config.secret}"
+        val key = "${config.endpoint}|${config.room}|${config.secret}|${config.fingerprint}"
         return synchronized(clientLock) {
             val client =
                 clients[key]
@@ -395,19 +406,14 @@ private class PeerRangeInputStream(
     private fun ensureChunk(): Boolean {
         if (chunkOffset < chunk.size) return true
         if (position >= length) return false
-        chunk =
-            client.read(rootId, path, position, minOf(32 * 1024L, length - position).toInt()).first
+        chunk = client.read(rootId, path, position, minOf(128 * 1024L, length - position).toInt())
         chunkOffset = 0
         position += chunk.size
-        if (chunk.isEmpty() && position < length) throw IOException("Windowsからファイルを読み込めません")
+        if (chunk.isEmpty() && position < length) {
+            throw IOException("Windowsからファイルを読み込めません")
+        }
         return chunk.isNotEmpty()
     }
-}
-
-private sealed interface PeerReply {
-    data class Json(val value: JsonObject) : PeerReply
-
-    data class Binary(val value: ByteArray, val totalLength: Long) : PeerReply
 }
 
 private data class WindowsDeviceRoot(
@@ -425,548 +431,147 @@ private class WindowsPeerClient(
     val deviceId: String
         get() = config.deviceId
 
-    private val http = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
-    private val factory = factory(context)
-    private val lock = Any()
-    private val pending = ConcurrentHashMap<String, CompletableFuture<PeerReply>>()
-    private var socket: WebSocket? = null
-    private var peer: PeerConnection? = null
-    private var channel: DataChannel? = null
-    private var connection: CompletableFuture<DataChannel>? = null
-    @Volatile private var closed = false
     private val activeRequests = AtomicInteger()
-    private var remoteDescriptionReady = false
-    private val queuedCandidates = mutableListOf<IceCandidate>()
+    private val requestBatchFailed = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
+    private val handle: Long
+
+    init {
+        val cacheDirectory = File(context.cacheDir, "p2p/${config.deviceId}").apply { mkdirs() }
+        val request = buildJsonObject {
+            put("endpoint", config.endpoint)
+            put("room", config.room)
+            put("secret", config.secret)
+            put("fingerprint", config.fingerprint)
+            put("cacheDirectory", cacheDirectory.absolutePath)
+            put("maximumCacheBytes", MAXIMUM_CACHE_BYTES)
+        }
+        handle = NativeP2pClient.create(request.toString())
+    }
 
     fun roots(): List<Pair<String, String>> = trackedRequest {
-        val response = request("roots")
-        response["roots"]!!.jsonArray.map { item ->
-            val root = item.jsonObject
+        NativeP2pClient.roots(handle).map { root ->
             root["id"]!!.jsonPrimitive.content to root["name"]!!.jsonPrimitive.content
         }
     }
 
     fun list(rootId: String, path: String): List<RemoteNode> = trackedRequest {
-        val response = request("list", rootId, path)
-        response["nodes"]!!.jsonArray.map { item ->
-            val node = item.jsonObject
-            RemoteNode(
-                name = node["name"]!!.jsonPrimitive.content,
-                isDirectory = node["isDirectory"]!!.jsonPrimitive.booleanOrNull == true,
-                size = node["size"]?.jsonPrimitive?.long ?: 0,
-                modifiedAt = node["modifiedAt"]?.jsonPrimitive?.long ?: 0,
-            )
-        }
+        NativeP2pClient.list(handle, rootId, path).map(::remoteNode)
     }
 
     fun stat(rootId: String, path: String): RemoteNode? = trackedRequest {
-        val node = request("stat", rootId, path)["node"] ?: return@trackedRequest null
-        if (node.toString() == "null") return@trackedRequest null
-        node.jsonObject.let {
-            RemoteNode(
-                name = it["name"]!!.jsonPrimitive.content,
-                isDirectory = it["isDirectory"]!!.jsonPrimitive.booleanOrNull == true,
-                size = it["size"]?.jsonPrimitive?.long ?: 0,
-                modifiedAt = it["modifiedAt"]?.jsonPrimitive?.long ?: 0,
-            )
-        }
+        NativeP2pClient.stat(handle, rootId, path)?.get("node")?.jsonObject?.let(::remoteNode)
     }
 
-    fun read(rootId: String, path: String, offset: Long, count: Int): Pair<ByteArray, Long> =
-        trackedRequest {
-            val id = requestId()
-            val future = CompletableFuture<PeerReply>()
-            pending[id] = future
-            val message = buildJsonObject {
-                put("id", id)
-                put("method", "read")
-                put("rootId", rootId)
-                put("path", path)
-                put("offset", offset)
-                put("count", count)
-            }
-            send(id, message)
-            when (val reply = await(id, future)) {
-                is PeerReply.Binary -> reply.value to reply.totalLength
-                is PeerReply.Json -> {
-                    val data =
-                        reply.value["data"]?.jsonPrimitive?.contentOrNull
-                            ?: throw IOException("Windowsからファイルデータが返されませんでした")
-                    val totalLength =
-                        reply.value["totalLength"]?.jsonPrimitive?.long
-                            ?: throw IOException("Windowsからファイルサイズが返されませんでした")
-                    Base64.decode(data, Base64.NO_WRAP) to totalLength
-                }
-            }
-        }
+    fun read(rootId: String, path: String, offset: Long, count: Int): ByteArray = trackedRequest {
+        NativeP2pClient.read(handle, rootId, path, offset, count)
+    }
 
     private inline fun <T> trackedRequest(block: () -> T): T {
-        activeRequests.incrementAndGet()
-        publishActivityState()
+        check(!closed.get()) { "Windowsとの接続は再読み込みされました" }
+        if (activeRequests.incrementAndGet() == 1) {
+            requestBatchFailed.set(false)
+            connectionChanged(WindowsConnectionStatus.LOADING)
+        }
         return try {
             block()
-        } finally {
-            activeRequests.decrementAndGet()
-            publishActivityState()
-        }
-    }
-
-    private fun publishActivityState() {
-        val status =
-            synchronized(lock) {
-                when {
-                    closed -> null
-                    channel?.state() == DataChannel.State.OPEN ->
-                        if (activeRequests.get() > 0) WindowsConnectionStatus.LOADING
-                        else WindowsConnectionStatus.CONNECTED
-                    connection?.isDone == false -> WindowsConnectionStatus.CONNECTING
-                    else -> null
-                }
-            }
-        status?.let(connectionChanged)
-    }
-
-    private fun request(method: String, rootId: String? = null, path: String? = null): JsonObject {
-        val id = requestId()
-        val future = CompletableFuture<PeerReply>()
-        pending[id] = future
-        val message = buildJsonObject {
-            put("id", id)
-            put("method", method)
-            rootId?.let { put("rootId", it) }
-            path?.let { put("path", it) }
-        }
-        send(id, message)
-        return when (val reply = await(id, future)) {
-            is PeerReply.Json -> reply.value
-            is PeerReply.Binary -> throw IOException("Windowsから不正な応答を受信しました")
-        }
-    }
-
-    private fun send(id: String, value: JsonObject) {
-        try {
-            val dataChannel = ensureConnected()
-            val bytes = value.toString().toByteArray()
-            if (!dataChannel.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false)))
-                throw IOException("Windowsへリクエストを送信できません")
         } catch (error: Throwable) {
-            val failure = error as? IOException ?: IOException("Windowsへリクエストを送信できません", error)
-            failCurrentConnection(failure)
-            pending.remove(id)?.completeExceptionally(failure)
-        }
-    }
-
-    private fun await(id: String, future: CompletableFuture<PeerReply>): PeerReply =
-        try {
-            future.get(15, TimeUnit.SECONDS)
-        } catch (error: TimeoutException) {
-            val failure = IOException("Windowsから応答がありません", error)
-            failCurrentConnection(failure)
-            throw failure
-        } catch (error: InterruptedException) {
-            Thread.currentThread().interrupt()
-            throw IOException("Windowsからの応答待ちが中断されました", error)
-        } catch (error: ExecutionException) {
-            throw (error.cause as? IOException ?: IOException("Windowsから応答がありません", error.cause))
+            requestBatchFailed.set(true)
+            connectionChanged(WindowsConnectionStatus.ERROR)
+            Log.e("YuraiveP2P", NativeP2pClient.status(handle), error)
+            throw (error as? IOException
+                ?: IOException(error.message ?: "WindowsとのP2P通信に失敗しました", error))
         } finally {
-            pending.remove(id)
-        }
-
-    private fun ensureConnected(): DataChannel {
-        val future =
-            synchronized(lock) {
-                if (closed) throw IOException("Windowsとの接続は再読み込みされました")
-                channel
-                    ?.takeIf { it.state() == DataChannel.State.OPEN }
-                    ?.let {
-                        return it
-                    }
-                connection?.takeIf { !it.isDone }
-                    ?: CompletableFuture<DataChannel>().also {
-                        connection = it
-                        beginConnection(it)
-                    }
-            }
-        return try {
-            future.get(15, TimeUnit.SECONDS).takeIf { it.state() == DataChannel.State.OPEN }
-                ?: throw IOException("Windowsとのデータ接続が閉じられました")
-        } catch (error: InterruptedException) {
-            Thread.currentThread().interrupt()
-            val failure = IOException("Windowsへの接続待ちが中断されました", error)
-            failConnection(future, failure)
-            throw failure
-        } catch (error: Exception) {
-            val cause = if (error is ExecutionException) error.cause else error
-            val failure =
-                cause as? IOException
-                    ?: IOException("WindowsにP2P接続できません。両方のアプリとネットワークを確認してください", cause)
-            failConnection(future, failure)
-            throw failure
-        }
-    }
-
-    private fun beginConnection(ready: CompletableFuture<DataChannel>) {
-        connectionChanged(WindowsConnectionStatus.CONNECTING)
-        var oldChannel: DataChannel? = null
-        var oldPeer: PeerConnection? = null
-        var oldSocket: WebSocket? = null
-        synchronized(lock) {
-            oldChannel = channel
-            oldPeer = peer
-            oldSocket = socket
-            channel = null
-            peer = null
-            socket = null
-            remoteDescriptionReady = false
-            queuedCandidates.clear()
-        }
-        releaseTransport(oldChannel, oldPeer, oldSocket)
-        val rtcConfig =
-            PeerConnection.RTCConfiguration(
-                listOf(PeerConnection.IceServer.builder(STUN_URL).createIceServer())
-            )
-        val createdPeer =
-            factory.createPeerConnection(rtcConfig, PeerObserver(ready))
-                ?: run {
-                    ready.completeExceptionally(IOException("WebRTCを初期化できません"))
-                    return
-                }
-        synchronized(lock) { peer = createdPeer }
-        val request =
-            Request.Builder()
-                .url("${config.endpoint}/${config.room}?role=client")
-                .header("Authorization", "Bearer ${config.secret}")
-                .build()
-        socket = http.newWebSocket(request, SignalListener(ready))
-    }
-
-    private inner class SignalListener(private val ready: CompletableFuture<DataChannel>) :
-        WebSocketListener() {
-        override fun onMessage(webSocket: WebSocket, text: String) {
-            if (!isCurrentConnection(ready)) return
-            runCatching {
-                    val message = YuraiveJson.format.parseToJsonElement(text).jsonObject
-                    when (message["type"]?.jsonPrimitive?.contentOrNull) {
-                        "offer" -> applyOffer(message["sdp"]!!.jsonPrimitive.content, ready)
-                        "candidate" -> {
-                            val candidate =
-                                IceCandidate(
-                                    message["sdpMid"]?.jsonPrimitive?.contentOrNull ?: "0",
-                                    message["sdpMLineIndex"]?.jsonPrimitive?.int ?: 0,
-                                    message["candidate"]!!.jsonPrimitive.content,
-                                )
-                            synchronized(lock) {
-                                if (!closed && connection === ready) {
-                                    if (remoteDescriptionReady) peer?.addIceCandidate(candidate)
-                                    else queuedCandidates += candidate
-                                }
-                            }
-                        }
-                        "peer_left" -> failConnection(ready, IOException("Windowsとの接続が閉じられました"))
-                    }
-                }
-                .onFailure { failConnection(ready, it) }
-        }
-
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) =
-            failConnection(ready, t)
-    }
-
-    private fun applyOffer(sdp: String, ready: CompletableFuture<DataChannel>) {
-        val current =
-            synchronized(lock) { peer.takeIf { !closed && connection === ready } } ?: return
-        current.setRemoteDescription(
-            object : SimpleSdpObserver() {
-                override fun onSetSuccess() {
-                    if (!isCurrentConnection(ready)) return
-                    synchronized(lock) {
-                        if (closed || connection !== ready || peer !== current) return
-                        remoteDescriptionReady = true
-                        queuedCandidates.forEach(current::addIceCandidate)
-                        queuedCandidates.clear()
-                    }
-                    current.createAnswer(
-                        object : SimpleSdpObserver() {
-                            override fun onCreateSuccess(description: SessionDescription) {
-                                if (!isCurrentConnection(ready)) return
-                                current.setLocalDescription(
-                                    object : SimpleSdpObserver() {
-                                        override fun onSetSuccess() {
-                                            sendSignal(
-                                                ready,
-                                                buildJsonObject {
-                                                    put("type", "answer")
-                                                    put("sdp", description.description)
-                                                },
-                                            )
-                                        }
-
-                                        override fun onSetFailure(error: String) =
-                                            failConnection(ready, IOException(error))
-                                    },
-                                    description,
-                                )
-                            }
-
-                            override fun onCreateFailure(error: String) =
-                                failConnection(ready, IOException(error))
-                        },
-                        org.webrtc.MediaConstraints(),
-                    )
-                }
-
-                override fun onSetFailure(error: String) = failConnection(ready, IOException(error))
-            },
-            SessionDescription(SessionDescription.Type.OFFER, sdp),
-        )
-    }
-
-    private inner class PeerObserver(private val ready: CompletableFuture<DataChannel>) :
-        PeerConnection.Observer {
-        override fun onIceCandidate(candidate: IceCandidate) {
-            sendSignal(
-                ready,
-                buildJsonObject {
-                    put("type", "candidate")
-                    put("candidate", candidate.sdp)
-                    put("sdpMid", candidate.sdpMid ?: "0")
-                    put("sdpMLineIndex", candidate.sdpMLineIndex)
-                },
-            )
-        }
-
-        override fun onDataChannel(value: DataChannel) {
-            val accepted =
-                synchronized(lock) {
-                    if (closed || connection !== ready) false
-                    else {
-                        channel = value
-                        true
-                    }
-                }
-            if (!accepted) {
-                releaseTransport(value, null, null)
-                return
-            }
-            value.registerObserver(
-                object : DataChannel.Observer {
-                    override fun onBufferedAmountChange(previousAmount: Long) = Unit
-
-                    override fun onStateChange() {
-                        if (value.state() == DataChannel.State.OPEN) {
-                            publishConnected(ready, value)
-                        }
-                        if (value.state() == DataChannel.State.CLOSED) {
-                            failConnection(ready, IOException("Windowsとのデータ接続が閉じられました"))
-                        }
-                    }
-
-                    override fun onMessage(buffer: DataChannel.Buffer) = receiveData(buffer)
-                }
-            )
-            if (value.state() == DataChannel.State.OPEN) {
-                publishConnected(ready, value)
+            if (activeRequests.decrementAndGet() == 0 && !requestBatchFailed.get()) {
+                connectionChanged(WindowsConnectionStatus.CONNECTED)
             }
         }
-
-        override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
-            when (newState) {
-                PeerConnection.PeerConnectionState.CONNECTED -> Unit
-                PeerConnection.PeerConnectionState.DISCONNECTED,
-                PeerConnection.PeerConnectionState.FAILED,
-                PeerConnection.PeerConnectionState.CLOSED -> {
-                    failConnection(ready, IOException("WindowsとのP2P接続に失敗しました"))
-                }
-                else -> Unit
-            }
-        }
-
-        override fun onSignalingChange(newState: PeerConnection.SignalingState) = Unit
-
-        override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) = Unit
-
-        override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-
-        override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) = Unit
-
-        override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
-
-        override fun onAddStream(stream: MediaStream) = Unit
-
-        override fun onRemoveStream(stream: MediaStream) = Unit
-
-        override fun onRenegotiationNeeded() = Unit
-
-        override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) = Unit
-    }
-
-    private fun receiveData(buffer: DataChannel.Buffer) {
-        val bytes = ByteArray(buffer.data.remaining())
-        buffer.data.get(bytes)
-        if (buffer.binary) {
-            if (bytes.size < 40) return
-            val id = bytes.copyOfRange(0, 32).toString(Charsets.US_ASCII)
-            val total = ByteBuffer.wrap(bytes, 32, 8).order(ByteOrder.BIG_ENDIAN).long
-            pending.remove(id)?.complete(PeerReply.Binary(bytes.copyOfRange(40, bytes.size), total))
-        } else {
-            runCatching {
-                val value =
-                    YuraiveJson.format.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject
-                val id = value["id"]!!.jsonPrimitive.content
-                if (value["ok"]?.jsonPrimitive?.booleanOrNull != true) {
-                    pending
-                        .remove(id)
-                        ?.completeExceptionally(
-                            IOException(
-                                value["error"]?.jsonPrimitive?.contentOrNull
-                                    ?: "Windowsで読み込みに失敗しました"
-                            )
-                        )
-                } else pending.remove(id)?.complete(PeerReply.Json(value))
-            }
-        }
-    }
-
-    private fun sendSignal(ready: CompletableFuture<DataChannel>, value: JsonObject) {
-        val currentSocket = synchronized(lock) { socket.takeIf { !closed && connection === ready } }
-        currentSocket?.send(value.toString())
-    }
-
-    private fun isCurrentConnection(ready: CompletableFuture<DataChannel>): Boolean =
-        synchronized(lock) { !closed && connection === ready }
-
-    private fun publishConnected(ready: CompletableFuture<DataChannel>, value: DataChannel) {
-        val status =
-            synchronized(lock) {
-                if (
-                    closed ||
-                        connection !== ready ||
-                        channel !== value ||
-                        value.state() != DataChannel.State.OPEN
-                ) {
-                    null
-                } else if (activeRequests.get() > 0) {
-                    WindowsConnectionStatus.LOADING
-                } else {
-                    WindowsConnectionStatus.CONNECTED
-                }
-            }
-        if (status != null) {
-            connectionChanged(status)
-            ready.complete(value)
-        }
-    }
-
-    private fun failCurrentConnection(error: Throwable) {
-        val ready = synchronized(lock) { connection } ?: return
-        failConnection(ready, error)
-    }
-
-    private fun failConnection(ready: CompletableFuture<DataChannel>, error: Throwable) {
-        var oldChannel: DataChannel? = null
-        var oldPeer: PeerConnection? = null
-        var oldSocket: WebSocket? = null
-        synchronized(lock) {
-            if (closed || connection !== ready) return
-            connectionChanged(WindowsConnectionStatus.OFFLINE)
-            ready.completeExceptionally(error)
-            pending.values.forEach { it.completeExceptionally(error) }
-            pending.clear()
-            oldChannel = channel
-            oldPeer = peer
-            oldSocket = socket
-            channel = null
-            peer = null
-            socket = null
-            connection = null
-            remoteDescriptionReady = false
-            queuedCandidates.clear()
-        }
-        releaseTransport(oldChannel, oldPeer, oldSocket)
     }
 
     fun close() {
-        val error = IOException("Windowsとの接続は再読み込みされました")
-        var oldChannel: DataChannel? = null
-        var oldPeer: PeerConnection? = null
-        var oldSocket: WebSocket? = null
-        synchronized(lock) {
-            if (closed) return
-            closed = true
-            connectionChanged(WindowsConnectionStatus.OFFLINE)
-            connection?.completeExceptionally(error)
-            pending.values.forEach { it.completeExceptionally(error) }
-            pending.clear()
-            oldChannel = channel
-            oldPeer = peer
-            oldSocket = socket
-            channel = null
-            peer = null
-            socket = null
-            connection = null
-            remoteDescriptionReady = false
-            queuedCandidates.clear()
-        }
-        releaseTransport(oldChannel, oldPeer, oldSocket)
+        if (!closed.compareAndSet(false, true)) return
+        NativeP2pClient.close(handle)
+        connectionChanged(WindowsConnectionStatus.OFFLINE)
     }
 
     companion object {
-        private val factoryLock = Any()
-        private val transportDisposer =
-            Executors.newSingleThreadExecutor { runnable ->
-                Thread(runnable, "yuraive-webrtc-dispose").apply { isDaemon = true }
-            }
-        @Volatile private var sharedFactory: PeerConnectionFactory? = null
+        private const val MAXIMUM_CACHE_BYTES = 2L * 1024 * 1024 * 1024
 
-        private fun releaseTransport(
-            channel: DataChannel?,
-            peer: PeerConnection?,
-            socket: WebSocket?,
-        ) {
-            if (channel == null && peer == null && socket == null) return
-            transportDisposer.execute {
-                runCatching { socket?.cancel() }
-                runCatching { channel?.close() }
-                runCatching { peer?.close() }
-                runCatching { channel?.dispose() }
-                runCatching { peer?.dispose() }
-            }
-        }
-
-        private fun factory(context: Context): PeerConnectionFactory =
-            sharedFactory
-                ?: synchronized(factoryLock) {
-                    sharedFactory
-                        ?: run {
-                            PeerConnectionFactory.initialize(
-                                PeerConnectionFactory.InitializationOptions.builder(
-                                        context.applicationContext
-                                    )
-                                    .setEnableInternalTracer(false)
-                                    .createInitializationOptions()
-                            )
-                            PeerConnectionFactory.builder().createPeerConnectionFactory().also {
-                                sharedFactory = it
-                            }
-                        }
-                }
-
-        private fun requestId(): String = UUID.randomUUID().toString().replace("-", "")
+        private fun remoteNode(value: JsonObject) =
+            RemoteNode(
+                name = value["name"]!!.jsonPrimitive.content,
+                isDirectory = value["isDirectory"]!!.jsonPrimitive.content == "true",
+                size = value["size"]?.jsonPrimitive?.long ?: 0,
+                modifiedAt = value["modifiedAt"]?.jsonPrimitive?.long ?: 0,
+            )
     }
 }
 
-private open class SimpleSdpObserver : SdpObserver {
-    override fun onCreateSuccess(description: SessionDescription) = Unit
+internal object NativeP2pClient {
+    init {
+        System.loadLibrary("yuraive_runtime")
+    }
 
-    override fun onSetSuccess() = Unit
+    fun create(config: String): Long = value(createNative(config)).jsonPrimitive.long
 
-    override fun onCreateFailure(error: String) = Unit
+    fun roots(handle: Long): List<JsonObject> =
+        value(rootsNative(handle)).jsonArray.map(JsonElement::jsonObject)
 
-    override fun onSetFailure(error: String) = Unit
+    fun list(handle: Long, rootId: String, path: String): List<JsonObject> =
+        value(listNative(handle, rootId, path)).jsonArray.map(JsonElement::jsonObject)
+
+    fun stat(handle: Long, rootId: String, path: String): JsonObject? {
+        val result = value(statNative(handle, rootId, path))
+        return if (result is JsonNull) null else result.jsonObject
+    }
+
+    fun read(handle: Long, rootId: String, path: String, offset: Long, count: Int): ByteArray =
+        readNative(handle, rootId, path, offset, count)
+
+    fun close(handle: Long) = closeNative(handle)
+
+    fun status(handle: Long): String = statusNative(handle)
+
+    private fun value(json: String): JsonElement {
+        val result = YuraiveJson.format.parseToJsonElement(json).jsonObject
+        result["error"]?.jsonPrimitive?.contentOrNull?.let { throw IOException(it) }
+        return result["value"] ?: throw IOException("Rust P2Pランタイムから応答がありません")
+    }
+
+    private external fun createNative(config: String): String
+
+    private external fun rootsNative(handle: Long): String
+
+    private external fun listNative(handle: Long, rootId: String, path: String): String
+
+    private external fun statNative(handle: Long, rootId: String, path: String): String
+
+    private external fun statusNative(handle: Long): String
+
+    private external fun readNative(
+        handle: Long,
+        rootId: String,
+        path: String,
+        offset: Long,
+        count: Int,
+    ): ByteArray
+
+    private external fun closeNative(handle: Long)
 }
 
 private class EncryptedWindowsRootStore(context: Context) {
-    private val preferences = context.getSharedPreferences("windows_library", Context.MODE_PRIVATE)
+    private val preferences =
+        context.getSharedPreferences("windows_library_v2", Context.MODE_PRIVATE)
+
+    init {
+        context.getSharedPreferences("windows_library", Context.MODE_PRIVATE).edit().clear().apply()
+        runCatching {
+            KeyStore.getInstance("AndroidKeyStore").apply {
+                load(null)
+                if (containsAlias(LEGACY_KEY_ALIAS)) deleteEntry(LEGACY_KEY_ALIAS)
+            }
+        }
+    }
 
     fun put(config: WindowsRootConfig) {
         val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -1033,10 +638,10 @@ private class EncryptedWindowsRootStore(context: Context) {
     }
 
     companion object {
-        private const val KEY_ALIAS = "yuraive.windows-library.v1"
+        private const val KEY_ALIAS = "yuraive.windows-library.v2"
+        private const val LEGACY_KEY_ALIAS = "yuraive.windows-library.v1"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
 }
 
-private const val SIGNALING_ENDPOINT = "wss://connect.yuraive.com/v1/rooms"
-private const val STUN_URL = "stun:stun.cloudflare.com:3478"
+private const val SIGNALING_ENDPOINT = "wss://connect.yuraive.com/v2/rooms"

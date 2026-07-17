@@ -1,8 +1,8 @@
-using System.Net.WebSockets;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using SIPSorcery.Net;
+using Yuraive.Core.Interop;
 using Yuraive.Core.Models;
 using Yuraive.Core.Storage;
 
@@ -14,39 +14,41 @@ public sealed record WindowsPairingIdentity(
     string Room,
     string Secret,
     string DeviceId,
-    string DeviceName);
+    string DeviceName,
+    string Certificate,
+    string PrivateKey,
+    string Fingerprint);
 
 public sealed class WindowsLibraryBridgeHost : IAsyncDisposable
 {
-    private const string SignalingBase = "wss://connect.yuraive.com/v1/rooms";
-    private const string StunUrl = "stun:stun.cloudflare.com:3478";
-    private static readonly byte[] PairingEntropy = "Yuraive Windows pairing v1"u8.ToArray();
+    private const string SignalingBase = "wss://connect.yuraive.com/v2/rooms";
+    private static readonly byte[] PairingEntropy = "Yuraive Windows QUIC pairing v2"u8.ToArray();
     private readonly DocumentLibrary _library;
     private readonly string _pairingPath;
+    private readonly string _cacheDirectory;
     private readonly CancellationTokenSource _lifetime = new();
-    private readonly SemaphoreSlim _peerGate = new(1, 1);
-    private readonly SemaphoreSlim _signalSendGate = new(1, 1);
-    private readonly SemaphoreSlim _dataSendGate = new(1, 1);
     private readonly object _identityGate = new();
     private readonly object _runGate = new();
-    private ClientWebSocket? _socket;
-    private RTCPeerConnection? _peer;
-    private RTCDataChannel? _channel;
+    private readonly object _statusGate = new();
     private Task? _runTask;
     private CancellationTokenSource? _session;
+    private ulong _hostHandle;
     private WindowsPairingIdentity _identity;
+    private BridgeHostStatus _status = BridgeHostStatus.Starting;
+    private string? _statusDetail;
 
     public WindowsLibraryBridgeHost(DocumentLibrary library, AppDataPaths paths)
     {
         _library = library;
         _pairingPath = paths.WindowsPairing;
+        _cacheDirectory = paths.P2pHostCache;
         _identity = ReadIdentity() ?? CreateIdentity();
         PersistIdentity(_identity);
     }
 
     public WindowsPairingIdentity Identity { get { lock (_identityGate) return _identity; } }
-    public BridgeHostStatus Status { get; private set; } = BridgeHostStatus.Starting;
-    public string? StatusDetail { get; private set; }
+    public BridgeHostStatus Status { get { lock (_statusGate) return _status; } }
+    public string? StatusDetail { get { lock (_statusGate) return _statusDetail; } }
     public int ConnectedDeviceCount => Status == BridgeHostStatus.Connected ? 1 : 0;
     public event EventHandler? StatusChanged;
 
@@ -55,8 +57,8 @@ public sealed class WindowsLibraryBridgeHost : IAsyncDisposable
         get
         {
             var identity = Identity;
-            return $"yuraive://pair?v=1&endpoint={Uri.EscapeDataString(SignalingBase)}" +
-                $"&room={identity.Room}&secret={identity.Secret}" +
+            return $"yuraive://pair?v=2&endpoint={Uri.EscapeDataString(SignalingBase)}" +
+                $"&room={identity.Room}&secret={identity.Secret}&pin={identity.Fingerprint}" +
                 $"&device={identity.DeviceId}&name={Uri.EscapeDataString(identity.DeviceName)}";
         }
     }
@@ -68,7 +70,27 @@ public sealed class WindowsLibraryBridgeHost : IAsyncDisposable
             if (_runTask is { IsCompleted: false }) return;
             _session?.Dispose();
             _session = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            _runTask = RunAsync(_session.Token);
+            try
+            {
+                var identity = Identity;
+                _hostHandle = NativeRuntime.StartP2pHost(new P2pHostConfig
+                {
+                    Endpoint = SignalingBase,
+                    Room = identity.Room,
+                    Secret = identity.Secret,
+                    CacheDirectory = _cacheDirectory,
+                    Certificate = identity.Certificate,
+                    PrivateKey = identity.PrivateKey,
+                    Fingerprint = identity.Fingerprint,
+                });
+                var handle = _hostHandle;
+                _runTask = Task.Run(() => RunProviderLoopAsync(handle, _session.Token));
+            }
+            catch (Exception error)
+            {
+                _hostHandle = 0;
+                SetStatus(BridgeHostStatus.Error, error.Message);
+            }
         }
     }
 
@@ -76,13 +98,16 @@ public sealed class WindowsLibraryBridgeHost : IAsyncDisposable
     {
         Task? runTask;
         CancellationTokenSource? session;
+        ulong handle;
         lock (_runGate)
         {
             runTask = _runTask;
             session = _session;
+            handle = _hostHandle;
+            _hostHandle = 0;
             session?.Cancel();
-            _socket?.Abort();
         }
+        if (handle != 0) NativeRuntime.CloseP2pHost(handle);
         if (runTask is not null)
         {
             try { await runTask; }
@@ -94,225 +119,136 @@ public sealed class WindowsLibraryBridgeHost : IAsyncDisposable
             if (ReferenceEquals(_session, session)) _session = null;
         }
         session?.Dispose();
-        if (runTask is null) SetStatus(BridgeHostStatus.Stopped);
+        SetStatus(BridgeHostStatus.Stopped);
     }
 
     public async Task RegeneratePairingAsync()
     {
+        bool restart;
+        lock (_runGate) restart = _runTask is { IsCompleted: false };
+        if (restart) await StopAsync();
+        var certificate = NativeRuntime.CreateP2pIdentity();
         lock (_identityGate)
         {
             _identity = new WindowsPairingIdentity(
                 RandomToken(16),
                 RandomToken(32),
                 _identity.DeviceId,
-                _identity.DeviceName);
+                _identity.DeviceName,
+                certificate.Certificate,
+                certificate.PrivateKey,
+                certificate.Fingerprint);
         }
         PersistIdentity(Identity);
-        _socket?.Abort();
-        await ClosePeerAsync();
+        if (restart) Start();
     }
 
-    private async Task RunAsync(CancellationToken cancellationToken)
+    private async Task RunProviderLoopAsync(ulong handle, CancellationToken cancellationToken)
     {
-        var delay = TimeSpan.FromSeconds(1);
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                await ConnectSignalingAsync(cancellationToken);
-                delay = TimeSpan.FromSeconds(1);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
-            catch (Exception error)
-            {
-                SetStatus(BridgeHostStatus.Error, error.Message);
-                try { await Task.Delay(delay, cancellationToken); }
-                catch (OperationCanceledException) { break; }
-                delay = TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds * 2, 30));
-            }
-            finally
-            {
-                await ClosePeerAsync();
-                _socket?.Dispose();
-                _socket = null;
-            }
-        }
-        SetStatus(BridgeHostStatus.Stopped);
-    }
-
-    private async Task ConnectSignalingAsync(CancellationToken cancellationToken)
-    {
-        var identity = Identity;
-        var socket = new ClientWebSocket();
-        socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
-        socket.Options.SetRequestHeader("Authorization", $"Bearer {identity.Secret}");
-        _socket = socket;
-        SetStatus(BridgeHostStatus.Starting);
-        var url = new Uri($"{SignalingBase}/{identity.Room}?role=host");
-        await socket.ConnectAsync(url, cancellationToken);
-        SetStatus(BridgeHostStatus.WaitingForAndroid);
-
-        var buffer = new byte[132 * 1024];
-        while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
-        {
-            using var message = new MemoryStream();
-            WebSocketReceiveResult result;
-            do
-            {
-                result = await socket.ReceiveAsync(buffer, cancellationToken);
-                if (result.MessageType == WebSocketMessageType.Close)
-                {
-                    await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "reconnect", CancellationToken.None);
-                    return;
-                }
-                if (message.Length + result.Count > 128 * 1024) throw new InvalidDataException("シグナリング応答が大きすぎます");
-                message.Write(buffer, 0, result.Count);
-            } while (!result.EndOfMessage);
-            if (result.MessageType != WebSocketMessageType.Text) continue;
-            await HandleSignalAsync(Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length), cancellationToken);
-        }
-    }
-
-    private async Task HandleSignalAsync(string json, CancellationToken cancellationToken)
-    {
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-        var type = root.GetProperty("type").GetString();
-        switch (type)
-        {
-            case "peer_ready":
-                await CreateOfferAsync(cancellationToken);
-                break;
-            case "answer":
-                var peer = _peer ?? throw new InvalidOperationException("Androidから予期しない応答を受信しました");
-                var answer = root.GetProperty("sdp").GetString() ?? throw new InvalidDataException("SDP応答がありません");
-                if (peer.setRemoteDescription(new RTCSessionDescriptionInit { type = RTCSdpType.answer, sdp = answer }) != SetDescriptionResultEnum.OK)
-                    throw new InvalidDataException("AndroidのSDP応答を適用できません");
-                SetStatus(BridgeHostStatus.Connecting);
-                break;
-            case "candidate":
-                var candidatePeer = _peer;
-                if (candidatePeer is null) return;
-                candidatePeer.addIceCandidate(new RTCIceCandidateInit
-                {
-                    candidate = root.GetProperty("candidate").GetString() ?? "",
-                    sdpMid = root.TryGetProperty("sdpMid", out var mid) ? mid.GetString() ?? "0" : "0",
-                    sdpMLineIndex = root.TryGetProperty("sdpMLineIndex", out var line) ? line.GetUInt16() : (ushort)0,
-                });
-                break;
-            case "peer_left":
-                await ClosePeerAsync();
-                SetStatus(BridgeHostStatus.WaitingForAndroid);
-                break;
-        }
-    }
-
-    private async Task CreateOfferAsync(CancellationToken cancellationToken)
-    {
-        await _peerGate.WaitAsync(cancellationToken);
+        var active = new ConcurrentDictionary<ulong, Task>();
         try
         {
-            ClosePeerUnsafe();
-            var peer = new RTCPeerConnection(new RTCConfiguration
+            while (!cancellationToken.IsCancellationRequested)
             {
-                iceServers = [new RTCIceServer { urls = StunUrl }],
-            });
-            _peer = peer;
-            peer.onicecandidate += candidate => _ = SendSignalAsync(new
-            {
-                type = "candidate",
-                candidate = candidate.candidate,
-                sdpMid = candidate.sdpMid,
-                sdpMLineIndex = candidate.sdpMLineIndex,
-            }, _lifetime.Token);
-            peer.onconnectionstatechange += state =>
-            {
-                if (state == RTCPeerConnectionState.connected) SetStatus(BridgeHostStatus.Connected);
-                else if (state is RTCPeerConnectionState.failed or RTCPeerConnectionState.disconnected)
-                    SetStatus(BridgeHostStatus.Error, "AndroidとのP2P接続が切断されました");
-            };
-            var channel = await peer.createDataChannel("yuraive-library");
-            _channel = channel;
-            channel.onopen += () => SetStatus(BridgeHostStatus.Connected);
-            channel.onclose += () => SetStatus(BridgeHostStatus.WaitingForAndroid);
-            channel.onerror += error => SetStatus(BridgeHostStatus.Error, error);
-            channel.onmessage += (dataChannel, protocol, data) =>
-            {
-                if (protocol == DataChannelPayloadProtocols.WebRTC_String)
-                    _ = HandleDataRequestAsync(dataChannel, Encoding.UTF8.GetString(data), _lifetime.Token);
-            };
-
-            var offer = peer.createOffer();
-            await peer.setLocalDescription(offer);
-            await SendSignalAsync(new { type = "offer", sdp = offer.sdp }, cancellationToken);
-            SetStatus(BridgeHostStatus.Connecting);
+                UpdateNativeStatus(NativeRuntime.P2pHostStatus(handle));
+                var request = NativeRuntime.PollP2pHost(handle, 100);
+                if (request is null) continue;
+                var task = Task.Run(() => HandleProviderRequestAsync(handle, request, cancellationToken), CancellationToken.None);
+                active[request.Id] = task;
+                _ = task.ContinueWith(
+                    completed => active.TryRemove(request.Id, out var ignored),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
         }
-        finally { _peerGate.Release(); }
+        catch (Exception error) when (!cancellationToken.IsCancellationRequested)
+        {
+            SetStatus(BridgeHostStatus.Error, error.Message);
+        }
+        finally
+        {
+            try { await Task.WhenAll(active.Values); }
+            catch (Exception) when (cancellationToken.IsCancellationRequested) { }
+        }
     }
 
-    private async Task HandleDataRequestAsync(RTCDataChannel channel, string json, CancellationToken cancellationToken)
+    private async Task HandleProviderRequestAsync(
+        ulong handle,
+        P2pProviderRequest request,
+        CancellationToken cancellationToken)
     {
-        string? id = null;
         try
         {
-            using var document = JsonDocument.Parse(json);
-            var root = document.RootElement;
-            id = root.GetProperty("id").GetString();
-            if (id is null || id.Length != 32 || !id.All(Uri.IsHexDigit)) throw new InvalidDataException("リクエストIDが不正です");
-            var method = root.GetProperty("method").GetString();
-            switch (method)
+            switch (request.Method)
             {
                 case "roots":
-                    var roots = _library.Roots.Select(grant => new { id = RootId(grant.Uri), name = grant.Name }).ToList();
-                    await SendDataJsonAsync(channel, new { id, ok = true, roots }, cancellationToken);
+                    var roots = _library.Roots.Select(root => new { id = RootId(root.Uri), name = root.Name }).ToList();
+                    RespondJson(handle, request.Id, roots);
                     break;
                 case "list":
-                    var listGrant = ResolveRoot(root.GetProperty("rootId").GetString());
-                    var path = SafePath(root);
-                    var nodes = await _library.ListFilesAsync(listGrant, path, cancellationToken);
-                    await SendDataJsonAsync(channel, new { id, ok = true, nodes }, cancellationToken);
+                    var listRoot = ResolveRoot(request.RootId);
+                    var listPath = SafePath(request.Path, allowEmpty: true);
+                    var nodes = await _library.ListFilesAsync(listRoot, listPath, cancellationToken);
+                    RespondJson(handle, request.Id, nodes.Select(NodeResponse).ToList());
                     break;
                 case "stat":
-                    var statGrant = ResolveRoot(root.GetProperty("rootId").GetString());
-                    var statPath = SafePath(root);
+                    var statRoot = ResolveRoot(request.RootId);
+                    var statPath = SafePath(request.Path, allowEmpty: false);
                     var parent = statPath.Contains('/') ? statPath[..statPath.LastIndexOf('/')] : "";
                     var name = statPath[(statPath.LastIndexOf('/') + 1)..];
-                    var node = (await _library.ListFilesAsync(statGrant, parent, cancellationToken))
+                    var node = (await _library.ListFilesAsync(statRoot, parent, cancellationToken))
                         .FirstOrDefault(value => string.Equals(value.Name, name, StringComparison.Ordinal));
-                    await SendDataJsonAsync(channel, new { id, ok = true, node }, cancellationToken);
+                    RespondJson(handle, request.Id, node is null ? null : NodeResponse(node));
                     break;
                 case "read":
-                    var readGrant = ResolveRoot(root.GetProperty("rootId").GetString());
-                    var readPath = SafePath(root);
-                    var offset = root.GetProperty("offset").GetInt64();
-                    var count = root.GetProperty("count").GetInt32();
-                    var chunk = await _library.ReadFileRangeAsync(readGrant, readPath, offset, count, cancellationToken);
-                    await SendDataJsonAsync(channel, new
-                    {
-                        id,
-                        ok = true,
-                        data = Convert.ToBase64String(chunk.Data),
-                        totalLength = chunk.TotalLength,
-                    }, cancellationToken);
+                    var readRoot = ResolveRoot(request.RootId);
+                    var readPath = SafePath(request.Path, allowEmpty: false);
+                    var offset = checked((long)(request.Offset ?? throw new InvalidDataException("読み込み位置がありません")));
+                    var count = checked((int)(request.Count ?? throw new InvalidDataException("読み込みサイズがありません")));
+                    var chunk = await _library.ReadFileRangeAsync(readRoot, readPath, offset, count, cancellationToken);
+                    if (!NativeRuntime.RespondP2pHostBytes(handle, request.Id, chunk.TotalLength, chunk.Data))
+                        throw new IOException("Rust P2Pホストが読み込み応答を受理しませんでした");
                     break;
                 default:
-                    throw new InvalidDataException("未対応のリクエストです");
+                    throw new InvalidDataException("未対応のファイル要求です");
             }
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
-            if (id is not null) await SendDataJsonAsync(channel, new { id, ok = false, error = error.Message }, CancellationToken.None);
+            NativeRuntime.RespondP2pHostError(handle, request.Id, error.Message);
+        }
+        catch (OperationCanceledException)
+        {
+            NativeRuntime.RespondP2pHostError(handle, request.Id, "Windows側で読み込みが中断されました");
         }
     }
 
-    private RootGrant ResolveRoot(string? rootId) => _library.Roots.FirstOrDefault(root => RootId(root.Uri) == rootId)
-        ?? throw new DirectoryNotFoundException("Windows側のフォルダが見つかりません");
-
-    private static string SafePath(JsonElement request)
+    private void RespondJson<T>(ulong handle, ulong requestId, T value)
     {
-        var path = request.TryGetProperty("path", out var value) ? value.GetString() ?? "" : "";
-        if (path.Length > 0 && !GraphValidator.IsSafeRelativePath(path)) throw new InvalidDataException("安全でないパスです");
-        return path;
+        var json = JsonSerializer.Serialize(value, YuraiveJson.Options);
+        if (!NativeRuntime.RespondP2pHostJson(handle, requestId, json))
+            throw new IOException("Rust P2Pホストがファイル応答を受理しませんでした");
+    }
+
+    private static object NodeResponse(LibraryFileNode node) => new
+    {
+        name = node.Name,
+        isDirectory = node.IsDirectory,
+        size = node.Size,
+        modifiedAt = node.ModifiedAt,
+    };
+
+    private RootGrant ResolveRoot(string? rootId) =>
+        _library.Roots.FirstOrDefault(root => RootId(root.Uri) == rootId)
+            ?? throw new DirectoryNotFoundException("Windows側のフォルダが見つかりません");
+
+    private static string SafePath(string? path, bool allowEmpty)
+    {
+        var value = path ?? "";
+        if ((!allowEmpty && value.Length == 0) || (value.Length > 0 && !GraphValidator.IsSafeRelativePath(value)))
+            throw new InvalidDataException("安全でないパスです");
+        return value;
     }
 
     private static string RootId(string uri)
@@ -321,47 +257,31 @@ public sealed class WindowsLibraryBridgeHost : IAsyncDisposable
         return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
     }
 
-    private async Task SendSignalAsync(object value, CancellationToken cancellationToken)
+    private void UpdateNativeStatus(P2pHostSnapshot snapshot)
     {
-        var socket = _socket;
-        if (socket?.State != WebSocketState.Open) return;
-        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value, YuraiveJson.Options));
-        await _signalSendGate.WaitAsync(cancellationToken);
-        try
+        var status = snapshot.State switch
         {
-            if (socket.State == WebSocketState.Open)
-                await socket.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
-        }
-        finally { _signalSendGate.Release(); }
-    }
-
-    private async Task SendDataJsonAsync(RTCDataChannel channel, object value, CancellationToken cancellationToken)
-    {
-        await _dataSendGate.WaitAsync(cancellationToken);
-        try { channel.send(JsonSerializer.Serialize(value, YuraiveJson.Options)); }
-        finally { _dataSendGate.Release(); }
-    }
-
-    private async Task ClosePeerAsync()
-    {
-        await _peerGate.WaitAsync();
-        try { ClosePeerUnsafe(); }
-        finally { _peerGate.Release(); }
-    }
-
-    private void ClosePeerUnsafe()
-    {
-        _channel?.close();
-        _channel = null;
-        _peer?.Close("reset");
-        _peer = null;
+            "starting" => BridgeHostStatus.Starting,
+            "waitingForPeer" => BridgeHostStatus.WaitingForAndroid,
+            "punching" or "connecting" => BridgeHostStatus.Connecting,
+            "connected" => BridgeHostStatus.Connected,
+            "error" => BridgeHostStatus.Error,
+            "stopped" => BridgeHostStatus.Stopped,
+            _ => BridgeHostStatus.Error,
+        };
+        SetStatus(status, snapshot.Detail);
     }
 
     private void SetStatus(BridgeHostStatus status, string? detail = null)
     {
-        Status = status;
-        StatusDetail = detail;
-        StatusChanged?.Invoke(this, EventArgs.Empty);
+        bool changed;
+        lock (_statusGate)
+        {
+            changed = _status != status || !string.Equals(_statusDetail, detail, StringComparison.Ordinal);
+            _status = status;
+            _statusDetail = detail;
+        }
+        if (changed) StatusChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private WindowsPairingIdentity? ReadIdentity()
@@ -370,7 +290,9 @@ public sealed class WindowsLibraryBridgeHost : IAsyncDisposable
         {
             if (!File.Exists(_pairingPath)) return null;
             var protectedBytes = Convert.FromBase64String(File.ReadAllText(_pairingPath));
-            return YuraiveJson.Deserialize<WindowsPairingIdentity>(Encoding.UTF8.GetString(Dpapi.Unprotect(protectedBytes, PairingEntropy)));
+            var identity = YuraiveJson.Deserialize<WindowsPairingIdentity>(
+                Encoding.UTF8.GetString(Dpapi.Unprotect(protectedBytes, PairingEntropy)));
+            return identity.Fingerprint.Length == 43 ? identity : null;
         }
         catch { return null; }
     }
@@ -383,11 +305,18 @@ public sealed class WindowsLibraryBridgeHost : IAsyncDisposable
         File.WriteAllText(_pairingPath, encoded, new UTF8Encoding(false));
     }
 
-    private static WindowsPairingIdentity CreateIdentity() => new(
-        RandomToken(16),
-        RandomToken(32),
-        RandomToken(16),
-        Environment.MachineName);
+    private static WindowsPairingIdentity CreateIdentity()
+    {
+        var certificate = NativeRuntime.CreateP2pIdentity();
+        return new(
+            RandomToken(16),
+            RandomToken(32),
+            RandomToken(16),
+            Environment.MachineName,
+            certificate.Certificate,
+            certificate.PrivateKey,
+            certificate.Fingerprint);
+    }
 
     private static string RandomToken(int byteCount) => Convert.ToBase64String(RandomNumberGenerator.GetBytes(byteCount))
         .TrimEnd('=').Replace('+', '-').Replace('/', '_');
@@ -397,8 +326,5 @@ public sealed class WindowsLibraryBridgeHost : IAsyncDisposable
         _lifetime.Cancel();
         await StopAsync();
         _lifetime.Dispose();
-        _peerGate.Dispose();
-        _signalSendGate.Dispose();
-        _dataSendGate.Dispose();
     }
 }

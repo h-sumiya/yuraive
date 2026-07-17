@@ -79,12 +79,6 @@ internal val openSourceNotices =
             "Apache-2.0",
             listOf(R.raw.license_apache_2_0),
         ),
-        OpenSourceNotice(
-            "WebRTC Android SDK",
-            "144.7559.09",
-            "BSD-3-Clause",
-            listOf(R.raw.license_bsd_3_clause_webrtc),
-        ),
         OpenSourceNotice("SLF4J", "2.0.17", "MIT", listOf(R.raw.license_mit_slf4j)),
         OpenSourceNotice("Starlark Rust", "0.14.2", "Apache-2.0", listOf(R.raw.license_apache_2_0)),
         OpenSourceNotice("Taffy", "0.12.1", "MIT", listOf(R.raw.license_mit_taffy)),

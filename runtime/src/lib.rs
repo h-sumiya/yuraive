@@ -2,6 +2,8 @@
 
 mod bundle;
 mod layout_engine;
+#[cfg(not(target_arch = "wasm32"))]
+mod p2p;
 mod script_engine;
 
 #[cfg(not(target_arch = "wasm32"))]

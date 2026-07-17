@@ -173,6 +173,9 @@ internal class RemoteSourceManager(private val context: Context) {
             rootUri.startsWith(WEBDAV_ROOT_PREFIX) ||
             windows.isRoot(rootUri)
 
+    fun isUnconfiguredWindowsRoot(rootUri: String): Boolean =
+        windows.isRoot(rootUri) && !windows.hasConfig(rootUri)
+
     suspend fun pairWindows(qrPayload: String): List<RootGrant> = windows.pair(qrPayload)
 
     val windowsConnectionStates: StateFlow<Map<String, WindowsConnectionStatus>>

@@ -156,6 +156,14 @@ class DocumentLibrary(private val context: Context) {
     val windowsConnectionStates: StateFlow<Map<String, WindowsConnectionStatus>> =
         remoteSources.windowsConnectionStates
 
+    init {
+        val retained =
+            rootsMutable.value.filterNot { root ->
+                remoteSources.isUnconfiguredWindowsRoot(root.uri)
+            }
+        if (retained.size != rootsMutable.value.size) persist(retained)
+    }
+
     fun addRoot(uri: Uri, name: String) {
         val updated =
             (rootsMutable.value.filterNot { it.uri == uri.toString() } +

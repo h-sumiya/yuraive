@@ -250,7 +250,7 @@ public sealed class DocumentLibrary
         if (!GraphValidator.IsSafeRelativePath(relativePath))
             throw new ArgumentException("安全でないファイルパスです", nameof(relativePath));
         if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset));
-        if (count is < 1 or > 48 * 1024) throw new ArgumentOutOfRangeException(nameof(count));
+        if (count is < 1 or > 1024 * 1024) throw new ArgumentOutOfRangeException(nameof(count));
         return Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();

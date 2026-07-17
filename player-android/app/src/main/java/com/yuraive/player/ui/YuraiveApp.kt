@@ -371,7 +371,15 @@ fun YuraiveApp(
                             }
                         destination == Destination.LIBRARY ->
                             LibraryScreen(
-                                modifier = Modifier.padding(padding),
+                                modifier =
+                                    Modifier.padding(padding)
+                                        .then(
+                                            if (playback.status == PlaybackStatus.IDLE) {
+                                                Modifier.navigationBarsPadding()
+                                            } else {
+                                                Modifier
+                                            }
+                                        ),
                                 roots = libraryRoots,
                                 windowsDevices = windowsDevices,
                                 addFolder = { showAddFolderDialog = true },
