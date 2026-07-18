@@ -1,0 +1,267 @@
+name: Android F-Droid
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'android-v*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-fdroid-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANDROID_BUILD_TOOLS_VERSION: 34.0.0
+  ANDROID_NDK_VERSION: 28.2.13676358
+  FDROIDDATA_COMMIT: 29affef264b9b8cb4c46293cc82b595d33054072
+  RUST_TOOLCHAIN: 1.97.0
+  SIGNING_CERT_SHA256: 7ccfa92a343ca39efa34f69fd0a7649dc13f45b2d9a7736f77544b556902f8ac
+
+jobs:
+  metadata:
+    name: Validate F-Droid metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install F-Droid tools
+        run: python -m pip install --disable-pip-version-check fdroidserver==2.4.5
+
+      - name: Lint F-Droid metadata
+        shell: bash
+        run: |
+          mkdir -p config
+          curl --fail --silent --show-error --location \
+            "https://gitlab.com/fdroid/fdroiddata/-/raw/${FDROIDDATA_COMMIT}/config/categories.yml" \
+            --output config/categories.yml
+          sed -i '/^[[:space:]]*icon:/d' config/categories.yml
+
+          set +e
+          fdroid lint > "$RUNNER_TEMP/fdroid-lint.log" 2>&1
+          lint_status=$?
+          set -e
+          cat "$RUNNER_TEMP/fdroid-lint.log"
+
+          grep -v "Branch 'HEAD' used as commit in build '1.0.0'" \
+            "$RUNNER_TEMP/fdroid-lint.log" > "$RUNNER_TEMP/fdroid-lint-unexpected.log" || true
+          if [[ -s "$RUNNER_TEMP/fdroid-lint-unexpected.log" ]]; then
+            cat "$RUNNER_TEMP/fdroid-lint-unexpected.log" >&2
+            exit 1
+          fi
+          if [[ "$lint_status" -ne 0 && ! -s "$RUNNER_TEMP/fdroid-lint.log" ]]; then
+            exit "$lint_status"
+          fi
+
+  build:
+    name: Build and compare unsigned APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version_name: ${{ steps.version.outputs.version_name }}
+
+    steps:
+      - name: Checkout first source tree
+        uses: actions/checkout@v6
+        with:
+          path: source-a
+
+      - name: Checkout second source tree
+        uses: actions/checkout@v6
+        with:
+          path: source-b
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            source-a/player-android/**/*.gradle*
+            source-a/player-android/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+          key: android-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('source-a/runtime/Cargo.lock') }}
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          sdkmanager \
+            "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
+            "ndk;${ANDROID_NDK_VERSION}" \
+            "platforms;android-36" >/dev/null
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal --component rustfmt
+          rustup target add \
+            --toolchain "${RUST_TOOLCHAIN}" \
+            aarch64-linux-android \
+            x86_64-linux-android
+
+      - name: Read Android version
+        id: version
+        shell: bash
+        working-directory: source-a
+        run: |
+          version_name=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' player-android/app/build.gradle.kts)
+          test -n "$version_name"
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+
+      - name: Check and build first source tree
+        working-directory: source-a/player-android
+        run: ./gradlew --no-daemon --no-build-cache spotlessCheck lintDebug testDebugUnitTest assembleRelease
+
+      - name: Build second source tree
+        working-directory: source-b/player-android
+        run: ./gradlew --no-daemon --no-build-cache clean assembleRelease
+
+      - name: Verify reproducible unsigned APK
+        shell: bash
+        run: |
+          first=source-a/player-android/app/build/outputs/apk/release/app-release-unsigned.apk
+          second=source-b/player-android/app/build/outputs/apk/release/app-release-unsigned.apk
+          sha256sum "$first" "$second"
+          cmp "$first" "$second"
+
+      - name: Upload unsigned APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: Yuraive-android-${{ steps.version.outputs.version_name }}-unsigned
+          path: source-a/player-android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  sign:
+    name: Sign developer APK
+    if: github.event_name != 'pull_request'
+    needs:
+      - metadata
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android signing tools
+        run: sdkmanager "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" >/dev/null
+
+      - name: Download unsigned APK
+        uses: actions/download-artifact@v8
+        with:
+          name: Yuraive-android-${{ needs.build.outputs.version_name }}-unsigned
+          path: artifacts/unsigned
+
+      - name: Sign and verify APK
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+
+          build_tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS_VERSION"
+          unsigned_apk=artifacts/unsigned/app-release-unsigned.apk
+          signed_dir=artifacts/signed
+          signed_apk="$signed_dir/Yuraive-android-$VERSION_NAME.apk"
+          keystore="$RUNNER_TEMP/yuraive-release.jks"
+
+          mkdir -p "$signed_dir"
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          "$build_tools/zipalign" -c 4 "$unsigned_apk"
+          "$build_tools/apksigner" sign \
+            --v4-signing-enabled false \
+            --ks "$keystore" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --key-pass env:ANDROID_KEY_PASSWORD \
+            --out "$signed_apk" \
+            "$unsigned_apk"
+
+          "$build_tools/apksigner" verify --verbose "$signed_apk"
+          actual_fingerprint=$("$build_tools/apksigner" verify --print-certs "$signed_apk" |
+            sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          test "$actual_fingerprint" = "$SIGNING_CERT_SHA256"
+          sha256sum "$signed_apk" > "$signed_apk.sha256"
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: Yuraive-android-${{ needs.build.outputs.version_name }}
+          path: artifacts/signed/*
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    name: Publish Android release
+    if: startsWith(github.ref, 'refs/tags/android-v')
+    needs:
+      - build
+      - sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download signed APK
+        uses: actions/download-artifact@v8
+        with:
+          name: Yuraive-android-${{ needs.build.outputs.version_name }}
+          path: artifacts/release
+
+      - name: Validate Android tag
+        shell: bash
+        env:
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+        run: test "$GITHUB_REF_NAME" = "android-v$VERSION_NAME"
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+        run: |
+          apk="artifacts/release/Yuraive-android-$VERSION_NAME.apk"
+          checksum="$apk.sha256"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$apk" "$checksum" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$apk" "$checksum" \
+              --verify-tag \
+              --title "Yuraive Android $VERSION_NAME" \
+              --generate-notes
+          fi

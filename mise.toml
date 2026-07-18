@@ -78,5 +78,5 @@ depends = ["formatWebCheck", "formatAndroidCheck", "formatRuntimeCheck", "format
 [tools]
 node = "latest"
 gradle = "8.11.1"
-rust = "stable"
+rust = "1.97.0"
 dotnet = "10.0.301"

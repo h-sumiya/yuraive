@@ -6,6 +6,10 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization") version "2.1.20" apply false
 }
 
+val applicationId = "com.yuraive.player"
+
+extra["yuraiveApplicationId"] = applicationId
+
 spotless {
     kotlin {
         target("app/src/**/*.kt")

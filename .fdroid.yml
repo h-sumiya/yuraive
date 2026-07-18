@@ -1,0 +1,36 @@
+Categories:
+  - Multimedia
+License: MIT
+AuthorName: h-sumiya
+AuthorWebSite: https://hiro.red
+WebSite: https://yuraive.com
+SourceCode: https://github.com/h-sumiya/yuraive
+IssueTracker: https://github.com/h-sumiya/yuraive/issues
+
+RepoType: git
+Repo: https://github.com/h-sumiya/yuraive.git
+Binaries: https://github.com/h-sumiya/yuraive/releases/download/android-v%v/Yuraive-android-%v.apk
+
+Builds:
+  - versionName: 1.0.0
+    versionCode: 1
+    commit: HEAD
+    subdir: player-android
+    sudo:
+      - apt-get update
+      - apt-get install -y rustup gcc libc-dev
+    prebuild:
+      - rustup default 1.97.0
+      - rustup target add --toolchain 1.97.0 aarch64-linux-android x86_64-linux-android
+    gradle:
+      - yes
+    ndk: 28.2.13676358
+    output: app/build/outputs/apk/release/app-release-unsigned.apk
+
+AllowedAPKSigningKeys: 7ccfa92a343ca39efa34f69fd0a7649dc13f45b2d9a7736f77544b556902f8ac
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^android-v[0-9.]+$
+UpdateCheckData: player-android/app/build.gradle.kts|versionCode = (\d+)|.|versionName = "([\d.]+)"
+CurrentVersion: 1.0.0
+CurrentVersionCode: 1

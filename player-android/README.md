@@ -28,6 +28,8 @@ mise run playerReleaseBuild
 ```
 
 署名設定を与えていない場合の生成物は `player-android/app/build/outputs/apk/release/app-release-unsigned.apk` です。
+AndroidリリースはGitHub Actionsで同じ未署名APKを異なる2パスからビルドして一致を確認し、開発者鍵で署名します。
+`android-v<versionName>`タグでは、署名済みAPKとSHA-256チェックサムをGitHub Releaseへ公開します。
 
 ## 確認
 

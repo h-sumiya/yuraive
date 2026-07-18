@@ -15,9 +15,20 @@ if [[ -z "$sdk_dir" ]]; then
     exit 1
 fi
 
+ndk_version="${YURAIVE_ANDROID_NDK_VERSION:-}"
 ndk_dir="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
 if [[ -z "$ndk_dir" ]]; then
-    ndk_dir="$(find "$sdk_dir/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+    if [[ -z "$ndk_version" ]]; then
+        echo "YURAIVE_ANDROID_NDK_VERSION is not configured" >&2
+        exit 1
+    fi
+    ndk_dir="$sdk_dir/ndk/$ndk_version"
+elif [[ -n "$ndk_version" && -f "$ndk_dir/source.properties" ]]; then
+    installed_ndk_version="$(sed -n 's/^Pkg\.Revision[[:space:]]*=[[:space:]]*//p' "$ndk_dir/source.properties" | head -1)"
+    if [[ "$installed_ndk_version" != "$ndk_version" ]]; then
+        echo "Android NDK version mismatch: expected $ndk_version, found $installed_ndk_version" >&2
+        exit 1
+    fi
 fi
 toolchain="$ndk_dir/toolchains/llvm/prebuilt/linux-x86_64/bin"
 if [[ ! -d "$toolchain" ]]; then

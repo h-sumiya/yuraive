@@ -1,0 +1,7 @@
+Yuraive is a media player for branching experiences made from audio and images.
+
+Add libraries from folders on your device, SMB shares, or WebDAV servers. Yuraive supports audio, video, images, WebVTT subtitles, background playback, history, favorites, shuffle, and restoring the previous playback state.
+
+Yuraive works can define scene transitions triggered by playback completion or buttons, per-work playback controls, custom layouts, and Starlark scripts.
+
+Connection with Yuraive for Windows uses a QR code and transfers media directly between devices. No account registration or advertising is required.

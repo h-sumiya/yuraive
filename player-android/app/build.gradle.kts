@@ -5,12 +5,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val yuraiveNdkVersion = providers.gradleProperty("yuraiveNdkVersion").get()
+
 android {
     namespace = "com.yuraive.player"
     compileSdk = 36
+    ndkVersion = yuraiveNdkVersion
 
     defaultConfig {
-        applicationId = "com.yuraive.player"
+        applicationId = rootProject.extra["yuraiveApplicationId"] as String
         minSdk = 26
         targetSdk = 36
         versionCode = 1
@@ -57,6 +60,7 @@ val rustJniOutput = layout.buildDirectory.dir("generated/rustJniLibs")
 val buildRustRuntime by
     tasks.registering(Exec::class) {
         workingDir(rootProject.projectDir)
+        environment("YURAIVE_ANDROID_NDK_VERSION", yuraiveNdkVersion)
         commandLine(
             "bash",
             rootProject.file("../runtime/build-android.sh"),

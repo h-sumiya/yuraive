@@ -1,0 +1,3 @@
+Initial release.
+
+Adds local folder, SMB, and WebDAV libraries; branching Yuraive playback; history; favorites; background playback; and direct connections to Yuraive for Windows.
