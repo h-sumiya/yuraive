@@ -51,7 +51,7 @@ jobs:
           sed -i '/^[[:space:]]*icon:/d' config/categories.yml
 
           set +e
-          fdroid lint > "$RUNNER_TEMP/fdroid-lint.log" 2>&1
+          fdroid lint --quiet > "$RUNNER_TEMP/fdroid-lint.log" 2>&1
           lint_status=$?
           set -e
           cat "$RUNNER_TEMP/fdroid-lint.log"
@@ -105,7 +105,9 @@ jobs:
       - name: Install Android SDK components
         shell: bash
         run: |
-          sdkmanager \
+          sdkmanager_path="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager_path"
+          "$sdkmanager_path" \
             "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
             "ndk;${ANDROID_NDK_VERSION}" \
             "platforms;android-36" >/dev/null
@@ -169,7 +171,11 @@ jobs:
           java-version: '17'
 
       - name: Install Android signing tools
-        run: sdkmanager "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" >/dev/null
+        shell: bash
+        run: |
+          sdkmanager_path="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager_path"
+          "$sdkmanager_path" "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" >/dev/null
 
       - name: Download unsigned APK
         uses: actions/download-artifact@v8
