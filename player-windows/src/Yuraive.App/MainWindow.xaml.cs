@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
 {
     private static readonly IReadOnlyList<OpenSourceNoticeViewModel> OpenSourceNotices =
     [
+        new("Yuraive", "1.0.0", "MIT", ["license_mit_yuraive.txt"]),
         new("Windows App SDK", "2.2.0", "Microsoft Software License Terms", ["windows_app_sdk_license.txt", "windows_app_sdk_notice.txt"]),
         new("Microsoft Edge WebView2 SDK", "1.0.3719.77", "BSD-3-Clause", ["webview2_license.txt", "webview2_notice.txt"]),
         new("QRCoder", "1.7.0", "MIT", ["license_mit.txt"]),

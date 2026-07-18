@@ -333,7 +333,7 @@
                         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
                         <StackPanel Margin="4,8,4,12" Spacing="4">
                             <TextBlock FontSize="18" FontWeight="Bold" Text="Yuraive" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="13" Text="Copyright © 2026 h-sumiya. All rights reserved." />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="13" Text="Copyright © 2026 h-sumiya · MIT License" />
                         </StackPanel>
                         <StackPanel Grid.Row="1">
                             <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />

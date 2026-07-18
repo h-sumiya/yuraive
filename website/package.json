@@ -2,6 +2,7 @@
   "name": "yuraive-website",
   "private": true,
   "version": "0.0.0",
+  "license": "MIT",
   "description": "Official website and privacy policy for Yuraive",
   "homepage": "https://yuraive.com/",
   "type": "module",

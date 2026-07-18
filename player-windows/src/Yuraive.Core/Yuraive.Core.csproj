@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <RootNamespace>Yuraive.Core</RootNamespace>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <EnableWindowsTargeting Condition="'$(OS)' != 'Windows_NT'">true</EnableWindowsTargeting>
   </PropertyGroup>
   <ItemGroup>

@@ -50,6 +50,9 @@ internal data class OpenSourceNotice(
     @RawRes val licenseTextResources: List<Int>,
 )
 
+private val yuraiveLicense =
+    OpenSourceNotice("Yuraive", "1.0.0", "MIT", listOf(R.raw.license_mit_yuraive))
+
 internal val openSourceNotices =
     listOf(
         OpenSourceNotice(
@@ -123,7 +126,8 @@ internal val openSourceNotices =
 @Composable
 internal fun LicensesScreen(modifier: Modifier, onBack: () -> Unit) {
     var selectedName by rememberSaveable { mutableStateOf<String?>(null) }
-    val selectedNotice = openSourceNotices.firstOrNull { it.name == selectedName }
+    val selectedNotice =
+        (listOf(yuraiveLicense) + openSourceNotices).firstOrNull { it.name == selectedName }
     val navigateBack = { if (selectedNotice == null) onBack() else selectedName = null }
 
     BackHandler(enabled = selectedNotice != null) { selectedName = null }
@@ -178,19 +182,28 @@ private fun LicenseList(modifier: Modifier, onSelect: (OpenSourceNotice) -> Unit
             ),
     ) {
         item {
-            Column(
-                Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+            Row(
+                Modifier.fillMaxWidth()
+                    .clickable { onSelect(yuraiveLicense) }
+                    .padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "Yuraive",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    "Copyright © 2026 h-sumiya. All rights reserved.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Yuraive",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "Copyright © 2026 h-sumiya · MIT License",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    "Yuraiveのライセンス詳細を開く",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

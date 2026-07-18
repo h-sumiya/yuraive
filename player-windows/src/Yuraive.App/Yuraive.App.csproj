@@ -11,6 +11,7 @@
     <Authors>h-sumiya</Authors>
     <Company>h-sumiya</Company>
     <Description>状況に応じて再生内容を選べるメディアプレイヤー</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <ApplicationIcon>Assets\Yuraive.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>

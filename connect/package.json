@@ -2,6 +2,7 @@
   "name": "yuraive-connect",
   "private": true,
   "version": "0.0.0",
+  "license": "MIT",
   "description": "Connection and signaling service for Yuraive players",
   "type": "module",
   "scripts": {

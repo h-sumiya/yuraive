@@ -1,6 +1,7 @@
 {
   "name": "yuraive-workspace",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "format": "prettier --write .",
     "format:check": "prettier --check ."
