@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "nodes": {
+    "start": {
+      "type": "media",
+      "start": true,
+      "media": [
+        {
+          "id": "clip",
+          "weight": 1,
+          "source": {
+            "type": "audio",
+            "audio": "../outside.ogg"
+          }
+        },
+        {
+          "id": "clip",
+          "weight": 1,
+          "source": {
+            "type": "audioImage",
+            "audio": "audio/missing.ogg",
+            "image": "images/missing.webp"
+          }
+        }
+      ],
+      "onEnd": [
+        {
+          "to": "missing-node",
+          "weight": 1
+        }
+      ],
+      "buttons": ["missing-button", "missing-button"],
+      "playerControl": "missing-control"
+    },
+    "orphan": {
+      "type": "media",
+      "terminal": true
+    },
+    "orphan": {
+      "type": "media"
+    }
+  },
+  "buttons": {
+    "loose": {
+      "render": {
+        "path": "scripts/missing.star"
+      },
+      "onPress": [
+        {
+          "to": "missing-target",
+          "weight": 1
+        }
+      ]
+    }
+  },
+  "globalPlayerControl": "missing-global",
+  "playerControls": {
+    "unused": {
+      "layout": "ui/missing.yuraive-layout.html"
+    }
+  }
+}

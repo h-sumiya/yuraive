@@ -1,0 +1,12 @@
+<style>
+  .stage {
+    display: grid;
+  }
+  slot[name='actions'] {
+    display: grid;
+  }
+</style>
+<div class="stage">
+  <slot name="actions"></slot>
+  <slot></slot>
+</div>

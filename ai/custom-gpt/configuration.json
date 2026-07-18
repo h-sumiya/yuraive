@@ -1,0 +1,24 @@
+{
+  "name": "Yuraive Guide",
+  "description": "Yuraiveの操作、コンテンツ制作、ファイル検査、安全な修正を支援します。",
+  "capabilities": {
+    "codeInterpreter": true,
+    "webSearch": false,
+    "imageGeneration": false
+  },
+  "uploadFiles": [
+    "knowledge/yuraive-user-guide.md",
+    "knowledge/YURAIVE_v1_SPEC.md",
+    "knowledge/PLAYBACK_STATS.md",
+    "knowledge/yuraive-content-support.md",
+    "scripts/inspect_yuraive.py",
+    "scripts/edit_yuraive.py",
+    "scripts/yuraive_json.py"
+  ],
+  "conversationStarters": [
+    "エディタで素材を追加して再生順を作りたい。",
+    "このYuraiveファイルに問題がないか調べてほしい。",
+    "条件に応じて分岐するスクリプトを書きたい。",
+    "再生画面のボタンレイアウトを変更したい。"
+  ]
+}

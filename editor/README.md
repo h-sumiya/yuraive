@@ -91,7 +91,7 @@ Script Node実行時も二重には加算しません。`trigger.type`は`start`
 実再生時間はpauseを除いた`activePlayMs`として集計し、seekイベント自体は保存しません。
 履歴はメディア再生の記録であり、状態遷移先を示す`transition_to`は持ちません。
 `PlaybackHistoryEntry`の全フィールドとJSONL仕様は
-[Yuraive v1仕様](../notes/YURAIVE_v1_SPEC.md#134-playbackhistoryentry)を参照してください。
+[Yuraive v1仕様](../design/YURAIVE_v1_SPEC.md#134-playbackhistoryentry)を参照してください。
 StarlarkはAndroidプレイヤーと共通のRust製エンジンをWebAssembly化し、専用Web Workerで
 実行します。期限超過時はRust側で中断し、応答不能時はWorkerごと停止します。Wasmランタイムは
 プレビューまたは明示的なテスト実行まで読み込まれません。`load()`は同じコンテンツ内の

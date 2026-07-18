@@ -1,0 +1,33 @@
+{
+  "operations": [
+    {
+      "op": "renameId",
+      "kind": "node",
+      "from": "start",
+      "to": "intro"
+    },
+    {
+      "op": "renameId",
+      "kind": "button",
+      "from": "continue",
+      "to": "proceed"
+    },
+    {
+      "op": "renameId",
+      "kind": "playerControl",
+      "from": "default",
+      "to": "compact"
+    },
+    {
+      "op": "replacePath",
+      "from": "audio/rain.ogg",
+      "to": "audio/rain-renamed.ogg"
+    },
+    {
+      "op": "set",
+      "path": "/metadata/displayName",
+      "expect": "Synthetic Rain",
+      "value": "Edited Synthetic Rain"
+    }
+  ]
+}

@@ -1,8 +1,9 @@
-# Design notes are local, except for the public Yuraive format specification.
-!notes/
-notes/*
-!notes/YURAIVE_v1_SPEC.md
+# Personal design notes are never release inputs.
+notes/
 
 # Tool-generated local runtime state.
 .mono/
 node_modules/
+__pycache__/
+*.py[cod]
+dist/

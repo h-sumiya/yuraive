@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "target": "skill",
+  "output": "dist/yuraive-skill",
+  "entries": [
+    {
+      "source": "ai/skill/SKILL.md",
+      "destination": "SKILL.md"
+    },
+    {
+      "source": "ai/skill/agents/openai.yaml",
+      "destination": "agents/openai.yaml"
+    },
+    {
+      "source": "docs/src/content/docs",
+      "destination": "references/docs",
+      "include": ["**/*.md", "**/*.mdx"]
+    },
+    {
+      "source": "docs/public",
+      "destination": "references/docs/public",
+      "include": ["**/*"]
+    },
+    {
+      "source": "design/YURAIVE_v1_SPEC.md",
+      "destination": "references/design/YURAIVE_v1_SPEC.md"
+    },
+    {
+      "source": "design/PLAYBACK_STATS.md",
+      "destination": "references/design/PLAYBACK_STATS.md"
+    },
+    {
+      "source": "ai/shared/references",
+      "destination": "references/ai",
+      "include": ["**/*.md"]
+    },
+    {
+      "source": "ai/shared/scripts",
+      "destination": "scripts",
+      "include": ["**/*.py"]
+    },
+    {
+      "source": "LICENSE",
+      "destination": "LICENSE"
+    }
+  ]
+}

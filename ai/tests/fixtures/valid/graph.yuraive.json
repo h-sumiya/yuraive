@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "metadata": {
+    "contentId": "com.example.synthetic-rain",
+    "displayName": "Synthetic Rain",
+    "thumbnail": "images/cover.webp",
+    "tags": ["fixture", "rain"]
+  },
+  "playbackStats": {
+    "path": "scripts/stats.star",
+    "function": "render_stats"
+  },
+  "nodes": {
+    "start": {
+      "type": "media",
+      "start": true,
+      "media": [
+        {
+          "id": "rain",
+          "weight": 1,
+          "source": {
+            "type": "audioImage",
+            "audio": "audio/rain.ogg",
+            "image": "images/rain.webp",
+            "volume": 0.8,
+            "loop": false,
+            "fit": "cover"
+          }
+        }
+      ],
+      "onEnd": [
+        {
+          "to": "route",
+          "weight": 1
+        }
+      ],
+      "buttons": ["continue"],
+      "playerControl": "default"
+    },
+    "route": {
+      "type": "script",
+      "script": {
+        "path": "scripts/route.star",
+        "function": "jump"
+      },
+      "onEnd": [
+        {
+          "to": "end",
+          "weight": 1
+        }
+      ]
+    },
+    "end": {
+      "type": "media",
+      "terminal": true
+    }
+  },
+  "buttons": {
+    "continue": {
+      "targetSlot": "actions",
+      "order": 10,
+      "text": "Continue",
+      "style": {
+        "backgroundImage": "images/continue.png",
+        "opacity": 1
+      },
+      "render": {
+        "path": "scripts/button.star",
+        "function": "render"
+      },
+      "onPress": [
+        {
+          "to": "end",
+          "weight": 1
+        }
+      ]
+    }
+  },
+  "globalPlayerControl": "default",
+  "playerControls": {
+    "default": {
+      "accentColor": "#574de5",
+      "layout": "ui/default.yuraive-layout.html",
+      "allowStop": true,
+      "showSeekBar": true,
+      "showPlaybackTime": true,
+      "allowSeek": true,
+      "showSceneName": true,
+      "showFileName": false,
+      "allowNext": false,
+      "allowPrevious": false
+    }
+  },
+  "editor": {
+    "layouts": {
+      "ui/default.yuraive-layout.html": {
+        "x": 120,
+        "y": 20
+      }
+    }
+  }
+}

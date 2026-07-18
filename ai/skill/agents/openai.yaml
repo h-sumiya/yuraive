@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Yuraive'
+  short_description: 'Yuraiveの操作案内とコンテンツ制作、検査、修正を支援します'
+  default_prompt: 'Use $yuraive-skill to inspect this Yuraive content and explain how to fix it.'

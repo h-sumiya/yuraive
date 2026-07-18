@@ -1,0 +1,133 @@
+name: Yuraive Skill release
+
+on:
+  push:
+    tags:
+      - 'skills-v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skill-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish Skill
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Read release version
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$RELEASE_TAG" =~ ^skills-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "version=${RELEASE_TAG#skills-v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag must use skills-v<major>.<minor>.<patch>." >&2
+            exit 1
+          fi
+
+      - name: Test content and bundle tools
+        run: |
+          python -m unittest discover -s ai/tests -p 'test_*.py'
+          node --test ai/scripts/bundle-lib.test.mjs
+
+      - name: Build and validate Skill
+        run: |
+          node ai/scripts/bundle.mjs skill
+          node ai/scripts/validate-bundle.mjs skill
+
+      - name: Create ZIP and checksum
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p artifacts
+          (
+            cd dist
+            zip -q -r "../artifacts/Yuraive-skill-$VERSION.zip" yuraive-skill
+          )
+          (
+            cd artifacts
+            sha256sum "Yuraive-skill-$VERSION.zip" > "Yuraive-skill-$VERSION.zip.sha256"
+          )
+
+      - name: Validate extracted ZIP
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import stat
+          import zipfile
+          from pathlib import PurePosixPath
+
+          import os
+
+          archive = f"artifacts/Yuraive-skill-{os.environ['VERSION']}.zip"
+          with zipfile.ZipFile(archive) as bundle:
+              for entry in bundle.infolist():
+                  path = PurePosixPath(entry.filename)
+                  if (
+                      path.is_absolute()
+                      or '\\' in entry.filename
+                      or not path.parts
+                      or path.parts[0] != 'yuraive-skill'
+                      or any(part in {'', '.', '..'} for part in path.parts)
+                      or stat.S_ISLNK(entry.external_attr >> 16)
+                  ):
+                      raise SystemExit(f'Unsafe ZIP entry: {entry.filename}')
+          PY
+          mkdir -p extracted
+          unzip -q "artifacts/Yuraive-skill-$VERSION.zip" -d extracted
+          mapfile -d '' extracted_entries < <(find extracted -mindepth 1 -maxdepth 1 -print0)
+          if [[ "${#extracted_entries[@]}" -ne 1 ]] \
+            || [[ "${extracted_entries[0]}" != 'extracted/yuraive-skill' ]] \
+            || [[ ! -d extracted/yuraive-skill ]] \
+            || [[ -L extracted/yuraive-skill ]]; then
+            echo 'ZIP must contain exactly one real top-level yuraive-skill directory.' >&2
+            exit 1
+          fi
+          node ai/scripts/validate-bundle.mjs skill extracted/yuraive-skill
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Yuraive-skill-${{ steps.version.outputs.version }}
+          path: |
+            artifacts/Yuraive-skill-${{ steps.version.outputs.version }}.zip
+            artifacts/Yuraive-skill-${{ steps.version.outputs.version }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "artifacts/Yuraive-skill-$VERSION.zip" \
+            "artifacts/Yuraive-skill-$VERSION.zip.sha256" \
+            --title "Yuraive Skill $VERSION" \
+            --generate-notes

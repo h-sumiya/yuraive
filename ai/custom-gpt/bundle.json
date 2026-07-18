@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "target": "custom-gpt",
+  "output": "dist/yuraive-custom-gpt",
+  "entries": [
+    {
+      "source": "ai/custom-gpt/instructions.md",
+      "destination": "instructions.md"
+    },
+    {
+      "source": "ai/custom-gpt/configuration.json",
+      "destination": "configuration.json"
+    },
+    {
+      "source": "docs/src/content/docs",
+      "destination": "knowledge/yuraive-user-guide.md",
+      "include": ["**/*.md", "**/*.mdx"],
+      "concatenate": "markdown-sources"
+    },
+    {
+      "source": "design/YURAIVE_v1_SPEC.md",
+      "destination": "knowledge/YURAIVE_v1_SPEC.md"
+    },
+    {
+      "source": "design/PLAYBACK_STATS.md",
+      "destination": "knowledge/PLAYBACK_STATS.md"
+    },
+    {
+      "source": "ai/shared/references/content-support.md",
+      "destination": "knowledge/yuraive-content-support.md"
+    },
+    {
+      "source": "ai/shared/scripts",
+      "destination": "scripts",
+      "include": ["**/*.py"]
+    },
+    {
+      "source": "LICENSE",
+      "destination": "LICENSE"
+    }
+  ]
+}
