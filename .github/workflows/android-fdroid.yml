@@ -6,7 +6,17 @@ on:
       - main
     tags:
       - 'android-v*'
+    paths:
+      - 'player-android/**'
+      - 'runtime/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/android-fdroid.yml'
   pull_request:
+    paths:
+      - 'player-android/**'
+      - 'runtime/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/android-fdroid.yml'
   workflow_dispatch:
 
 permissions:
