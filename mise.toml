@@ -19,6 +19,14 @@ run = "gradle testDebugUnitTest"
 dir = "runtime"
 run = "cargo test --locked"
 
+[tasks.skillBuild]
+description = "Build and validate the distributable Yuraive Skill"
+run = "node ai/scripts/bundle.mjs skill && node ai/scripts/validate-bundle.mjs skill"
+
+[tasks.customGptBuild]
+description = "Build and validate the Custom GPT upload bundle"
+run = "node ai/scripts/bundle.mjs custom-gpt && node ai/scripts/validate-bundle.mjs custom-gpt"
+
 [tasks.windowsBuild]
 description = "Build the WinUI 3 desktop player and native runtime (x64)"
 run = "dotnet build player-windows/Yuraive.Windows.slnx"
