@@ -132,9 +132,13 @@ jobs:
           test -n "$version_name"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
 
-      - name: Check and build first source tree
+      - name: Build first source tree
         working-directory: source-a/player-android
-        run: ./gradlew --no-daemon --no-build-cache spotlessCheck lintDebug testDebugUnitTest assembleRelease
+        run: ./gradlew --no-daemon --no-build-cache clean assembleRelease
+
+      - name: Check first source tree
+        working-directory: source-a/player-android
+        run: ./gradlew --no-daemon --no-build-cache spotlessCheck lintDebug testDebugUnitTest
 
       - name: Build second source tree
         working-directory: source-b/player-android
@@ -223,7 +227,10 @@ jobs:
           actual_fingerprint=$("$build_tools/apksigner" verify --print-certs "$signed_apk" |
             sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
           test "$actual_fingerprint" = "$SIGNING_CERT_SHA256"
-          sha256sum "$signed_apk" > "$signed_apk.sha256"
+          (
+            cd "$signed_dir"
+            sha256sum "$(basename "$signed_apk")" > "$(basename "$signed_apk").sha256"
+          )
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v7
@@ -261,6 +268,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           VERSION_NAME: ${{ needs.build.outputs.version_name }}
         run: |
           apk="artifacts/release/Yuraive-android-$VERSION_NAME.apk"
