@@ -4,6 +4,7 @@ import {
   copyFile,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rename,
   rm,
@@ -26,13 +27,13 @@ const validConfiguration = {
     codeInterpreter: true,
   },
   uploadFiles: [
-    'knowledge/yuraive-user-guide.md',
-    'knowledge/YURAIVE_v1_SPEC.md',
-    'knowledge/PLAYBACK_STATS.md',
-    'knowledge/yuraive-content-support.md',
-    'scripts/inspect_yuraive.py',
-    'scripts/edit_yuraive.py',
-    'scripts/yuraive_json.py',
+    'yuraive-user-guide.md',
+    'YURAIVE_v1_SPEC.md',
+    'PLAYBACK_STATS.md',
+    'yuraive-content-support.md',
+    'inspect_yuraive.py',
+    'edit_yuraive.py',
+    'yuraive_json.py',
   ],
   conversationStarters: ['One', 'Two', 'Three', 'Four'],
 }
@@ -52,30 +53,33 @@ const customManifest = {
     },
     {
       source: 'docs/src/content/docs',
-      destination: 'knowledge/yuraive-user-guide.md',
+      destination: 'yuraive-user-guide.md',
       include: ['**/*.md', '**/*.mdx'],
       concatenate: 'markdown-sources',
     },
     {
       source: 'design/YURAIVE_v1_SPEC.md',
-      destination: 'knowledge/YURAIVE_v1_SPEC.md',
+      destination: 'YURAIVE_v1_SPEC.md',
     },
     {
       source: 'design/PLAYBACK_STATS.md',
-      destination: 'knowledge/PLAYBACK_STATS.md',
+      destination: 'PLAYBACK_STATS.md',
     },
     {
       source: 'ai/shared/references/content-support.md',
-      destination: 'knowledge/yuraive-content-support.md',
+      destination: 'yuraive-content-support.md',
     },
     {
-      source: 'ai/shared/scripts',
-      destination: 'scripts',
-      include: ['**/*.py'],
+      source: 'ai/shared/scripts/inspect_yuraive.py',
+      destination: 'inspect_yuraive.py',
     },
     {
-      source: 'LICENSE',
-      destination: 'LICENSE',
+      source: 'ai/shared/scripts/edit_yuraive.py',
+      destination: 'edit_yuraive.py',
+    },
+    {
+      source: 'ai/shared/scripts/yuraive_json.py',
+      destination: 'yuraive_json.py',
     },
   ],
 }
@@ -112,8 +116,6 @@ async function createCustomFixture(t) {
   await writeFixtureFile(root, 'ai/shared/scripts/inspect_yuraive.py', pythonFixture)
   await writeFixtureFile(root, 'ai/shared/scripts/edit_yuraive.py', pythonFixture)
   await writeFixtureFile(root, 'ai/shared/scripts/yuraive_json.py', '# helper\n')
-  await writeFixtureFile(root, 'LICENSE', 'Fixture license\n')
-
   execFileSync('git', ['init', '--quiet'], { cwd: root })
   execFileSync('git', ['add', '--all'], { cwd: root })
 
@@ -161,7 +163,10 @@ test('bundle manifests reject forbidden source and destination segments', async 
   await t.test('forbidden destination', async (t) => {
     const { library, root } = await createCustomFixture(t)
     await updateManifest(root, (manifest) => {
-      manifest.entries.push({ source: 'LICENSE', destination: 'notes/LICENSE' })
+      manifest.entries.push({
+        source: 'design/YURAIVE_v1_SPEC.md',
+        destination: 'notes/YURAIVE_v1_SPEC.md',
+      })
     })
 
     await assert.rejects(library.resolveBundlePlan('custom-gpt'), /Forbidden destination path/)
@@ -171,10 +176,10 @@ test('bundle manifests reject forbidden source and destination segments', async 
 test('bundle planning rejects internal and external source symlinks', async (t) => {
   await t.test('internal symlink', async (t) => {
     const { library, root } = await createCustomFixture(t)
-    await symlink('LICENSE', path.join(root, 'license-link'))
-    execFileSync('git', ['add', '--', 'license-link'], { cwd: root })
+    await symlink('design/YURAIVE_v1_SPEC.md', path.join(root, 'spec-link'))
+    execFileSync('git', ['add', '--', 'spec-link'], { cwd: root })
     await updateManifest(root, (manifest) => {
-      manifest.entries.push({ source: 'license-link', destination: 'linked-license' })
+      manifest.entries.push({ source: 'spec-link', destination: 'linked-spec.md' })
     })
 
     await assert.rejects(library.resolveBundlePlan('custom-gpt'), /Symbolic links are not bundled/)
@@ -236,7 +241,7 @@ test('validation rejects symbolic links at and inside the bundle root', async (t
     const { library, root } = await createCustomFixture(t)
     await library.buildBundle('custom-gpt')
     const output = path.join(root, customManifest.output)
-    await symlink(path.join(output, 'LICENSE'), path.join(output, 'linked-license'))
+    await symlink(path.join(output, 'instructions.md'), path.join(output, 'linked-instructions.md'))
 
     await assert.rejects(library.validateBundle('custom-gpt'), /Symbolic link found in bundle/)
   })
@@ -249,8 +254,8 @@ test('Custom GPT uploadFiles must exactly match the required seven files', async
       'duplicate',
       [...validConfiguration.uploadFiles.slice(0, -1), validConfiguration.uploadFiles[0]],
     ],
-    ['unexpected', [...validConfiguration.uploadFiles.slice(0, -1), 'knowledge/unexpected.md']],
-    ['extra', [...validConfiguration.uploadFiles, 'knowledge/unexpected.md']],
+    ['unexpected', [...validConfiguration.uploadFiles.slice(0, -1), 'unexpected.md']],
+    ['extra', [...validConfiguration.uploadFiles, 'unexpected.md']],
   ]
 
   for (const [name, uploadFiles] of variants) {
@@ -260,7 +265,7 @@ test('Custom GPT uploadFiles must exactly match the required seven files', async
         ...validConfiguration,
         uploadFiles,
       })
-      if (uploadFiles.includes('knowledge/unexpected.md')) {
+      if (uploadFiles.includes('unexpected.md')) {
         await writeFixtureFile(root, 'ai/shared/references/unexpected.md', 'unexpected\n')
       }
 
@@ -284,17 +289,17 @@ test('validation rejects extra, missing, and tampered output files', async (t) =
   )
 
   await library.buildBundle('custom-gpt')
-  await rm(path.join(output, 'LICENSE'))
+  await rm(path.join(output, 'YURAIVE_v1_SPEC.md'))
   await assert.rejects(
     library.validateBundle('custom-gpt'),
-    /Missing expected bundle file: LICENSE/,
+    /Missing expected bundle file: YURAIVE_v1_SPEC\.md/,
   )
 
   await library.buildBundle('custom-gpt')
-  await writeFile(path.join(output, 'LICENSE'), 'tampered\n')
+  await writeFile(path.join(output, 'YURAIVE_v1_SPEC.md'), 'tampered\n')
   await assert.rejects(
     library.validateBundle('custom-gpt'),
-    /Bundle file differs from its tracked source: LICENSE/,
+    /Bundle file differs from its tracked source: YURAIVE_v1_SPEC\.md/,
   )
 })
 
@@ -302,7 +307,7 @@ test('markdown concatenation is deterministic and remains independently validata
   const { library, root } = await createCustomFixture(t)
   const plan = await library.buildBundle('custom-gpt')
   const output = path.join(root, customManifest.output)
-  const guide = await readFile(path.join(output, 'knowledge/yuraive-user-guide.md'), 'utf8')
+  const guide = await readFile(path.join(output, 'yuraive-user-guide.md'), 'utf8')
 
   const alphaStart = '<!-- BEGIN SOURCE: docs/src/content/docs/a.md -->'
   const alphaEnd = '<!-- END SOURCE: docs/src/content/docs/a.md -->'
@@ -317,5 +322,32 @@ test('markdown concatenation is deterministic and remains independently validata
   assert.equal(plan.files.filter((file) => file.generatedContent).length, 1)
 
   const result = await library.validateBundle('custom-gpt', output)
-  assert.equal(result.fileCount, 10)
+  assert.equal(result.fileCount, 9)
+})
+
+test('Custom GPT bundle contains only the nine flat root files without a license', async (t) => {
+  const { library, root } = await createCustomFixture(t)
+  const plan = await library.buildBundle('custom-gpt')
+  const output = path.join(root, customManifest.output)
+  const entries = await readdir(output, { withFileTypes: true })
+
+  const expectedFiles = [
+    'instructions.md',
+    'configuration.json',
+    'yuraive-user-guide.md',
+    'YURAIVE_v1_SPEC.md',
+    'PLAYBACK_STATS.md',
+    'yuraive-content-support.md',
+    'inspect_yuraive.py',
+    'edit_yuraive.py',
+    'yuraive_json.py',
+  ].sort()
+
+  assert.deepEqual(entries.map((entry) => entry.name).sort(), expectedFiles)
+  assert.equal(entries.filter((entry) => entry.isDirectory()).length, 0)
+  assert.equal(
+    entries.some((entry) => entry.name === 'LICENSE'),
+    false,
+  )
+  assert.equal(plan.files.length, 9)
 })

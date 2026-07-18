@@ -459,11 +459,10 @@ function validateSkillFrontmatter(content) {
 }
 
 async function validateTargetStructure(target, rootPath) {
-  await requirePath(rootPath, 'LICENSE')
-  await requirePath(rootPath, 'scripts/inspect_yuraive.py')
-  await requirePath(rootPath, 'scripts/edit_yuraive.py')
-
   if (target === 'skill') {
+    await requirePath(rootPath, 'LICENSE')
+    await requirePath(rootPath, 'scripts/inspect_yuraive.py')
+    await requirePath(rootPath, 'scripts/edit_yuraive.py')
     await requirePath(rootPath, 'SKILL.md')
     await requirePath(rootPath, 'agents/openai.yaml')
     await requirePath(rootPath, 'references/docs', 'directory')
@@ -484,10 +483,13 @@ async function validateTargetStructure(target, rootPath) {
   } else if (target === 'custom-gpt') {
     await requirePath(rootPath, 'instructions.md')
     await requirePath(rootPath, 'configuration.json')
-    await requirePath(rootPath, 'knowledge/yuraive-user-guide.md')
-    await requirePath(rootPath, 'knowledge/YURAIVE_v1_SPEC.md')
-    await requirePath(rootPath, 'knowledge/PLAYBACK_STATS.md')
-    await requirePath(rootPath, 'knowledge/yuraive-content-support.md')
+    await requirePath(rootPath, 'yuraive-user-guide.md')
+    await requirePath(rootPath, 'YURAIVE_v1_SPEC.md')
+    await requirePath(rootPath, 'PLAYBACK_STATS.md')
+    await requirePath(rootPath, 'yuraive-content-support.md')
+    await requirePath(rootPath, 'inspect_yuraive.py')
+    await requirePath(rootPath, 'edit_yuraive.py')
+    await requirePath(rootPath, 'yuraive_json.py')
     const configuration = JSON.parse(
       await readFile(path.join(rootPath, 'configuration.json'), 'utf8'),
     )
@@ -504,13 +506,13 @@ async function validateTargetStructure(target, rootPath) {
       throw new Error('Custom GPT configuration is incomplete')
     }
     const requiredUploads = new Set([
-      'knowledge/yuraive-user-guide.md',
-      'knowledge/YURAIVE_v1_SPEC.md',
-      'knowledge/PLAYBACK_STATS.md',
-      'knowledge/yuraive-content-support.md',
-      'scripts/inspect_yuraive.py',
-      'scripts/edit_yuraive.py',
-      'scripts/yuraive_json.py',
+      'yuraive-user-guide.md',
+      'YURAIVE_v1_SPEC.md',
+      'PLAYBACK_STATS.md',
+      'yuraive-content-support.md',
+      'inspect_yuraive.py',
+      'edit_yuraive.py',
+      'yuraive_json.py',
     ])
     if (
       new Set(configuration.uploadFiles).size !== configuration.uploadFiles.length ||
@@ -529,15 +531,30 @@ async function validateTargetStructure(target, rootPath) {
       assertSafeRelative(uploadFile, 'Custom GPT upload file')
       await requirePath(rootPath, uploadFile)
     }
+    const requiredDistributionFiles = new Set([
+      'instructions.md',
+      'configuration.json',
+      ...requiredUploads,
+    ])
+    const distributionEntries = await readdir(rootPath, { withFileTypes: true })
+    if (
+      distributionEntries.length !== requiredDistributionFiles.size ||
+      distributionEntries.some(
+        (entry) => !entry.isFile() || !requiredDistributionFiles.has(entry.name),
+      )
+    ) {
+      throw new Error('Custom GPT bundle must contain only the nine flat distribution files')
+    }
     await validateOperationalReferences(rootPath, 'instructions.md')
   } else {
     throw new Error(`Unknown bundle target: ${target}`)
   }
 
+  const scriptDirectory = target === 'skill' ? path.join(rootPath, 'scripts') : rootPath
   for (const scriptName of ['inspect_yuraive.py', 'edit_yuraive.py']) {
     const result = spawnSync(
       process.platform === 'win32' ? 'python' : 'python3',
-      [path.join(rootPath, 'scripts', scriptName), '--help'],
+      [path.join(scriptDirectory, scriptName), '--help'],
       {
         encoding: 'utf8',
         env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
