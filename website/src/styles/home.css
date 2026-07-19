@@ -219,43 +219,9 @@ a:focus-visible {
   border-color: #5d5867;
 }
 
-.hero-visual {
+.hero-story {
   min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  background: #1b1921;
-  border: 1px solid #3a3741;
-  border-radius: 18px;
-  box-shadow: 0 30px 80px rgb(0 0 0 / 32%);
-  transform: rotate(1.2deg);
-}
-
-.hero-visual img {
   width: 100%;
-  height: auto;
-}
-
-.window-bar {
-  display: flex;
-  height: 36px;
-  align-items: center;
-  gap: 6px;
-  padding: 0 13px;
-  color: #8f8a98;
-  border-bottom: 1px solid #35323c;
-}
-
-.window-bar span {
-  width: 8px;
-  height: 8px;
-  background: #5b5763;
-  border-radius: 50%;
-}
-
-.window-bar small {
-  margin-left: 7px;
-  font-size: 10px;
-  letter-spacing: 0.03em;
 }
 
 .features {
@@ -531,7 +497,7 @@ footer {
     max-width: 720px;
   }
 
-  .hero-visual {
+  .hero-story {
     width: min(100%, 900px);
   }
 
@@ -597,15 +563,6 @@ footer {
 
   .hero-actions {
     margin-top: 30px;
-  }
-
-  .hero-visual {
-    border-radius: 12px;
-    transform: none;
-  }
-
-  .window-bar {
-    height: 30px;
   }
 
   .section-heading {

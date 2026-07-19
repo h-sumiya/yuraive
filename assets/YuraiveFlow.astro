@@ -1,0 +1,1720 @@
+---
+interface Props {
+  class?: string
+  id?: string
+}
+
+const { class: className, id = `yuraive-flow-${crypto.randomUUID()}` } = Astro.props
+const gridId = `${id}-grid`
+const arrowId = `${id}-arrow`
+const playerScreenId = `${id}-player-screen`
+---
+
+<div class:list={['yuraive-flow', className]} data-yuraive-flow>
+  <svg
+    viewBox="0 0 800 540"
+    role="img"
+    aria-label="4つのメディアが入ったフォルダからグラフを作り、開始1から分岐2へ進み、初回は3をループし、その後70%で3、30%で終了4へ進む作品をプレイヤーで再生する流れ"
+    focusable="false"
+  >
+    <defs>
+      <pattern id={gridId} width="22" height="22" patternUnits="userSpaceOnUse">
+        <circle cx="1" cy="1" r="1" fill="#38414a"></circle>
+      </pattern>
+      <marker
+        id={arrowId}
+        viewBox="0 0 10 10"
+        refX="8"
+        refY="5"
+        markerWidth="6"
+        markerHeight="6"
+        orient="auto-start-reverse"
+      >
+        <path d="M 0 0 L 10 5 L 0 10 Z" fill="#71808e"></path>
+      </marker>
+      <clipPath id={playerScreenId}>
+        <rect x="67" y="151" width="236" height="185" rx="12"></rect>
+      </clipPath>
+    </defs>
+
+    <rect class="stage" x="1" y="1" width="798" height="538" rx="24"></rect>
+
+    <g class="animated-story">
+      <g class="editor-scene">
+        <rect class="editor-window" x="55" y="34" width="690" height="464" rx="15"></rect>
+        <path class="editor-top-line" d="M55 75H745"></path>
+        <rect class="editor-mark" x="73" y="51" width="11" height="11" rx="3"></rect>
+        <text class="editor-label" x="94" y="61">EDITOR</text>
+        <rect class="editor-sidebar" x="55" y="75" width="148" height="423"></rect>
+        <rect class="editor-canvas" x="203" y="75" width="542" height="423" fill={`url(#${gridId})`}
+        ></rect>
+
+        <g class="editor-file editor-file-1">
+          <rect x="73" y="112" width="112" height="48" rx="7"></rect>
+          <circle cx="94" cy="136" r="10"></circle>
+          <path d="M89 136l4 4 7-8"></path>
+          <text x="114" y="141">MEDIA 1</text>
+        </g>
+        <g class="editor-file editor-file-2">
+          <rect x="73" y="169" width="112" height="48" rx="7"></rect>
+          <circle cx="94" cy="193" r="10"></circle>
+          <path d="M88 196l4-7 4 6 4-4"></path>
+          <text x="114" y="198">MEDIA 2</text>
+        </g>
+        <g class="editor-file editor-file-3">
+          <rect x="73" y="226" width="112" height="48" rx="7"></rect>
+          <circle cx="94" cy="250" r="10"></circle>
+          <path d="M89 254l4-8 3 5 4-7"></path>
+          <text x="114" y="255">MEDIA 3</text>
+        </g>
+        <g class="editor-file editor-file-4">
+          <rect x="73" y="283" width="112" height="48" rx="7"></rect>
+          <circle cx="94" cy="307" r="10"></circle>
+          <path d="M89 303h10v8H89z"></path>
+          <text x="114" y="312">MEDIA 4</text>
+        </g>
+
+        <g class="editor-json-file">
+          <rect x="73" y="350" width="112" height="48" rx="7"></rect>
+          <path class="json-file-icon" d="M85 362H98L103 367V384H85Z"></path>
+          <path class="json-file-fold" d="M98 362V367H103"></path>
+          <text class="json-file-symbol" x="94" y="379">&#123; &#125;</text>
+          <text class="json-file-name" x="112" y="379">GRAPH.JSON</text>
+        </g>
+
+        <g class="editor-graph">
+          <path
+            class="editor-path editor-path-1"
+            d="M340 155H385H430"
+            marker-mid={`url(#${arrowId})`}></path>
+          <path
+            class="editor-path editor-path-2"
+            d="M520 155H577.5H635"
+            marker-mid={`url(#${arrowId})`}></path>
+          <path
+            class="editor-path editor-path-3"
+            d="M520 155C568 190 580 225 580 258C580 302 556 342 520 361"
+            marker-mid={`url(#${arrowId})`}></path>
+          <path
+            class="editor-path editor-path-4"
+            d="M430 361C390 342 375 300 375 258C375 216 402 170 430 155"
+            marker-mid={`url(#${arrowId})`}></path>
+
+          <g class="edge-weight editor-weight editor-weight-30">
+            <rect x="555" y="119" width="46" height="22" rx="11"></rect>
+            <text x="578" y="134">30%</text>
+          </g>
+          <g class="edge-weight editor-weight editor-weight-70">
+            <rect x="548" y="253" width="46" height="22" rx="11"></rect>
+            <text x="571" y="268">70%</text>
+          </g>
+
+          <g class="editor-node editor-node-1">
+            <rect x="250" y="130" width="90" height="50" rx="7"></rect>
+            <path class="node-accent node-accent-1" d="M256 137V173"></path>
+            <circle class="port" cx="250" cy="155" r="5"></circle>
+            <circle class="port" cx="340" cy="155" r="5"></circle>
+            <text x="295" y="161">1</text>
+          </g>
+          <g class="editor-node editor-node-2">
+            <rect x="430" y="130" width="90" height="50" rx="7"></rect>
+            <path class="node-accent node-accent-2" d="M436 137V173"></path>
+            <circle class="port" cx="430" cy="155" r="5"></circle>
+            <circle class="port" cx="520" cy="155" r="5"></circle>
+            <text x="475" y="161">2</text>
+          </g>
+          <g class="editor-node editor-node-3">
+            <rect x="430" y="336" width="90" height="50" rx="7"></rect>
+            <path class="node-accent node-accent-3" d="M436 343V379"></path>
+            <circle class="port" cx="430" cy="361" r="5"></circle>
+            <circle class="port" cx="520" cy="361" r="5"></circle>
+            <text x="475" y="367">3</text>
+          </g>
+          <g class="editor-node editor-node-4">
+            <rect x="635" y="130" width="90" height="50" rx="7"></rect>
+            <path class="node-accent node-accent-4" d="M641 137V173"></path>
+            <circle class="port" cx="635" cy="155" r="5"></circle>
+            <circle class="port" cx="725" cy="155" r="5"></circle>
+            <text x="680" y="161">4</text>
+          </g>
+        </g>
+      </g>
+
+      <g class="folder-scene">
+        <path
+          class="folder-back"
+          d="M48 199V177C48 170 53 165 60 165H112L132 184H220C227 184 232 190 232 197V307H48Z"
+        ></path>
+        <g class="folder-media folder-media-1" transform="rotate(-9 95 224)">
+          <rect x="64" y="129" width="70" height="103" rx="8"></rect>
+          <circle cx="99" cy="163" r="13"></circle>
+          <path d="M91 181h16M91 188h16"></path>
+          <text x="99" y="218">1</text>
+        </g>
+        <g class="folder-media folder-media-2" transform="rotate(-3 123 220)">
+          <rect x="89" y="119" width="70" height="110" rx="8"></rect>
+          <path d="M105 164l8-10 7 7 8-13 14 19"></path>
+          <path d="M105 181h38M105 189h28"></path>
+          <text x="124" y="215">2</text>
+        </g>
+        <g class="folder-media folder-media-3" transform="rotate(4 151 220)">
+          <rect x="117" y="124" width="70" height="108" rx="8"></rect>
+          <path d="M132 167c7-19 13 18 20 0s13 18 20 0"></path>
+          <path d="M132 183h38M132 191h24"></path>
+          <text x="152" y="218">3</text>
+        </g>
+        <g class="folder-media folder-media-4" transform="rotate(10 181 225)">
+          <rect x="145" y="135" width="70" height="103" rx="8"></rect>
+          <circle cx="180" cy="169" r="14"></circle>
+          <path d="M175 162l12 7-12 7z"></path>
+          <text x="181" y="224">4</text>
+        </g>
+        <g class="folder-json-card" transform="rotate(8 180 220)">
+          <rect x="145" y="124" width="70" height="110" rx="8"></rect>
+          <path class="folder-json-fold" d="M194 124V143H215"></path>
+          <text x="180" y="178">&#123; &#125;</text>
+          <path class="folder-json-lines" d="M162 194H198M162 204H190"></path>
+        </g>
+        <path class="folder-front" d="M48 210H238L218 326H68Z"></path>
+        <path class="folder-fold" d="M62 228H222"></path>
+        <text class="folder-range" x="143" y="284">1 · 2 · 3 · 4</text>
+      </g>
+
+      <g class="conversion-scene">
+        <rect class="conversion-band" x="203" y="75" width="34" height="423"></rect>
+        <path class="conversion-scan" d="M237 75V498"></path>
+      </g>
+
+      <g class="player-scene">
+        <rect class="player-shell" x="37" y="103" width="298" height="363" rx="22"></rect>
+        <path class="player-mark" d="M63 128l10 6-10 6z"></path>
+        <text class="player-label" x="82" y="140">PLAYER</text>
+        <g class="player-inputs">
+          <path d="M244 127h12l5 5h15v14h-32z"></path>
+        </g>
+
+        <g clip-path={`url(#${playerScreenId})`}>
+          <g class="player-frame player-frame-1 is-active" data-media="1">
+            <rect x="67" y="151" width="236" height="185" fill="#463a91"></rect>
+            <circle cx="185" cy="240" r="60" fill="#5a4caf"></circle>
+            <circle cx="185" cy="240" r="31" fill="#7569d1"></circle>
+            <text x="185" y="250">1</text>
+          </g>
+          <g class="player-frame player-frame-2" data-media="2">
+            <rect x="67" y="151" width="236" height="185" fill="#285d67"></rect>
+            <path d="M102 173v126M129 158v151M157 182v121M194 160v145M230 177v126M269 159v151"
+            ></path>
+            <text x="185" y="250">2</text>
+          </g>
+          <g class="player-frame player-frame-3" data-media="3">
+            <rect x="67" y="151" width="236" height="185" fill="#854d3d"></rect>
+            <circle cx="236" cy="199" r="35" fill="#d18a66"></circle>
+            <path d="M67 281C110 245 151 309 191 272S264 252 303 286V336H67Z" fill="#5e3b48"></path>
+            <text x="185" y="250">3</text>
+          </g>
+          <g class="player-frame player-frame-4" data-media="4">
+            <rect x="67" y="151" width="236" height="185" fill="#653b66"></rect>
+            <circle cx="137" cy="213" r="35" fill="#925e92"></circle>
+            <circle cx="221" cy="268" r="48" fill="#7b4b7c"></circle>
+            <text x="185" y="250">4</text>
+          </g>
+        </g>
+
+        <circle class="player-control" cx="85" cy="381" r="18"></circle>
+        <path class="pause-symbol" d="M80 373V389M90 373V389"></path>
+        <path class="player-track" d="M119 381H294"></path>
+        <path class="player-progress" data-player-progress d="M119 381H294"></path>
+        <g class="equalizer" transform="translate(120 415)">
+          <rect class="equalizer-1" x="0" y="0" width="5" height="18" rx="2"></rect>
+          <rect class="equalizer-2" x="10" y="0" width="5" height="18" rx="2"></rect>
+          <rect class="equalizer-3" x="20" y="0" width="5" height="18" rx="2"></rect>
+          <rect class="equalizer-4" x="30" y="0" width="5" height="18" rx="2"></rect>
+        </g>
+      </g>
+
+      <g class="graph-bubble">
+        <path
+          class="bubble-shell"
+          d="M379 68H742C753 68 762 77 762 88V401C762 412 753 421 742 421H410C397 421 388 412 388 399V312L337 286L388 270V88C388 77 397 68 408 68Z"
+        ></path>
+        <g class="bubble-graph">
+          <path
+            class="bubble-path"
+            data-route="1-2"
+            data-from="1"
+            data-to="2"
+            data-weight="1"
+            d="M465 162H492.5H520"
+            marker-mid={`url(#${arrowId})`}></path>
+          <path
+            class="bubble-path"
+            data-route="2-4"
+            data-from="2"
+            data-to="4"
+            data-weight="30"
+            d="M580 162H627.5H675"
+            marker-mid={`url(#${arrowId})`}></path>
+          <path
+            class="bubble-path"
+            data-route="2-3"
+            data-from="2"
+            data-to="3"
+            data-weight="70"
+            d="M580 162C618 194 628 225 628 252C628 292 608 326 580 342"
+            marker-mid={`url(#${arrowId})`}></path>
+          <path
+            class="bubble-path"
+            data-route="3-2"
+            data-from="3"
+            data-to="2"
+            data-weight="1"
+            d="M520 342C488 326 477 292 477 252C477 213 501 174 520 162"
+            marker-mid={`url(#${arrowId})`}></path>
+
+          <g class="edge-weight bubble-weight bubble-weight-30" data-weight-route="2-4">
+            <rect x="604" y="127" width="44" height="21" rx="10.5"></rect>
+            <text x="626" y="141">30%</text>
+          </g>
+          <g class="edge-weight bubble-weight bubble-weight-70" data-weight-route="2-3">
+            <rect x="593" y="249" width="44" height="21" rx="10.5"></rect>
+            <text x="615" y="263">70%</text>
+          </g>
+
+          <g class="bubble-node" data-node="1">
+            <rect x="405" y="145" width="60" height="34" rx="7"></rect>
+            <circle cx="405" cy="162" r="4"></circle>
+            <circle cx="465" cy="162" r="4"></circle>
+            <text x="435" y="167">1</text>
+          </g>
+          <g class="bubble-node" data-node="2">
+            <rect x="520" y="145" width="60" height="34" rx="7"></rect>
+            <circle cx="520" cy="162" r="4"></circle>
+            <circle cx="580" cy="162" r="4"></circle>
+            <text x="550" y="167">2</text>
+          </g>
+          <g class="bubble-node" data-node="3">
+            <rect x="520" y="325" width="60" height="34" rx="7"></rect>
+            <circle cx="520" cy="342" r="4"></circle>
+            <circle cx="580" cy="342" r="4"></circle>
+            <text x="550" y="347">3</text>
+          </g>
+          <g class="bubble-node" data-node="4">
+            <rect x="675" y="145" width="60" height="34" rx="7"></rect>
+            <circle cx="675" cy="162" r="4"></circle>
+            <circle cx="735" cy="162" r="4"></circle>
+            <text x="705" y="167">4</text>
+          </g>
+
+          <g class="play-orb" data-play-orb>
+            <circle class="orb-halo" cx="0" cy="0" r="12"></circle>
+            <circle class="orb-core" cx="0" cy="0" r="5"></circle>
+          </g>
+        </g>
+      </g>
+    </g>
+
+    <g class="reduced-summary">
+      <g transform="translate(36 208)">
+        <path class="summary-folder-back" d="M0 25V10H42L54 21H110V88H0Z"></path>
+        <rect class="summary-file" x="17" y="-9" width="22" height="53" rx="4"></rect>
+        <rect class="summary-file" x="41" y="-14" width="22" height="58" rx="4"></rect>
+        <rect class="summary-file" x="65" y="-9" width="22" height="53" rx="4"></rect>
+        <rect class="summary-file" x="89" y="-2" width="22" height="46" rx="4"></rect>
+        <path class="summary-folder-front" d="M0 35H119L108 101H11Z"></path>
+        <text class="summary-number" x="58" y="76">1–4</text>
+      </g>
+      <path class="summary-arrow" d="M166 262H197l-9-9m9 9-9 9"></path>
+      <g transform="translate(218 145)">
+        <rect class="summary-window" width="235" height="225" rx="12"></rect>
+        <path class="summary-divider" d="M0 30H235M62 30V225"></path>
+        <g class="summary-list">
+          <path d="M14 59H49M14 86H49M14 113H49M14 140H49"></path>
+        </g>
+        <g class="summary-graph">
+          <path d="M101 75H118.5H136"></path>
+          <path d="M152 75H171H190"></path>
+          <path d="M152 75C181 94 181 134 152 153"></path>
+          <path d="M136 153C111 137 111 92 136 75"></path>
+          <path class="summary-edge-arrow" d="m115 72 6 3-6 3"></path>
+          <path class="summary-edge-arrow" d="m168 72 6 3-6 3"></path>
+          <path class="summary-edge-arrow" d="m175 120 2 7-7-2"></path>
+          <path class="summary-edge-arrow" d="m114 117-2-7 7 2"></path>
+          <circle cx="92" cy="75" r="9"></circle>
+          <circle cx="144" cy="75" r="9"></circle>
+          <circle cx="144" cy="153" r="9"></circle>
+          <circle cx="199" cy="75" r="9"></circle>
+          <text class="summary-node-number" x="92" y="78">1</text>
+          <text class="summary-node-number" x="144" y="78">2</text>
+          <text class="summary-node-number" x="144" y="156">3</text>
+          <text class="summary-node-number" x="199" y="78">4</text>
+          <text class="summary-weight" x="171" y="67">30%</text>
+          <text class="summary-weight" x="186" y="139">70%</text>
+        </g>
+      </g>
+      <path class="summary-arrow" d="M470 262H501l-9-9m9 9-9 9"></path>
+      <g transform="translate(514 207)">
+        <g class="summary-input-folder">
+          <path d="M0 32V19H22L30 26H57V70H0Z"></path>
+          <g class="summary-packed-json">
+            <path d="M31 8H51L58 15V49H31Z"></path>
+            <path d="M51 8V15H58"></path>
+            <text x="44" y="34">&#123;&#125;</text>
+          </g>
+          <path d="M0 35H62L56 78H6Z"></path>
+          <text x="29" y="61">1–4 + &#123;&#125;</text>
+        </g>
+      </g>
+      <path class="summary-arrow" d="M624 262H655l-9-9m9 9-9 9"></path>
+      <g class="summary-bubble">
+        <path d="M646 90H776V175H720L706 188V175H646Z"></path>
+        <g class="summary-bubble-graph">
+          <path d="M674 108H684.5H695"></path>
+          <path d="M713 108H725.5H738"></path>
+          <path d="M713 108C732 118 733 143 713 156"></path>
+          <path d="M695 156C676 145 676 119 695 108"></path>
+          <path class="summary-edge-arrow" d="m681 105 5 3-5 3"></path>
+          <path class="summary-edge-arrow" d="m723 105 5 3-5 3"></path>
+          <path class="summary-edge-arrow" d="m729 134 1 5-5-2"></path>
+          <path class="summary-edge-arrow" d="m679 134-1-5 5 2"></path>
+          <g class="summary-bubble-node">
+            <rect x="656" y="102" width="18" height="12" rx="3"></rect>
+            <circle cx="656" cy="108" r="2"></circle>
+            <circle cx="674" cy="108" r="2"></circle>
+            <text x="665" y="111">1</text>
+          </g>
+          <g class="summary-bubble-node">
+            <rect x="695" y="102" width="18" height="12" rx="3"></rect>
+            <circle cx="695" cy="108" r="2"></circle>
+            <circle cx="713" cy="108" r="2"></circle>
+            <text x="704" y="111">2</text>
+          </g>
+          <g class="summary-bubble-node">
+            <rect x="695" y="150" width="18" height="12" rx="3"></rect>
+            <circle cx="695" cy="156" r="2"></circle>
+            <circle cx="713" cy="156" r="2"></circle>
+            <text x="704" y="159">3</text>
+          </g>
+          <g class="summary-bubble-node">
+            <rect x="738" y="102" width="18" height="12" rx="3"></rect>
+            <circle cx="738" cy="108" r="2"></circle>
+            <circle cx="756" cy="108" r="2"></circle>
+            <text x="747" y="111">4</text>
+          </g>
+          <text class="summary-bubble-weight" x="725" y="101">30%</text>
+          <text class="summary-bubble-weight" x="730" y="151">70%</text>
+          <circle class="summary-orb" cx="685" cy="108" r="3"></circle>
+        </g>
+      </g>
+      <g transform="translate(675 183)">
+        <rect class="summary-player" width="91" height="158" rx="13"></rect>
+        <rect class="summary-player-screen" x="12" y="19" width="67" height="89" rx="7"></rect>
+        <path class="summary-play" d="M39 50l22 14-22 14z"></path>
+        <path class="summary-progress" d="M16 127H75"></path>
+      </g>
+    </g>
+  </svg>
+
+  <button class="flow-toggle" type="button" aria-label="アニメーションを一時停止">
+    <svg class="pause-icon" viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M6.5 5v10M13.5 5v10"></path>
+    </svg>
+    <svg class="play-icon" viewBox="0 0 20 20" aria-hidden="true">
+      <path d="m7 5 8 5-8 5z"></path>
+    </svg>
+  </button>
+</div>
+
+<script>
+  const INTRO_DURATION = 12_700
+  const NODE_DURATION = 620
+  const TERMINAL_DURATION = 980
+  const EDGE_DURATION = 820
+
+  const runForActiveTime = (
+    flow: HTMLElement,
+    duration: number,
+    onProgress?: (progress: number) => void,
+  ) =>
+    new Promise<boolean>((resolve) => {
+      let elapsed = 0
+      let previous = performance.now()
+
+      const tick = (now: number) => {
+        if (!flow.isConnected) {
+          resolve(false)
+          return
+        }
+
+        const delta = Math.min(now - previous, 50)
+        previous = now
+
+        if (!flow.classList.contains('is-paused') && !document.hidden) {
+          const speed = Math.max(0.1, Number(flow.dataset.playbackSpeed) || 1)
+          elapsed += delta * speed
+          onProgress?.(Math.min(elapsed / duration, 1))
+        }
+
+        if (elapsed >= duration) {
+          resolve(true)
+          return
+        }
+
+        requestAnimationFrame(tick)
+      }
+
+      requestAnimationFrame(tick)
+    })
+
+  const setActiveNode = (flow: HTMLElement, node: string) => {
+    flow.querySelectorAll<SVGGElement>('[data-media]').forEach((frame) => {
+      frame.classList.toggle('is-active', frame.dataset.media === node)
+    })
+    flow.querySelectorAll<SVGGElement>('[data-node]').forEach((graphNode) => {
+      graphNode.classList.toggle('is-active', graphNode.dataset.node === node)
+    })
+    flow.dataset.currentNode = node
+    flow.dispatchEvent(new CustomEvent('yuraive:node', { detail: { node } }))
+  }
+
+  const playNode = async (flow: HTMLElement, node: string, duration = NODE_DURATION) => {
+    const progress = flow.querySelector<SVGPathElement>('.player-progress')
+    const orb = flow.querySelector<SVGGElement>('.play-orb')
+
+    orb?.classList.remove('is-visible')
+    setActiveNode(flow, node)
+    if (progress) progress.style.transform = 'scaleX(0)'
+
+    return runForActiveTime(flow, duration, (value) => {
+      if (progress) progress.style.transform = `scaleX(${value})`
+    })
+  }
+
+  const travelRoute = async (flow: HTMLElement, route: string) => {
+    const path = flow.querySelector<SVGPathElement>(`.bubble-path[data-route="${route}"]`)
+    const orb = flow.querySelector<SVGGElement>('.play-orb')
+    if (!path || !orb) return false
+
+    flow.querySelectorAll<SVGPathElement>('.bubble-path').forEach((candidate) => {
+      candidate.classList.toggle('is-active', candidate === path)
+    })
+    flow.querySelectorAll<SVGGElement>('[data-weight-route]').forEach((weight) => {
+      weight.classList.toggle('is-active', weight.dataset.weightRoute === route)
+    })
+
+    const history = (flow.dataset.routeHistory ?? '').split(',').filter(Boolean)
+    history.push(route)
+    flow.dataset.routeHistory = history.slice(-32).join(',')
+    flow.dataset.currentRoute = route
+    flow.dispatchEvent(
+      new CustomEvent('yuraive:route', {
+        detail: {
+          route,
+          from: path.dataset.from,
+          to: path.dataset.to,
+          weight: Number(path.dataset.weight ?? 0),
+        },
+      }),
+    )
+
+    const length = path.getTotalLength()
+    const placeOrb = (progress: number) => {
+      const eased =
+        progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2
+      const point = path.getPointAtLength(length * eased)
+      orb.setAttribute('transform', `translate(${point.x} ${point.y})`)
+    }
+
+    placeOrb(0)
+    orb.classList.add('is-visible')
+    const completed = await runForActiveTime(flow, EDGE_DURATION, placeOrb)
+    placeOrb(1)
+    orb.classList.remove('is-visible')
+    path.classList.remove('is-active')
+    flow.querySelectorAll<SVGGElement>('[data-weight-route]').forEach((weight) => {
+      weight.classList.remove('is-active')
+    })
+    delete flow.dataset.currentRoute
+    return completed
+  }
+
+  const restartIntro = (flow: HTMLElement) => {
+    flow.querySelectorAll<SVGPathElement>('.bubble-path').forEach((path) => {
+      path.classList.remove('is-active')
+    })
+    flow.querySelectorAll<SVGGElement>('[data-weight-route], [data-node]').forEach((item) => {
+      item.classList.remove('is-active')
+    })
+    flow.querySelectorAll<SVGGElement>('[data-media]').forEach((frame) => {
+      frame.classList.toggle('is-active', frame.dataset.media === '1')
+    })
+
+    const orb = flow.querySelector<SVGGElement>('[data-play-orb]')
+    orb?.classList.remove('is-visible')
+    orb?.removeAttribute('transform')
+
+    const progress = flow.querySelector<SVGPathElement>('[data-player-progress]')
+    if (progress) progress.style.transform = 'scaleX(0)'
+
+    delete flow.dataset.currentNode
+    delete flow.dataset.currentRoute
+    delete flow.dataset.lastDecision
+    delete flow.dataset.lastRoll
+    flow.dataset.phase = 'intro'
+
+    flow.classList.add('is-resetting')
+    void flow.offsetWidth
+    flow.classList.remove('is-resetting')
+    void flow.offsetWidth
+    flow.dispatchEvent(new CustomEvent('yuraive:story-restart'))
+  }
+
+  const runRandomPlayback = async (flow: HTMLElement) => {
+    while (flow.isConnected) {
+      if (!(await runForActiveTime(flow, INTRO_DURATION))) return
+      flow.dataset.phase = 'playback'
+      flow.dispatchEvent(new CustomEvent('yuraive:playback-ready'))
+
+      if (!(await playNode(flow, '1'))) return
+      if (!(await travelRoute(flow, '1-2'))) return
+      if (!(await playNode(flow, '2'))) return
+
+      let forceFirstLoop = true
+      let terminalReached = false
+      while (!terminalReached && flow.isConnected) {
+        const candidates = [...flow.querySelectorAll<SVGPathElement>('.bubble-path[data-from="2"]')]
+        let randomValue: number | null = null
+        let selected: SVGPathElement | undefined
+
+        if (forceFirstLoop) {
+          selected =
+            flow.querySelector<SVGPathElement>('.bubble-path[data-route="2-3"]') ??
+            candidates.at(-1)
+          forceFirstLoop = false
+        } else {
+          const totalWeight = candidates.reduce(
+            (total, candidate) => total + Number(candidate.dataset.weight ?? 0),
+            0,
+          )
+          randomValue = Math.random()
+          let remaining = randomValue * totalWeight
+          selected = candidates.at(-1)
+
+          for (const candidate of candidates) {
+            remaining -= Number(candidate.dataset.weight ?? 0)
+            if (remaining < 0) {
+              selected = candidate
+              break
+            }
+          }
+        }
+
+        const nextNode = selected?.dataset.to ?? '4'
+        const branch = selected?.dataset.route ?? `2-${nextNode}`
+        flow.dataset.lastDecision = branch
+        flow.dataset.lastRoll = randomValue === null ? 'forced' : String(randomValue)
+        flow.dispatchEvent(
+          new CustomEvent('yuraive:decision', {
+            detail: { route: branch, roll: randomValue, forced: randomValue === null },
+          }),
+        )
+
+        if (!(await travelRoute(flow, branch))) return
+        if (
+          !(await playNode(flow, nextNode, nextNode === '4' ? TERMINAL_DURATION : NODE_DURATION))
+        ) {
+          return
+        }
+
+        if (nextNode === '4') {
+          terminalReached = true
+          const completedRuns = Number(flow.dataset.completedRuns ?? 0) + 1
+          flow.dataset.completedRuns = String(completedRuns)
+          flow.dispatchEvent(new CustomEvent('yuraive:complete', { detail: { completedRuns } }))
+          restartIntro(flow)
+        } else {
+          if (!(await travelRoute(flow, '3-2'))) return
+          if (!(await playNode(flow, '2'))) return
+        }
+      }
+    }
+  }
+
+  const setupYuraiveFlows = () => {
+    document.querySelectorAll<HTMLElement>('[data-yuraive-flow]').forEach((flow) => {
+      if (flow.dataset.ready === 'true') return
+
+      const button = flow.querySelector<HTMLButtonElement>('.flow-toggle')
+      flow.dataset.ready = 'true'
+
+      button?.addEventListener('click', () => {
+        const paused = flow.classList.toggle('is-paused')
+        button.setAttribute(
+          'aria-label',
+          paused ? 'アニメーションを再生' : 'アニメーションを一時停止',
+        )
+      })
+
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        flow.dataset.phase = 'reduced'
+      } else {
+        flow.dataset.phase = 'intro'
+        void runRandomPlayback(flow)
+      }
+    })
+  }
+
+  setupYuraiveFlows()
+  document.addEventListener('astro:page-load', setupYuraiveFlows)
+</script>
+
+<style>
+  .yuraive-flow {
+    --cycle: 18s;
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+    border-radius: 24px;
+    color: #d6dce2;
+    background: #15141b;
+  }
+
+  .yuraive-flow > svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  .stage {
+    fill: #15141b;
+    stroke: #393740;
+    stroke-width: 2;
+  }
+
+  .editor-scene,
+  .folder-scene,
+  .player-scene,
+  .graph-bubble,
+  .conversion-scene,
+  .editor-file,
+  .editor-json-file,
+  .editor-weight,
+  .editor-node,
+  .editor-path,
+  .folder-json-card {
+    animation-duration: var(--cycle);
+    animation-fill-mode: both;
+    animation-iteration-count: 1;
+    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .editor-scene {
+    animation-name: editor-scene;
+  }
+
+  .editor-window {
+    fill: #181d22;
+    stroke: #46505a;
+    stroke-width: 2;
+  }
+
+  .editor-top-line {
+    stroke: #3b444d;
+    stroke-width: 2;
+  }
+
+  .editor-mark {
+    fill: #7068f0;
+  }
+
+  .editor-label,
+  .player-label {
+    fill: #a9b1ba;
+    font-family: Inter, ui-sans-serif, sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+  }
+
+  .editor-sidebar {
+    fill: #1b2025;
+  }
+
+  .editor-file {
+    animation-name: editor-file-item;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .editor-file-1 {
+    --pack-y: 84px;
+  }
+
+  .editor-file-2 {
+    --pack-y: 27px;
+  }
+
+  .editor-file-3 {
+    --pack-y: -30px;
+  }
+
+  .editor-file-4 {
+    --pack-y: -87px;
+  }
+
+  .editor-file rect {
+    fill: #22292f;
+    stroke: #3d4852;
+    stroke-width: 1.5;
+  }
+
+  .editor-file circle {
+    fill: #303944;
+  }
+
+  .editor-file path {
+    fill: none;
+    stroke: #8ec4df;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.6;
+  }
+
+  .editor-file text {
+    fill: #aeb7c0;
+    font-family: Inter, ui-sans-serif, sans-serif;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+  }
+
+  .editor-json-file {
+    animation-name: editor-json-file;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .editor-json-file > rect {
+    fill: #242330;
+    stroke: #665eb4;
+    stroke-width: 1.5;
+  }
+
+  .json-file-icon {
+    fill: #312d48;
+    stroke: #9c92ff;
+    stroke-linejoin: round;
+    stroke-width: 1.3;
+  }
+
+  .json-file-fold {
+    fill: none;
+    stroke: #9c92ff;
+    stroke-linejoin: round;
+    stroke-width: 1.3;
+  }
+
+  .json-file-symbol {
+    fill: #dcd8ff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 5px;
+    font-weight: 750;
+    text-anchor: middle;
+  }
+
+  .json-file-name {
+    fill: #c3bfff;
+    font-family: Inter, ui-sans-serif, sans-serif;
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.025em;
+  }
+
+  .editor-path {
+    fill: none;
+    stroke: #71808e;
+    stroke-dasharray: 520;
+    stroke-dashoffset: 520;
+    stroke-linecap: round;
+    stroke-width: 2;
+    animation-name: editor-path;
+  }
+
+  .editor-path-2 {
+    animation-delay: 0.16s;
+  }
+
+  .editor-path-3 {
+    animation-delay: 0.32s;
+  }
+
+  .editor-path-4 {
+    animation-delay: 0.48s;
+  }
+
+  .editor-node {
+    animation-name: editor-graph-item;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .editor-weight {
+    animation-name: editor-weight;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .editor-weight-30 {
+    animation-delay: 0.16s;
+  }
+
+  .editor-weight-70 {
+    animation-delay: 0.32s;
+  }
+
+  .editor-node rect,
+  .bubble-node rect {
+    fill: #20262c;
+    stroke: #4b5863;
+    stroke-width: 1.5;
+  }
+
+  .editor-node .port,
+  .bubble-node circle {
+    fill: #15191e;
+    stroke: #82909c;
+    stroke-width: 1.5;
+  }
+
+  .editor-node text,
+  .bubble-node text {
+    fill: #e1e5e9;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 15px;
+    font-weight: 700;
+    text-anchor: middle;
+  }
+
+  .edge-weight rect {
+    fill: #191e23;
+    stroke: #56626d;
+    stroke-width: 1.2;
+  }
+
+  .edge-weight text {
+    fill: #d4d9de;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px;
+    font-weight: 750;
+    text-anchor: middle;
+  }
+
+  .bubble-weight rect {
+    fill: #202028;
+    stroke: #5d5968;
+  }
+
+  .bubble-weight text {
+    font-size: 9px;
+  }
+
+  .edge-weight.is-active rect {
+    fill: #322d54;
+    stroke: #9b91ff;
+  }
+
+  .edge-weight.is-active text {
+    fill: #f0eeff;
+  }
+
+  .node-accent {
+    fill: none;
+    stroke-linecap: round;
+    stroke-width: 4;
+  }
+
+  .node-accent-1 {
+    stroke: #6ab4d8;
+  }
+
+  .node-accent-2 {
+    stroke: #8c7cf1;
+  }
+
+  .node-accent-3 {
+    stroke: #d28b62;
+  }
+
+  .node-accent-4 {
+    stroke: #c36a9f;
+  }
+
+  .folder-scene {
+    animation-name: folder-scene;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .folder-back {
+    fill: #6b5fde;
+    stroke: #988eff;
+    stroke-width: 2;
+  }
+
+  .folder-front {
+    fill: #574de5;
+    stroke: #9b92ff;
+    stroke-linejoin: round;
+    stroke-width: 2;
+  }
+
+  .folder-fold {
+    fill: none;
+    stroke: #9b92ff;
+    stroke-linecap: round;
+    stroke-width: 2;
+    opacity: 0.65;
+  }
+
+  .folder-range {
+    fill: #eeecff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 17px;
+    font-weight: 750;
+    letter-spacing: 0.04em;
+    text-anchor: middle;
+  }
+
+  .folder-media rect {
+    fill: #252b32;
+    stroke: #697681;
+    stroke-width: 1.5;
+  }
+
+  .folder-media circle {
+    fill: #3b4450;
+  }
+
+  .folder-media path {
+    fill: none;
+    stroke: #b4c0c9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2;
+  }
+
+  .folder-media-4 path {
+    fill: #cbd4db;
+    stroke: none;
+  }
+
+  .folder-media text {
+    fill: #e7ebee;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 16px;
+    font-weight: 700;
+    text-anchor: middle;
+  }
+
+  .folder-json-card {
+    animation-name: folder-json-card;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .folder-json-card rect {
+    fill: #272431;
+    stroke: #9b91ff;
+    stroke-width: 1.5;
+  }
+
+  .folder-json-fold,
+  .folder-json-lines {
+    fill: none;
+    stroke: #aaa2ff;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.6;
+  }
+
+  .folder-json-card text {
+    fill: #e4e1ff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+    font-weight: 750;
+    text-anchor: middle;
+  }
+
+  .conversion-scene {
+    animation-name: conversion-scene;
+  }
+
+  .conversion-band {
+    fill: #8f83ff;
+    opacity: 0.12;
+  }
+
+  .conversion-scan {
+    fill: none;
+    stroke: #a79fff;
+    stroke-linecap: round;
+    stroke-width: 3;
+  }
+
+  .summary-json {
+    fill: #22212a;
+    stroke: #8f84f7;
+    stroke-linejoin: round;
+    stroke-width: 2;
+  }
+
+  .player-scene {
+    animation-name: player-scene;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .player-shell {
+    fill: #101116;
+    stroke: #4b4952;
+    stroke-width: 2;
+  }
+
+  .player-mark {
+    fill: #8278f2;
+  }
+
+  .player-inputs path {
+    fill: #564db4;
+    stroke: #9a91ff;
+    stroke-linejoin: round;
+    stroke-width: 1.5;
+  }
+
+  .player-frame {
+    opacity: 0;
+    transition: opacity 140ms linear;
+  }
+
+  .player-frame.is-active {
+    opacity: 1;
+  }
+
+  .player-frame text {
+    fill: #f6f4ff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 34px;
+    font-weight: 800;
+    text-anchor: middle;
+  }
+
+  .player-frame-2 path {
+    fill: none;
+    stroke: #6aa5ad;
+    stroke-linecap: round;
+    stroke-width: 4;
+    opacity: 0.72;
+  }
+
+  .player-control {
+    fill: #292632;
+    stroke: #514c5f;
+    stroke-width: 1.5;
+  }
+
+  .pause-symbol {
+    fill: none;
+    stroke: #e3e0eb;
+    stroke-linecap: round;
+    stroke-width: 3;
+  }
+
+  .player-track {
+    fill: none;
+    stroke: #383541;
+    stroke-linecap: round;
+    stroke-width: 5;
+  }
+
+  .player-progress {
+    fill: none;
+    stroke: #8478f2;
+    stroke-linecap: round;
+    stroke-width: 5;
+    transform-box: fill-box;
+    transform-origin: left;
+    transform: scaleX(0);
+  }
+
+  .equalizer rect {
+    fill: #8b80f4;
+    transform-box: fill-box;
+    transform-origin: bottom;
+    animation: equalizer 0.72s infinite alternate ease-in-out;
+  }
+
+  .equalizer-2 {
+    animation-delay: -0.42s !important;
+  }
+
+  .equalizer-3 {
+    animation-delay: -0.18s !important;
+  }
+
+  .equalizer-4 {
+    animation-delay: -0.56s !important;
+  }
+
+  .graph-bubble {
+    animation-name: graph-bubble;
+    transform-box: fill-box;
+    transform-origin: 370px 280px;
+  }
+
+  .bubble-shell {
+    fill: #19191f;
+    stroke: #4a4852;
+    stroke-linejoin: round;
+    stroke-width: 2;
+  }
+
+  .bubble-path {
+    fill: none;
+    stroke: #646f7b;
+    stroke-linecap: round;
+    stroke-width: 2;
+  }
+
+  .bubble-path.is-active {
+    stroke: #988eff;
+    stroke-width: 2.5;
+  }
+
+  .bubble-node.is-active rect {
+    fill: #2b2940;
+    stroke: #9c92ff;
+    stroke-width: 2;
+  }
+
+  .play-orb {
+    opacity: 0;
+  }
+
+  .play-orb.is-visible {
+    opacity: 1;
+  }
+
+  .orb-halo {
+    fill: #8f83ff;
+    opacity: 0.24;
+  }
+
+  .orb-core {
+    fill: #f2f0ff;
+    stroke: #9c92ff;
+    stroke-width: 2;
+  }
+
+  .reduced-summary {
+    display: none;
+  }
+
+  .flow-toggle {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    display: grid;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    place-items: center;
+    color: #d8d4e7;
+    background: #24222bd9;
+    border: 1px solid #4a4653;
+    border-radius: 50%;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+  }
+
+  .flow-toggle:hover {
+    color: #ffffff;
+    background: #302d39;
+  }
+
+  .flow-toggle:focus-visible {
+    outline: 3px solid #9d91ff;
+    outline-offset: 3px;
+  }
+
+  .flow-toggle svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .flow-toggle path {
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+  }
+
+  .play-icon {
+    display: none;
+  }
+
+  .play-icon path {
+    fill: currentColor;
+  }
+
+  .is-paused * {
+    animation-play-state: paused !important;
+  }
+
+  .yuraive-flow.is-resetting .animated-story * {
+    animation-name: none !important;
+  }
+
+  .is-paused .pause-icon {
+    display: none;
+  }
+
+  .is-paused .play-icon {
+    display: block;
+  }
+
+  @keyframes editor-scene {
+    0%,
+    11% {
+      opacity: 0;
+      transform: translateX(44px) scale(0.98);
+    }
+    16%,
+    58% {
+      opacity: 1;
+      transform: none;
+    }
+    64%,
+    100% {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+  }
+
+  @keyframes folder-scene {
+    0% {
+      opacity: 0;
+      transform: translate(-34px, 18px) scale(0.86);
+    }
+    4%,
+    13% {
+      opacity: 1;
+      transform: none;
+    }
+    19% {
+      opacity: 1;
+      transform: translate(58px, -87px) scale(0.38);
+    }
+    22%,
+    52% {
+      opacity: 0;
+      transform: translate(58px, -87px) scale(0.32);
+    }
+    56% {
+      opacity: 0;
+      transform: translate(58px, -87px) scale(0.32);
+    }
+    57% {
+      opacity: 1;
+      transform: translate(58px, -87px) scale(0.42);
+    }
+    61% {
+      opacity: 1;
+      transform: none;
+    }
+    68% {
+      opacity: 1;
+      transform: translate(117px, -86px) scale(0.16);
+    }
+    70%,
+    100% {
+      opacity: 0;
+      transform: translate(117px, -86px) scale(0.13);
+    }
+  }
+
+  @keyframes folder-json-card {
+    0%,
+    52% {
+      opacity: 0;
+      transform: translateY(7px) scale(0.9);
+    }
+    57%,
+    68% {
+      opacity: 1;
+      transform: none;
+    }
+    70%,
+    100% {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+  }
+
+  @keyframes editor-file-item {
+    0%,
+    19% {
+      opacity: 0;
+      transform: translateY(8px) scale(0.88);
+    }
+    23%,
+    56% {
+      opacity: 1;
+      transform: none;
+    }
+    62%,
+    100% {
+      opacity: 0;
+      transform: translate(14px, var(--pack-y)) scale(0.08);
+    }
+  }
+
+  @keyframes editor-json-file {
+    0%,
+    48% {
+      opacity: 0;
+      transform: translateY(8px) scale(0.88);
+    }
+    52%,
+    56% {
+      opacity: 1;
+      transform: none;
+    }
+    62%,
+    100% {
+      opacity: 0;
+      transform: translate(14px, -154px) scale(0.08);
+    }
+  }
+
+  @keyframes editor-graph-item {
+    0%,
+    19% {
+      opacity: 0;
+      transform: translateY(8px) scale(0.88);
+    }
+    23%,
+    58% {
+      opacity: 1;
+      transform: none;
+    }
+    63%,
+    100% {
+      opacity: 0;
+      transform: scale(0.94);
+    }
+  }
+
+  @keyframes editor-weight {
+    0%,
+    24% {
+      opacity: 0;
+      transform: translateY(4px) scale(0.88);
+    }
+    29%,
+    58% {
+      opacity: 1;
+      transform: none;
+    }
+    63%,
+    100% {
+      opacity: 0;
+      transform: scale(0.94);
+    }
+  }
+
+  @keyframes editor-path {
+    0%,
+    24% {
+      opacity: 0;
+      stroke-dashoffset: 520;
+    }
+    34%,
+    58% {
+      opacity: 1;
+      stroke-dashoffset: 0;
+    }
+    63%,
+    100% {
+      opacity: 0;
+      stroke-dashoffset: 0;
+    }
+  }
+
+  @keyframes conversion-scene {
+    0%,
+    40% {
+      opacity: 0;
+      transform: translateX(0);
+    }
+    42% {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    51% {
+      opacity: 1;
+      transform: translateX(508px);
+    }
+    53%,
+    100% {
+      opacity: 0;
+      transform: translateX(508px);
+    }
+  }
+
+  @keyframes player-scene {
+    0%,
+    61% {
+      opacity: 0;
+      transform: translateY(26px) scale(0.96);
+    }
+    67%,
+    100% {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes graph-bubble {
+    0%,
+    67% {
+      opacity: 0;
+      transform: translate(-28px, 14px) scale(0.84);
+    }
+    71%,
+    100% {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes equalizer {
+    from {
+      transform: scaleY(0.28);
+    }
+    to {
+      transform: scaleY(1);
+    }
+  }
+
+  @media (max-width: 520px) {
+    .yuraive-flow {
+      border-radius: 16px;
+    }
+
+    .stage {
+      rx: 16px;
+    }
+
+    .flow-toggle {
+      right: 9px;
+      bottom: 9px;
+      width: 32px;
+      height: 32px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animated-story {
+      display: none;
+    }
+
+    .reduced-summary {
+      display: block;
+    }
+
+    .flow-toggle {
+      display: none;
+    }
+
+    .summary-folder-back {
+      fill: #6b5fde;
+      stroke: #988eff;
+      stroke-width: 2;
+    }
+
+    .summary-folder-front {
+      fill: #574de5;
+      stroke: #9b92ff;
+      stroke-width: 2;
+    }
+
+    .summary-file {
+      fill: #252b32;
+      stroke: #697681;
+      stroke-width: 1.5;
+    }
+
+    .summary-number,
+    .summary-braces {
+      fill: #eeecff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 15px;
+      font-weight: 750;
+      text-anchor: middle;
+    }
+
+    .summary-input-folder path {
+      fill: #574de5;
+      stroke: #9b92ff;
+      stroke-linejoin: round;
+      stroke-width: 1.5;
+    }
+
+    .summary-input-folder text {
+      fill: #eeecff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 7px;
+      font-weight: 750;
+      text-anchor: middle;
+    }
+
+    .summary-input-folder .summary-packed-json path {
+      fill: #252b32;
+      stroke: #8d98a2;
+    }
+
+    .summary-input-folder .summary-packed-json text {
+      fill: #dfe4e8;
+      font-size: 8px;
+    }
+
+    .summary-arrow {
+      fill: none;
+      stroke: #777180;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2;
+    }
+
+    .summary-window {
+      fill: #181d22;
+      stroke: #46505a;
+      stroke-width: 2;
+    }
+
+    .summary-divider,
+    .summary-list path {
+      fill: none;
+      stroke: #46505a;
+      stroke-width: 2;
+    }
+
+    .summary-list path {
+      stroke: #75818c;
+      stroke-linecap: round;
+      stroke-width: 5;
+    }
+
+    .summary-graph path {
+      fill: none;
+      stroke: #71808e;
+      stroke-width: 2;
+    }
+
+    .summary-graph .summary-edge-arrow {
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .summary-graph circle {
+      fill: #292f35;
+      stroke: #8b80f4;
+      stroke-width: 2;
+    }
+
+    .summary-node-number,
+    .summary-weight {
+      fill: #e2e5e8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 7px;
+      font-weight: 750;
+      text-anchor: middle;
+    }
+
+    .summary-weight {
+      fill: #aaa3ee;
+      font-size: 6px;
+    }
+
+    .summary-player {
+      fill: #101116;
+      stroke: #4b4952;
+      stroke-width: 2;
+    }
+
+    .summary-player-screen {
+      fill: #463a91;
+    }
+
+    .summary-play {
+      fill: #f4f2ff;
+    }
+
+    .summary-bubble > path:first-child {
+      fill: #19191f;
+      stroke: #4a4852;
+      stroke-linejoin: round;
+      stroke-width: 2;
+    }
+
+    .summary-bubble-graph > path {
+      fill: none;
+      stroke: #71808e;
+      stroke-width: 1.5;
+    }
+
+    .summary-bubble-graph .summary-edge-arrow {
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .summary-bubble-node rect {
+      fill: #292f35;
+      stroke: #596671;
+      stroke-width: 1;
+    }
+
+    .summary-bubble-node circle {
+      fill: #19191f;
+      stroke: #8e98a1;
+      stroke-width: 0.8;
+    }
+
+    .summary-bubble-node text,
+    .summary-bubble-weight {
+      fill: #e2e5e8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 5px;
+      font-weight: 750;
+      text-anchor: middle;
+    }
+
+    .summary-bubble-weight {
+      fill: #aaa3ee;
+      font-size: 4px;
+    }
+
+    .summary-bubble .summary-orb {
+      fill: #f2f0ff;
+      stroke: #9c92ff;
+      stroke-width: 2;
+    }
+
+    .summary-progress {
+      fill: none;
+      stroke: #8478f2;
+      stroke-linecap: round;
+      stroke-width: 4;
+    }
+  }
+</style>

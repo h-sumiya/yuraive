@@ -1,5 +1,6 @@
 ---
 import iconUrl from '../../../assets/icon.svg?url'
+import YuraiveFlow from '../../../assets/YuraiveFlow.astro'
 import '../styles/home.css'
 
 const features = [
@@ -76,19 +77,9 @@ const features = [
             </div>
           </div>
 
-          <figure class="hero-visual">
-            <div class="window-bar" aria-hidden="true">
-              <span></span><span></span><span></span>
-              <small>Yuraive Editor</small>
-            </div>
-            <img
-              src="/screenshots/editor.png"
-              width="1901"
-              height="1078"
-              alt="メディアとボタンを線でつないだYuraive Editorのグラフ編集画面"
-              fetchpriority="high"
-            />
-          </figure>
+          <div class="hero-story">
+            <YuraiveFlow id="website-yuraive-flow" />
+          </div>
         </div>
       </section>
 
