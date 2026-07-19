@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: skill-release-${{ github.ref }}
+  group: skill-release
   cancel-in-progress: false
 
 jobs:
@@ -17,6 +17,10 @@ jobs:
     name: Build and publish Skill
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      SKILL_DOWNLOAD_DOCUMENTS: |
+        README.md
+        docs/src/content/docs/ai/index.md
     permissions:
       contents: write
 
@@ -46,6 +50,14 @@ jobs:
             echo "Tag must use skills-v<major>.<minor>.<patch>." >&2
             exit 1
           fi
+
+      - name: Update Skill download links in tagged source
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mapfile -t documents < <(printf '%s' "$SKILL_DOWNLOAD_DOCUMENTS")
+          node ai/scripts/update-skill-downloads.mjs "$VERSION" "${documents[@]}"
 
       - name: Test content and bundle tools
         run: |
@@ -131,3 +143,45 @@ jobs:
             "artifacts/Yuraive-skill-$VERSION.zip.sha256" \
             --title "Yuraive Skill $VERSION" \
             --generate-notes
+
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Update Skill download links on main
+        id: update-main
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mapfile -t documents < <(printf '%s' "$SKILL_DOWNLOAD_DOCUMENTS")
+          node ai/scripts/update-skill-downloads.mjs "$VERSION" "${documents[@]}"
+          if git diff --quiet -- "${documents[@]}"; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install documentation dependencies
+        if: steps.update-main.outputs.changed == 'true'
+        working-directory: docs
+        run: npm ci
+
+      - name: Build documentation
+        if: steps.update-main.outputs.changed == 'true'
+        working-directory: docs
+        run: npm run build
+
+      - name: Commit updated Skill download links
+        if: steps.update-main.outputs.changed == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mapfile -t documents < <(printf '%s' "$SKILL_DOWNLOAD_DOCUMENTS")
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "${documents[@]}"
+          git commit -m "docs: update Yuraive Skill to $VERSION"
+          git push origin HEAD:main

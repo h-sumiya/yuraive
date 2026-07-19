@@ -27,13 +27,13 @@ const validConfiguration = {
     codeInterpreter: true,
   },
   uploadFiles: [
-    'yuraive-user-guide.md',
-    'YURAIVE_v1_SPEC.md',
-    'PLAYBACK_STATS.md',
-    'yuraive-content-support.md',
-    'inspect_yuraive.py',
-    'edit_yuraive.py',
-    'yuraive_json.py',
+    'knowledge/yuraive-user-guide.md',
+    'knowledge/YURAIVE_v1_SPEC.md',
+    'knowledge/PLAYBACK_STATS.md',
+    'knowledge/yuraive-content-support.md',
+    'knowledge/inspect_yuraive.py',
+    'knowledge/edit_yuraive.py',
+    'knowledge/yuraive_json.py',
   ],
   conversationStarters: ['One', 'Two', 'Three', 'Four'],
 }
@@ -53,33 +53,33 @@ const customManifest = {
     },
     {
       source: 'docs/src/content/docs',
-      destination: 'yuraive-user-guide.md',
+      destination: 'knowledge/yuraive-user-guide.md',
       include: ['**/*.md', '**/*.mdx'],
       concatenate: 'markdown-sources',
     },
     {
       source: 'design/YURAIVE_v1_SPEC.md',
-      destination: 'YURAIVE_v1_SPEC.md',
+      destination: 'knowledge/YURAIVE_v1_SPEC.md',
     },
     {
       source: 'design/PLAYBACK_STATS.md',
-      destination: 'PLAYBACK_STATS.md',
+      destination: 'knowledge/PLAYBACK_STATS.md',
     },
     {
       source: 'ai/shared/references/content-support.md',
-      destination: 'yuraive-content-support.md',
+      destination: 'knowledge/yuraive-content-support.md',
     },
     {
       source: 'ai/shared/scripts/inspect_yuraive.py',
-      destination: 'inspect_yuraive.py',
+      destination: 'knowledge/inspect_yuraive.py',
     },
     {
       source: 'ai/shared/scripts/edit_yuraive.py',
-      destination: 'edit_yuraive.py',
+      destination: 'knowledge/edit_yuraive.py',
     },
     {
       source: 'ai/shared/scripts/yuraive_json.py',
-      destination: 'yuraive_json.py',
+      destination: 'knowledge/yuraive_json.py',
     },
   ],
 }
@@ -289,17 +289,17 @@ test('validation rejects extra, missing, and tampered output files', async (t) =
   )
 
   await library.buildBundle('custom-gpt')
-  await rm(path.join(output, 'YURAIVE_v1_SPEC.md'))
+  await rm(path.join(output, 'knowledge/YURAIVE_v1_SPEC.md'))
   await assert.rejects(
     library.validateBundle('custom-gpt'),
-    /Missing expected bundle file: YURAIVE_v1_SPEC\.md/,
+    /Missing expected bundle file: knowledge\/YURAIVE_v1_SPEC\.md/,
   )
 
   await library.buildBundle('custom-gpt')
-  await writeFile(path.join(output, 'YURAIVE_v1_SPEC.md'), 'tampered\n')
+  await writeFile(path.join(output, 'knowledge/YURAIVE_v1_SPEC.md'), 'tampered\n')
   await assert.rejects(
     library.validateBundle('custom-gpt'),
-    /Bundle file differs from its tracked source: YURAIVE_v1_SPEC\.md/,
+    /Bundle file differs from its tracked source: knowledge\/YURAIVE_v1_SPEC\.md/,
   )
 })
 
@@ -307,7 +307,7 @@ test('markdown concatenation is deterministic and remains independently validata
   const { library, root } = await createCustomFixture(t)
   const plan = await library.buildBundle('custom-gpt')
   const output = path.join(root, customManifest.output)
-  const guide = await readFile(path.join(output, 'yuraive-user-guide.md'), 'utf8')
+  const guide = await readFile(path.join(output, 'knowledge/yuraive-user-guide.md'), 'utf8')
 
   const alphaStart = '<!-- BEGIN SOURCE: docs/src/content/docs/a.md -->'
   const alphaEnd = '<!-- END SOURCE: docs/src/content/docs/a.md -->'
@@ -325,15 +325,14 @@ test('markdown concatenation is deterministic and remains independently validata
   assert.equal(result.fileCount, 9)
 })
 
-test('Custom GPT bundle contains only the nine flat root files without a license', async (t) => {
+test('Custom GPT bundle keeps only upload files in knowledge/', async (t) => {
   const { library, root } = await createCustomFixture(t)
   const plan = await library.buildBundle('custom-gpt')
   const output = path.join(root, customManifest.output)
   const entries = await readdir(output, { withFileTypes: true })
 
-  const expectedFiles = [
-    'instructions.md',
-    'configuration.json',
+  const expectedRootEntries = ['instructions.md', 'configuration.json', 'knowledge'].sort()
+  const expectedKnowledgeFiles = [
     'yuraive-user-guide.md',
     'YURAIVE_v1_SPEC.md',
     'PLAYBACK_STATS.md',
@@ -343,8 +342,16 @@ test('Custom GPT bundle contains only the nine flat root files without a license
     'yuraive_json.py',
   ].sort()
 
-  assert.deepEqual(entries.map((entry) => entry.name).sort(), expectedFiles)
-  assert.equal(entries.filter((entry) => entry.isDirectory()).length, 0)
+  assert.deepEqual(entries.map((entry) => entry.name).sort(), expectedRootEntries)
+  assert.equal(entries.filter((entry) => entry.isDirectory()).length, 1)
+  const knowledgeEntries = await readdir(path.join(output, 'knowledge'), {
+    withFileTypes: true,
+  })
+  assert.deepEqual(knowledgeEntries.map((entry) => entry.name).sort(), expectedKnowledgeFiles)
+  assert.equal(
+    knowledgeEntries.every((entry) => entry.isFile()),
+    true,
+  )
   assert.equal(
     entries.some((entry) => entry.name === 'LICENSE'),
     false,

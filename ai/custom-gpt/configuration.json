@@ -7,13 +7,13 @@
     "imageGeneration": false
   },
   "uploadFiles": [
-    "yuraive-user-guide.md",
-    "YURAIVE_v1_SPEC.md",
-    "PLAYBACK_STATS.md",
-    "yuraive-content-support.md",
-    "inspect_yuraive.py",
-    "edit_yuraive.py",
-    "yuraive_json.py"
+    "knowledge/yuraive-user-guide.md",
+    "knowledge/YURAIVE_v1_SPEC.md",
+    "knowledge/PLAYBACK_STATS.md",
+    "knowledge/yuraive-content-support.md",
+    "knowledge/inspect_yuraive.py",
+    "knowledge/edit_yuraive.py",
+    "knowledge/yuraive_json.py"
   ],
   "conversationStarters": [
     "エディタで素材を追加して再生順を作りたい。",

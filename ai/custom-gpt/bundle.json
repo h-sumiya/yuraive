@@ -13,33 +13,33 @@
     },
     {
       "source": "docs/src/content/docs",
-      "destination": "yuraive-user-guide.md",
+      "destination": "knowledge/yuraive-user-guide.md",
       "include": ["**/*.md", "**/*.mdx"],
       "concatenate": "markdown-sources"
     },
     {
       "source": "design/YURAIVE_v1_SPEC.md",
-      "destination": "YURAIVE_v1_SPEC.md"
+      "destination": "knowledge/YURAIVE_v1_SPEC.md"
     },
     {
       "source": "design/PLAYBACK_STATS.md",
-      "destination": "PLAYBACK_STATS.md"
+      "destination": "knowledge/PLAYBACK_STATS.md"
     },
     {
       "source": "ai/shared/references/content-support.md",
-      "destination": "yuraive-content-support.md"
+      "destination": "knowledge/yuraive-content-support.md"
     },
     {
       "source": "ai/shared/scripts/inspect_yuraive.py",
-      "destination": "inspect_yuraive.py"
+      "destination": "knowledge/inspect_yuraive.py"
     },
     {
       "source": "ai/shared/scripts/edit_yuraive.py",
-      "destination": "edit_yuraive.py"
+      "destination": "knowledge/edit_yuraive.py"
     },
     {
       "source": "ai/shared/scripts/yuraive_json.py",
-      "destination": "yuraive_json.py"
+      "destination": "knowledge/yuraive_json.py"
     }
   ]
 }

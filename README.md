@@ -6,7 +6,7 @@
 
 Yuraiveは、音声や画像を組み合わせた分岐コンテンツを作成・再生できるメディアプレイヤーです。メディアやボタンをつないで作品の流れを組み立て、再生状況やユーザーの選択に応じて次のシーンへ自然に移行できます。
 
-[公式サイト](https://yuraive.com) / [ドキュメント](https://docs.yuraive.com) / [Yuraive Editor](https://editor.yuraive.com)
+[公式サイト](https://yuraive.com) / [ドキュメント](https://docs.yuraive.com) / [Yuraive Editor](https://editor.yuraive.com) / [カスタムGPT](https://chatgpt.com/g/g-6a5ba2dd3c548191b114cb312c6548a4-yuraive-guide) / [Yuraive Skill 1.0.0をダウンロード](https://github.com/h-sumiya/yuraive/releases/download/skills-v1.0.0/Yuraive-skill-1.0.0.zip)
 
 ## ダウンロード
 

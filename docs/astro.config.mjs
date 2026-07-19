@@ -74,6 +74,10 @@ export default defineConfig({
           ],
         },
         {
+          label: 'AI',
+          items: [{ label: 'AIアシスタントで使う', slug: 'ai' }],
+        },
+        {
           label: 'トラブルシューティング',
           items: [
             { label: '読み込みと再生の問題', slug: 'troubleshooting/content' },

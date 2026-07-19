@@ -483,13 +483,7 @@ async function validateTargetStructure(target, rootPath) {
   } else if (target === 'custom-gpt') {
     await requirePath(rootPath, 'instructions.md')
     await requirePath(rootPath, 'configuration.json')
-    await requirePath(rootPath, 'yuraive-user-guide.md')
-    await requirePath(rootPath, 'YURAIVE_v1_SPEC.md')
-    await requirePath(rootPath, 'PLAYBACK_STATS.md')
-    await requirePath(rootPath, 'yuraive-content-support.md')
-    await requirePath(rootPath, 'inspect_yuraive.py')
-    await requirePath(rootPath, 'edit_yuraive.py')
-    await requirePath(rootPath, 'yuraive_json.py')
+    await requirePath(rootPath, 'knowledge', 'directory')
     const configuration = JSON.parse(
       await readFile(path.join(rootPath, 'configuration.json'), 'utf8'),
     )
@@ -506,13 +500,13 @@ async function validateTargetStructure(target, rootPath) {
       throw new Error('Custom GPT configuration is incomplete')
     }
     const requiredUploads = new Set([
-      'yuraive-user-guide.md',
-      'YURAIVE_v1_SPEC.md',
-      'PLAYBACK_STATS.md',
-      'yuraive-content-support.md',
-      'inspect_yuraive.py',
-      'edit_yuraive.py',
-      'yuraive_json.py',
+      'knowledge/yuraive-user-guide.md',
+      'knowledge/YURAIVE_v1_SPEC.md',
+      'knowledge/PLAYBACK_STATS.md',
+      'knowledge/yuraive-content-support.md',
+      'knowledge/inspect_yuraive.py',
+      'knowledge/edit_yuraive.py',
+      'knowledge/yuraive_json.py',
     ])
     if (
       new Set(configuration.uploadFiles).size !== configuration.uploadFiles.length ||
@@ -531,26 +525,39 @@ async function validateTargetStructure(target, rootPath) {
       assertSafeRelative(uploadFile, 'Custom GPT upload file')
       await requirePath(rootPath, uploadFile)
     }
-    const requiredDistributionFiles = new Set([
-      'instructions.md',
-      'configuration.json',
-      ...requiredUploads,
-    ])
     const distributionEntries = await readdir(rootPath, { withFileTypes: true })
     if (
-      distributionEntries.length !== requiredDistributionFiles.size ||
+      distributionEntries.length !== 3 ||
       distributionEntries.some(
-        (entry) => !entry.isFile() || !requiredDistributionFiles.has(entry.name),
+        (entry) =>
+          (entry.name === 'knowledge' && !entry.isDirectory()) ||
+          (entry.name !== 'knowledge' && !entry.isFile()) ||
+          !['instructions.md', 'configuration.json', 'knowledge'].includes(entry.name),
       )
     ) {
-      throw new Error('Custom GPT bundle must contain only the nine flat distribution files')
+      throw new Error(
+        'Custom GPT bundle root must contain only instructions.md, configuration.json, and knowledge/',
+      )
+    }
+    const knowledgeEntries = await readdir(path.join(rootPath, 'knowledge'), {
+      withFileTypes: true,
+    })
+    const requiredKnowledgeFiles = new Set(
+      [...requiredUploads].map((uploadFile) => path.posix.basename(uploadFile)),
+    )
+    if (
+      knowledgeEntries.length !== requiredKnowledgeFiles.size ||
+      knowledgeEntries.some((entry) => !entry.isFile() || !requiredKnowledgeFiles.has(entry.name))
+    ) {
+      throw new Error('Custom GPT knowledge/ must contain only the seven upload files')
     }
     await validateOperationalReferences(rootPath, 'instructions.md')
   } else {
     throw new Error(`Unknown bundle target: ${target}`)
   }
 
-  const scriptDirectory = target === 'skill' ? path.join(rootPath, 'scripts') : rootPath
+  const scriptDirectory =
+    target === 'skill' ? path.join(rootPath, 'scripts') : path.join(rootPath, 'knowledge')
   for (const scriptName of ['inspect_yuraive.py', 'edit_yuraive.py']) {
     const result = spawnSync(
       process.platform === 'win32' ? 'python' : 'python3',
