@@ -1,0 +1,89 @@
+name: Yuraive Editor
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'editor/**'
+      - 'runtime/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/editor-deploy.yml'
+  pull_request:
+    paths:
+      - 'editor/**'
+      - 'runtime/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/editor-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: 1.97.0
+
+jobs:
+  build:
+    name: Build and deploy Editor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: editor/package-lock.json
+
+      - name: Set up Rust and WebAssembly target
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" \
+            --profile minimal \
+            --component rustfmt \
+            --target wasm32-unknown-unknown
+
+      - name: Cache Rust build outputs
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/git/db
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+            runtime/target
+          key: editor-rust-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('runtime/Cargo.lock') }}
+          restore-keys: |
+            editor-rust-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Install Editor dependencies
+        working-directory: editor
+        run: npm ci
+
+      - name: Build Editor
+        working-directory: editor
+        run: npm run build
+
+      - name: Lint Editor
+        working-directory: editor
+        run: >-
+          npx oxlint
+          --ignore-pattern 'src/wasm/**'
+          --ignore-pattern 'dist/**'
+          --ignore-pattern 'dist-native/**'
+
+      - name: Deploy Editor
+        if: github.event_name != 'pull_request'
+        working-directory: editor
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
