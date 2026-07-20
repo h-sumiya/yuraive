@@ -414,6 +414,25 @@ a:focus-visible {
   letter-spacing: 0.08em;
 }
 
+.download-link.is-available {
+  color: var(--ink);
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    padding 160ms ease;
+}
+
+.download-link.is-available small {
+  color: #ffffff;
+  background: var(--accent);
+}
+
+.download-link.is-available:hover {
+  padding-right: 0;
+  padding-left: 8px;
+  color: var(--accent);
+}
+
 .closing {
   padding: clamp(78px, 9vw, 124px) 0;
   color: #211e36;
@@ -617,7 +636,8 @@ footer {
     scroll-behavior: auto;
   }
 
-  .button {
+  .button,
+  .download-link.is-available {
     transition: none;
   }
 }
